@@ -1,0 +1,45 @@
+Privacy Policy for Memorable - AI Photo Search
+Last updated: April 2026
+
+SUMMARY
+Memorable does not collect, store, or transmit any user data. Period.
+
+DATA COLLECTION
+Memorable collects NO data whatsoever. Specifically:
+- No personal information is collected
+- No photos are uploaded or transmitted anywhere
+- No search queries are recorded or sent to any server
+- No usage analytics or tracking of any kind
+- No crash reports are sent externally
+- No advertising identifiers are used
+- No third-party SDKs that collect data are included
+
+ON-DEVICE PROCESSING
+All photo analysis and search functionality happens entirely on your device using Apple's Core ML framework. Your photos are processed locally to generate search embeddings (mathematical representations), which are stored only in a local database on your device.
+
+NETWORK ACCESS
+Memorable makes NO network connections during normal use. The only exception is the initial one-time download of AI model files via Apple's On-Demand Resources system, which is handled entirely by iOS and does not transmit any user data.
+
+PHOTO LIBRARY ACCESS
+Memorable requests access to your Photo Library solely to read photos for local indexing and display. Photos are never copied, uploaded, or shared. You can revoke this access at any time in Settings > Privacy > Photos.
+
+FOLDER ACCESS
+If you choose to add a folder source, Memorable reads images only from the folder you explicitly select. No other files or folders are accessed.
+
+LOCAL STORAGE
+Memorable stores the following data locally on your device:
+- Photo embeddings (mathematical vectors for search) in a local SQLite database
+- Photo metadata (dates, dimensions) for search filtering
+- No original photos are copied or stored by the app
+
+DATA DELETION
+Uninstalling Memorable removes all locally stored data. You can also delete the search index from within the app at any time.
+
+CHILDREN'S PRIVACY
+Memorable does not collect data from anyone, including children.
+
+CHANGES TO THIS POLICY
+If this policy changes, the updated version will be included in the app update. Given that Memorable collects no data, significant changes are unlikely.
+
+CONTACT
+For questions about this privacy policy, visit the app's support page on the App Store.

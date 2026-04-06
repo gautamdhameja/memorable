@@ -1,0 +1,68 @@
+APP STORE METADATA
+==================
+
+App Name: Memorable - AI Photo Search
+
+Subtitle: Find photos by describing memories
+
+Category: Photo & Video
+
+Price: $3.99 (one-time purchase, no subscription)
+
+Keywords: photo search, AI, memory, find photos, natural language, offline, privacy, CLIP, on-device, no subscription
+
+DESCRIPTION
+-----------
+Find any photo by describing what you remember.
+
+"The sunset at the beach last summer"
+"My dog playing in the snow"
+"Birthday cake with candles"
+"That hike with the waterfall"
+
+Memorable uses on-device AI to understand the visual content of your photos, letting you search with natural language instead of scrolling through thousands of pictures.
+
+HOW IT WORKS
+One-time setup: Memorable scans your photo library and builds a private search index on your device. This typically takes a few minutes. After that, searches are instant.
+
+Type a description of what you're looking for — a scene, an object, a feeling — and Memorable finds the closest matches across your entire library.
+
+COMPLETE PRIVACY
+Unlike cloud-based photo services, Memorable processes everything on your device. No photos are uploaded. No search queries are sent anywhere. No accounts, no analytics, no tracking. Your memories stay yours.
+
+KEY FEATURES
+- Natural language search: describe what you see, not tags or dates
+- 100% on-device: works in airplane mode after initial setup
+- No subscription: pay once, use forever
+- Fast: search 10,000+ photos in under a second
+- Smart date filtering: "beach photos from last summer" narrows by both content and time
+- Multiple sources: search your Photos library and imported folders
+- Incremental indexing: new photos are automatically detected
+
+REQUIREMENTS
+- iOS 17.0 or later
+- iPhone or iPad with A14 chip or later
+- Approximately 300MB for AI models (downloaded once)
+
+WHAT'S NEW (Version 1.0)
+- Initial release
+- Natural language photo search powered by MobileCLIP
+- Photo Library and folder source support
+- Date-aware hybrid search
+- On-Demand Resources for efficient app download
+
+SCREENSHOTS (capture these on device)
+1. Search screen with query "dog playing in park" showing results grid
+2. Search screen with query "sunset at the beach" showing grouped results by month
+3. Photo detail view showing a match with score
+4. Source manager showing Photo Library and an added folder
+5. Indexing progress screen during initial setup
+
+SUPPORT URL: (your support page)
+PRIVACY POLICY URL: (host PRIVACY_POLICY.txt as a webpage)
+
+APP REVIEW NOTES
+- The app requires photo library access to function. It will request permission on first launch.
+- AI models (~250-300MB) are downloaded via On-Demand Resources on first launch.
+- No backend server is required. The app is fully self-contained after model download.
+- For testing, grant photo library access and wait for indexing to complete, then try search queries like "people", "food", "outdoor", "car", etc.
