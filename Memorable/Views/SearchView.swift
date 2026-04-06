@@ -91,8 +91,8 @@ struct SearchView: View {
                                 .padding(.bottom, 12)
                         }
 
-                        // Free tier limit
-                        if indexingService.hitFreeLimit && !proManager.isPro {
+                        // Free tier limit — show if not Pro and library has unindexed items
+                        if !proManager.isPro && totalLibraryCount > searchEngine.totalSize {
                             freeLimitBanner
                                 .padding(.horizontal, 16)
                                 .padding(.bottom, 12)
@@ -291,7 +291,7 @@ struct SearchView: View {
                 Text("Free limit reached")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(Celestial.Colors.onSurface)
-                Text("\(FreeTier.maxPhotos) of \(totalLibraryCount) items indexed")
+                Text("\(searchEngine.totalSize) of \(totalLibraryCount) items indexed")
                     .font(.footnote)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             }

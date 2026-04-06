@@ -200,15 +200,53 @@ class SearchEngine {
             }
         }
 
-        // Step 3: Date boost
+        // Save raw CLIP scores before boosts — used for visual relevance threshold
+        let rawScores = scores
+
+        // Step 3: Date boost — when user specifies a time range, strongly prefer matches
         if let dateRange = hints.dateRange {
             for i in 0..<count {
                 guard let photoDate = photoDates[i] else { continue }
                 if photoDate >= dateRange.start && photoDate <= dateRange.end {
-                    scores[i] *= 1.2
+                    scores[i] *= 1.5       // Strong boost for in-range
                 } else {
-                    let daysDiff = abs(photoDate.timeIntervalSince(dateRange.start)) / 86400
-                    if daysDiff > 365 { scores[i] *= 0.8 }
+                    // Graduated penalty based on distance from the range
+                    let distStart = abs(photoDate.timeIntervalSince(dateRange.start)) / 86400
+                    let distEnd = abs(photoDate.timeIntervalSince(dateRange.end)) / 86400
+                    let daysDiff = min(distStart, distEnd)
+
+                    if daysDiff < 7 {
+                        scores[i] *= 0.9   // Within a week — mild penalty
+                    } else if daysDiff < 30 {
+                        scores[i] *= 0.6   // Within a month — moderate penalty
+                    } else if daysDiff < 180 {
+                        scores[i] *= 0.4   // Within 6 months — heavy penalty
+                    } else {
+                        scores[i] *= 0.2   // Older than 6 months — near-elimination
+                    }
+                }
+            }
+        }
+
+        // Step 3b: Time-of-day boost
+        if let timeRange = hints.timeOfDayHours {
+            let calendar = Calendar.current
+            for i in 0..<count {
+                guard let photoDate = photoDates[i] else { continue }
+                let hour = calendar.component(.hour, from: photoDate)
+
+                let inRange: Bool
+                if timeRange.start <= timeRange.end {
+                    inRange = hour >= timeRange.start && hour < timeRange.end
+                } else {
+                    // Wraps midnight, e.g. (20, 4)
+                    inRange = hour >= timeRange.start || hour < timeRange.end
+                }
+
+                if inRange {
+                    scores[i] *= 1.3
+                } else {
+                    scores[i] *= 0.7
                 }
             }
         }
@@ -287,10 +325,15 @@ class SearchEngine {
                     var frameScore = videoScores[i]
                     if let dateRange = hints.dateRange, let videoDate = vDates[i] {
                         if videoDate >= dateRange.start && videoDate <= dateRange.end {
-                            frameScore *= 1.2
+                            frameScore *= 1.5
                         } else {
-                            let daysDiff = abs(videoDate.timeIntervalSince(dateRange.start)) / 86400
-                            if daysDiff > 365 { frameScore *= 0.8 }
+                            let distStart = abs(videoDate.timeIntervalSince(dateRange.start)) / 86400
+                            let distEnd = abs(videoDate.timeIntervalSince(dateRange.end)) / 86400
+                            let daysDiff = min(distStart, distEnd)
+                            if daysDiff < 7 { frameScore *= 0.9 }
+                            else if daysDiff < 30 { frameScore *= 0.6 }
+                            else if daysDiff < 180 { frameScore *= 0.4 }
+                            else { frameScore *= 0.2 }
                         }
                     }
 
@@ -306,8 +349,9 @@ class SearchEngine {
         }
 
         // Step 8: Combine photo + video results, sort, threshold, return
+        // Filter on raw CLIP score first (visual relevance), then on boosted score (contextual relevance)
         let sorted = scores.enumerated().sorted { $0.element > $1.element }
-        let photoResults = sorted.prefix(topK).filter { $0.element >= minimumScoreThreshold }.map { (index, score) in
+        let photoResults = sorted.prefix(topK).filter { rawScores[$0.offset] >= minimumScoreThreshold && $0.element >= minimumScoreThreshold }.map { (index, score) in
             SearchResult(id: ids[index], score: score, localIdentifier: localIds[index], creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
         }
 

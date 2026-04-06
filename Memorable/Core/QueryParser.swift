@@ -8,6 +8,7 @@ struct QueryHints {
     var locationCoordinate: (lat: Double, lon: Double)?
     var seasonHint: Season?
     var negativeTerms: [String] = []
+    var timeOfDayHours: (start: Int, end: Int)?  // 24h range, e.g. (18, 22) for evening
 }
 
 struct DateRange {
@@ -44,6 +45,23 @@ enum QueryParserFallback {
         }
         text = positiveWords.joined(separator: " ")
 
+        // Time-of-day detection from meal/activity keywords
+        var timeOfDayHours: (start: Int, end: Int)?
+        let timeKeywords: [(keywords: [String], hours: (start: Int, end: Int))] = [
+            (["breakfast", "morning coffee", "morning run", "morning walk", "sunrise"], (5, 10)),
+            (["brunch", "mid-morning", "late morning"], (9, 12)),
+            (["lunch", "midday", "noon", "afternoon tea"], (11, 14)),
+            (["afternoon", "evening walk"], (14, 18)),
+            (["dinner", "supper", "evening", "sunset"], (18, 22)),
+            (["night", "nighttime", "night out", "night sky", "late night", "midnight"], (20, 4)),
+        ]
+        for (keywords, hours) in timeKeywords {
+            if keywords.contains(where: { text.contains($0) }) {
+                timeOfDayHours = hours
+                break
+            }
+        }
+
         // Season detection
         let seasonPatterns: [(pattern: String, months: (start: Int, end: Int), isLast: Bool)] = [
             ("last summer", (6, 8), true), ("this summer", (6, 8), false), ("in summer", (6, 8), false),
@@ -78,7 +96,46 @@ enum QueryParserFallback {
             }
         }
 
-        // Date extraction via NSDataDetector (only if season didn't match)
+        // Relative date patterns (NSDataDetector doesn't handle these)
+        if dateRange == nil {
+            let relativeDatePatterns: [(pattern: String, daysBack: Int, spanDays: Int)] = [
+                ("last week", 7, 7),
+                ("this week", 0, 7),
+                ("last month", 30, 30),
+                ("this month", 0, 30),
+                ("last year", 365, 365),
+                ("this year", 0, 365),
+                ("yesterday", 1, 1),
+                ("today", 0, 1),
+                ("last weekend", 7, 2),
+                ("this weekend", 0, 2),
+                ("few days ago", 3, 3),
+                ("couple days ago", 2, 2),
+                ("last night", 1, 1),
+                ("last christmas", 365, 3),
+                ("last new year", 365, 3),
+            ]
+
+            for (pattern, daysBack, spanDays) in relativeDatePatterns {
+                if text.contains(pattern) {
+                    let end = calendar.startOfDay(for: now.addingTimeInterval(-Double(daysBack) * 86400))
+                    let start = end.addingTimeInterval(-Double(spanDays) * 86400)
+                    // For "today"/"this week" etc., end should be now
+                    if daysBack == 0 {
+                        dateRange = DateRange(
+                            start: calendar.date(byAdding: .day, value: -spanDays, to: now)!,
+                            end: now
+                        )
+                    } else {
+                        dateRange = DateRange(start: start, end: end.addingTimeInterval(86400))
+                    }
+                    text = text.replacingOccurrences(of: pattern, with: "").trimmingCharacters(in: .whitespaces)
+                    break
+                }
+            }
+        }
+
+        // Date extraction via NSDataDetector (only if nothing above matched)
         if dateRange == nil {
             if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
                 let matches = detector.matches(in: text, range: NSRange(text.startIndex..., in: text))
@@ -112,7 +169,7 @@ enum QueryParserFallback {
 
         if text.isEmpty { text = trimmed.lowercased() }
 
-        return QueryHints(textQuery: text, dateRange: dateRange, locationHint: locationHint, negativeTerms: negTerms)
+        return QueryHints(textQuery: text, dateRange: dateRange, locationHint: locationHint, negativeTerms: negTerms, timeOfDayHours: timeOfDayHours)
     }
 
     private static func extractLocation(from original: String, text: inout String, locationHint: inout String?) {
