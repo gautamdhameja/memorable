@@ -22,7 +22,7 @@ struct IndexedPhoto: Codable, FetchableRecord, PersistableRecord {
     var indexedAt: Date
     var ocrText: String?
     var sharpnessScore: Double?
-    var sourceId: String = "photokit"
+    var sourceId: String = PhotoSourceType.photokit.rawValue
     var filePath: String?
 
     static let databaseTableName = "indexed_photos"
@@ -30,7 +30,7 @@ struct IndexedPhoto: Codable, FetchableRecord, PersistableRecord {
 
 struct PhotoSource: Codable, FetchableRecord, PersistableRecord, Identifiable {
     var id: String
-    var type: String
+    var type: String // Raw value of PhotoSourceType
     var path: String?
     var name: String
     var addedAt: Date
@@ -53,7 +53,7 @@ struct IndexedVideo: Codable, FetchableRecord, PersistableRecord {
     var pixelHeight: Int
     var frameCount: Int
     var indexedAt: Date
-    var sourceId: String = "photokit"
+    var sourceId: String = PhotoSourceType.photokit.rawValue
 
     static let databaseTableName = "indexed_videos"
 }
@@ -90,7 +90,6 @@ struct SmartAlbum: Codable, Identifiable {
     var name: String
     var query: String
     var createdAt: Date
-    var iconName: String
 }
 
 enum IndexingPhase {

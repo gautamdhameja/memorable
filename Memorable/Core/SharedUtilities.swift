@@ -73,6 +73,10 @@ extension DateFormatter {
 func presentVideoPlayer(for phAsset: PHAsset) {
     Task {
         guard let avAsset = await VideoFrameExtractor.loadAVAsset(from: phAsset) else { return }
+
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+
         let player = AVPlayer(playerItem: AVPlayerItem(asset: avAsset))
         let controller = AVPlayerViewController()
         controller.player = player

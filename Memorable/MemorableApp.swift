@@ -2,7 +2,7 @@ import SwiftUI
 import Photos
 import os
 
-let logger = Logger(subsystem: "com.proferent.memorable", category: "app")
+let logger = Logger(subsystem: "com.blockdeep.memorable", category: "app")
 
 @main
 struct MemorableApp: App {

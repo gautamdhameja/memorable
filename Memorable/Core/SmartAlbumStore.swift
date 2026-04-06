@@ -22,13 +22,12 @@ class SmartAlbumStore {
         }
     }
 
-    static func add(name: String, query: String, iconName: String = "magnifyingglass") {
+    static func add(name: String, query: String) {
         let album = SmartAlbum(
             id: UUID().uuidString,
             name: name,
             query: query,
-            createdAt: Date(),
-            iconName: iconName
+            createdAt: Date()
         )
         do {
             try db.saveSmartAlbum(album)

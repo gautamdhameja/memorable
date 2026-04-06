@@ -12,7 +12,6 @@ struct SearchView: View {
     @State private var isSearching = false
     @State private var selectedPhoto: SearchResult?
     @State private var searchError: String?
-    @State private var searchDebounceTask: Task<Void, Never>?
     @State private var showUpgrade = false
     @State private var showSaveAlbum = false
     @State private var albumName = ""
@@ -21,6 +20,16 @@ struct SearchView: View {
     @State private var smartAlbums: [SmartAlbum] = []
     @State private var totalLibraryCount: Int = 0
     @State private var searchTimeMs: Int = 0
+    @State private var placeholderIndex: Int = 0
+    @State private var placeholderTimer: Task<Void, Never>?
+
+    private static let placeholders = [
+        "Search for your moment...",
+        "Describe your memory...",
+        "What are you looking for?",
+        "Try \"sunset at the beach\"...",
+        "Try \"birthday cake\"...",
+    ]
 
     // Last successful search — shown when search box is cleared
     @State private var lastQuery: String = ""
@@ -130,12 +139,22 @@ struct SearchView: View {
                 }
                 } // VStack
             }
-            .navigationTitle("Memorable")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 10) {
+                        Image("AppIconTransparent")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 36, height: 36)
+                        Text("Memorable")
+                            .font(.system(.title3, design: .rounded, weight: .semibold))
+                            .foregroundStyle(Celestial.Colors.onSurface)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if !results.isEmpty {
+                    if !results.isEmpty && !smartAlbums.contains(where: { $0.query.lowercased() == searchText.lowercased() }) {
                         Button(action: {
                             albumName = searchText
                             showSaveAlbum = true
@@ -149,11 +168,20 @@ struct SearchView: View {
             }
             .preferredColorScheme(.dark)
             .fullScreenCover(item: $selectedPhoto) { result in
-                FullScreenPhotoViewer(
-                    initialResult: result,
-                    allResults: currentDisplayedResults,
-                    searchEngine: searchEngine
-                )
+                if result.isVideo {
+                    Color.clear.onAppear {
+                        selectedPhoto = nil
+                        if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
+                            presentVideoPlayer(for: asset)
+                        }
+                    }
+                } else {
+                    SearchResultsViewer(
+                        initialResult: result,
+                        allResults: currentDisplayedResults.filter { !$0.isVideo },
+                        searchEngine: searchEngine
+                    )
+                }
             }
             .sheet(isPresented: $showUpgrade) {
                 UpgradeView()
@@ -180,6 +208,10 @@ struct SearchView: View {
                         totalLibraryCount = count
                     }
                 }
+                startPlaceholderRotation()
+            }
+            .onDisappear {
+                placeholderTimer?.cancel()
             }
         }
     }
@@ -191,24 +223,17 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
                 .accessibilityHidden(true)
-            TextField("Search for your moment...", text: $searchText)
+            TextField(Self.placeholders[placeholderIndex], text: $searchText)
                 .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurface)
                 .onChange(of: searchText) { _, newValue in
-                    searchDebounceTask?.cancel()
                     if newValue.isEmpty {
                         results = []
                         searchError = nil
-                        return
-                    }
-                    searchDebounceTask = Task {
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                        if !Task.isCancelled { performSearch() }
                     }
                 }
                 .onSubmit {
-                    searchDebounceTask?.cancel()
-                    performSearch()
+                    performSearch(saveToHistory: true)
                 }
                 .disabled(!indexingService.isReady)
                 .accessibilityLabel("Search photos")
@@ -318,10 +343,10 @@ struct SearchView: View {
             ForEach(Array(smartAlbums.enumerated()), id: \.element.id) { index, album in
                 Button {
                     searchText = album.query
-                    performSearch()
+                    performSearch(saveToHistory: true)
                 } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: album.iconName)
+                        Image(systemName: "rectangle.stack.fill")
                             .font(.subheadline)
                             .foregroundStyle(Celestial.Colors.primaryDim)
                         VStack(alignment: .leading, spacing: 2) {
@@ -384,7 +409,7 @@ struct SearchView: View {
             ForEach(Array(searchHistory.enumerated()), id: \.offset) { index, query in
                 Button {
                     searchText = query
-                    performSearch()
+                    performSearch(saveToHistory: true)
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "clock.arrow.circlepath")
@@ -625,7 +650,23 @@ struct SearchView: View {
         }
     }
 
-    private func performSearch() {
+    private func startPlaceholderRotation() {
+        placeholderTimer?.cancel()
+        placeholderIndex = Int.random(in: 0..<Self.placeholders.count)
+        placeholderTimer = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if Task.isCancelled { break }
+                if searchText.isEmpty {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        placeholderIndex = (placeholderIndex + 1) % Self.placeholders.count
+                    }
+                }
+            }
+        }
+    }
+
+    private func performSearch(saveToHistory: Bool = false) {
         guard !searchText.isEmpty, indexingService.isReady else { return }
         Haptics.light()
         isSearching = true
@@ -644,8 +685,10 @@ struct SearchView: View {
                 #endif
 
                 if !searchResults.isEmpty {
-                    SearchHistory.add(query: query)
-                    searchHistory = SearchHistory.load()
+                    if saveToHistory {
+                        SearchHistory.add(query: query)
+                        searchHistory = SearchHistory.load()
+                    }
                     lastQuery = query
                     lastResults = searchResults
                 }

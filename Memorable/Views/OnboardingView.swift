@@ -57,7 +57,7 @@ struct OnboardingView: View {
 
             if showGetStarted {
                 Button(action: {
-                    UserDefaults.standard.set(true, forKey: "onboarding_complete")
+                    UserDefaults.standard.set(true, forKey: AppKeys.onboardingComplete)
                     withAnimation { isComplete = true }
                 }) {
                     Text("Get Started")

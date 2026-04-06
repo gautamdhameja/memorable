@@ -14,13 +14,13 @@
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
 	</dict>
-	<key>LSRequiresIPhoneOS</key>
-	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Memorable needs access to your photos to build a searchable index. All processing happens on your device. No photos are uploaded anywhere.</string>
 	<key>UILaunchScreen</key>

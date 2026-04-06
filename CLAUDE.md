@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Memorable** — on-device AI photo & video search for iOS. Uses MobileCLIP2-S4 to encode photos/videos into CLIP embeddings, stores them in SQLite, and searches via cosine similarity. Everything runs on-device. No cloud, no analytics, no network (except CLGeocoder for place name resolution and one-time ODR model download).
 
-- Bundle ID: `com.proferent.memorable` (change for personal signing)
+- Bundle ID: `com.blockdeep.memorable` (change for personal signing)
 - Minimum: iOS 17.0, A14 chip
 - Model: MobileCLIP2-S4, 768-dim embeddings, 49408-token vocab
-- Freemium: 200 items free, Pro unlock via StoreKit 2 IAP (`com.proferent.memorable.pro`)
+- Freemium: 200 items free, Pro unlock via StoreKit 2 IAP (`com.blockdeep.memorable.pro`)
 
 ## Build & Run
 

@@ -3,7 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var modelDownloader = ModelDownloader()
-    @State private var onboardingComplete = UserDefaults.standard.bool(forKey: "onboarding_complete")
+    @State private var onboardingComplete = UserDefaults.standard.bool(forKey: AppKeys.onboardingComplete)
 
     var body: some View {
         ZStack {
@@ -129,13 +129,20 @@ struct ContentView: View {
         VStack(spacing: 20) {
             Spacer()
 
-            Text("Memorable")
-                .font(.system(.largeTitle, design: .rounded, weight: .semibold))
-                .foregroundStyle(Celestial.Colors.onSurface)
+            VStack(spacing: 10) {
+                Image("AppIconTransparent")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 150, height: 150)
 
-            Text("AI Photo Search")
-                .font(.system(.subheadline, design: .rounded, weight: .medium))
-                .foregroundStyle(Celestial.Colors.amber)
+                Text("Memorable")
+                    .font(.system(size: 38, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Celestial.Colors.onSurface)
+
+                Text("Every moment, one search away")
+                    .font(.system(.body, design: .rounded, weight: .medium))
+                    .foregroundStyle(Celestial.Colors.amber)
+            }
 
             Spacer()
 

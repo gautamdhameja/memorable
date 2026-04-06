@@ -224,7 +224,6 @@ class AppDatabase: DatabaseProtocol {
                 t.column("name", .text).notNull()
                 t.column("query", .text).notNull()
                 t.column("createdAt", .datetime).notNull()
-                t.column("iconName", .text).notNull().defaults(to: "magnifyingglass")
             }
         }
 
@@ -320,6 +319,8 @@ class AppDatabase: DatabaseProtocol {
     func deleteAll() throws {
         try dbQueue.write { db in
             _ = try IndexedPhoto.deleteAll(db)
+            _ = try db.execute(sql: "DELETE FROM indexed_video_frames")
+            _ = try IndexedVideo.deleteAll(db)
         }
     }
 
@@ -547,13 +548,12 @@ class AppDatabase: DatabaseProtocol {
 
     func loadSmartAlbums() throws -> [SmartAlbum] {
         try dbQueue.read { db in
-            try Row.fetchAll(db, sql: "SELECT * FROM smart_albums ORDER BY createdAt DESC").map { row in
+            try Row.fetchAll(db, sql: "SELECT id, name, query, createdAt FROM smart_albums ORDER BY createdAt DESC").map { row in
                 SmartAlbum(
                     id: row["id"],
                     name: row["name"],
                     query: row["query"],
-                    createdAt: row["createdAt"],
-                    iconName: row["iconName"]
+                    createdAt: row["createdAt"]
                 )
             }
         }
@@ -562,8 +562,8 @@ class AppDatabase: DatabaseProtocol {
     func saveSmartAlbum(_ album: SmartAlbum) throws {
         try dbQueue.write { db in
             try db.execute(
-                sql: "INSERT OR REPLACE INTO smart_albums (id, name, query, createdAt, iconName) VALUES (?, ?, ?, ?, ?)",
-                arguments: [album.id, album.name, album.query, album.createdAt, album.iconName]
+                sql: "INSERT OR REPLACE INTO smart_albums (id, name, query, createdAt) VALUES (?, ?, ?, ?)",
+                arguments: [album.id, album.name, album.query, album.createdAt]
             )
         }
     }

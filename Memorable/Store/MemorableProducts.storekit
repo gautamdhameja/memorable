@@ -1,12 +1,12 @@
 {
-  "identifier" : "com.proferent.memorable.products",
+  "identifier" : "com.blockdeep.memorable.products",
   "type" : "automatic",
   "version" : 2,
   "products" : [
     {
       "displayPrice" : "4.99",
       "familyShareable" : true,
-      "internalID" : "com.proferent.memorable.pro",
+      "internalID" : "com.blockdeep.memorable.pro",
       "localizations" : [
         {
           "description" : "Unlock unlimited photo indexing, Find Similar, folder sources, and smart search.",
@@ -14,7 +14,7 @@
           "locale" : "en_US"
         }
       ],
-      "productID" : "com.proferent.memorable.pro",
+      "productID" : "com.blockdeep.memorable.pro",
       "referenceName" : "Memorable Pro",
       "type" : "NonConsumable"
     }

@@ -50,14 +50,14 @@ struct SourceManagerView: View {
                 }
 
                 Section {
-                    if sources.filter({ $0.type == "folder" }).isEmpty {
+                    if sources.filter({ $0.type == PhotoSourceType.folder.rawValue }).isEmpty {
                         Text("No folders added")
                             .font(.subheadline)
                             .foregroundStyle(Celestial.Colors.outline)
                             .listRowBackground(Celestial.Colors.surfaceContainerHigh)
                     }
 
-                    ForEach(sources.filter { $0.type == "folder" }) { source in
+                    ForEach(sources.filter { $0.type == PhotoSourceType.folder.rawValue }) { source in
                         HStack(spacing: 14) {
                             Image(systemName: "folder")
                                 .foregroundStyle(Celestial.Colors.tertiaryDim)
@@ -73,7 +73,7 @@ struct SourceManagerView: View {
                         .listRowBackground(Celestial.Colors.surfaceContainerHigh)
                     }
                     .onDelete { offsets in
-                        let folderSources = sources.filter { $0.type == "folder" }
+                        let folderSources = sources.filter { $0.type == PhotoSourceType.folder.rawValue }
                         for offset in offsets {
                             let source = folderSources[offset]
                             do {

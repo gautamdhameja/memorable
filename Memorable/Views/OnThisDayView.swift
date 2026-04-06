@@ -103,7 +103,7 @@ struct OnThisDayView: View {
                                     .padding(.bottom, 10)
 
                                     MasonryGrid(group.ids.prefix(20).map { IdentifiedString(id: $0) }, spacing: 6) { item in
-                                        MemoryThumbnail(localIdentifier: item.id)
+                                        MemoryThumbnail(localIdentifier: item.id, groupIds: group.ids)
                                     }
                                     .padding(.horizontal, 6)
                                 }
@@ -113,9 +113,21 @@ struct OnThisDayView: View {
                     .padding(.bottom, 40)
                 }
             }
-            .navigationTitle("Memories")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 10) {
+                        Image("AppIconTransparent")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 36, height: 36)
+                        Text("Memories")
+                            .font(.system(.title3, design: .rounded, weight: .semibold))
+                            .foregroundStyle(Celestial.Colors.onSurface)
+                    }
+                }
+            }
             .preferredColorScheme(.dark)
             .fullScreenCover(isPresented: $showSlideshow) {
                 MemorySlideshowView(captionService: captionService)
@@ -137,8 +149,9 @@ struct OnThisDayView: View {
 
 struct MemoryThumbnail: View {
     let localIdentifier: String
+    var groupIds: [String] = []
     @State private var thumbnail: UIImage?
-    @State private var showFullScreen = false
+    @State private var selectedResult: SearchResult?
     @State private var creationDate: Date?
 
     private var aspectRatio: CGFloat {
@@ -170,11 +183,12 @@ struct MemoryThumbnail: View {
         .accessibilityAddTraits(.isImage)
         .accessibilityAddTraits(.isButton)
         .onTapGesture { handleTap() }
-        .fullScreenCover(isPresented: $showFullScreen) {
-            let result = SearchResult(id: localIdentifier, score: 1.0, localIdentifier: localIdentifier, creationDate: creationDate, isVideo: false, bestFramePosition: nil)
-            FullScreenPhotoViewer(
+        .fullScreenCover(item: $selectedResult) { result in
+            SearchResultsViewer(
                 initialResult: result,
-                allResults: [result]
+                allResults: groupIds.map { id in
+                    SearchResult(id: id, score: 1.0, localIdentifier: id, creationDate: nil, isVideo: false, bestFramePosition: nil)
+                }
             )
         }
         .task {
@@ -191,7 +205,10 @@ struct MemoryThumbnail: View {
         if asset.mediaType == .video {
             presentVideoPlayer(for: asset)
         } else {
-            showFullScreen = true
+            selectedResult = SearchResult(
+                id: localIdentifier, score: 1.0, localIdentifier: localIdentifier,
+                creationDate: creationDate, isVideo: false, bestFramePosition: nil
+            )
         }
     }
 }

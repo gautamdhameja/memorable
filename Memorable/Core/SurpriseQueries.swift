@@ -1,8 +1,8 @@
 import Foundation
 
 class SurpriseQueries {
-    private static let storageKey = "memorable_validated_surprise_queries"
-    private static let lastValidatedCountKey = "memorable_surprise_last_validated_count"
+    private static let storageKey = AppKeys.surpriseValidatedQueries
+    private static let lastValidatedCountKey = AppKeys.surpriseLastValidatedCount
 
     static let candidates = [
         "golden hour",

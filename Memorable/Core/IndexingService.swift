@@ -22,6 +22,7 @@ class IndexingService: ObservableObject {
     @Published var progress = IndexingProgress(total: 0, completed: 0, isRunning: false)
     @Published var isReady = false
     @Published var newPhotosAvailable = false
+    @Published var indexVersion: Int = 0
 
     private let imageEncoder: ImageEncoder
     let searchEngine: SearchEngine
@@ -372,11 +373,11 @@ class IndexingService: ObservableObject {
         let sourceId = UUID().uuidString
 
         if let bookmarkData = try? url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil) {
-            UserDefaults.standard.set(bookmarkData, forKey: "folder_bookmark_\(sourceId)")
+            UserDefaults.standard.set(bookmarkData, forKey: AppKeys.folderBookmark(sourceId: sourceId))
         }
 
         let source = PhotoSource(
-            id: sourceId, type: "folder", path: url.path, name: name,
+            id: sourceId, type: PhotoSourceType.folder.rawValue, path: url.path, name: name,
             addedAt: Date(), lastIndexedAt: nil, photoCount: 0
         )
         do { try database.insertSource(source) }
@@ -465,6 +466,7 @@ class IndexingService: ObservableObject {
         do {
             try searchEngine.loadIndex()
             isReady = true
+            indexVersion += 1
         } catch {
             logger.error("Failed to reload search index: \(error.localizedDescription)")
         }

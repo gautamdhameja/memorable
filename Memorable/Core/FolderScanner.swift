@@ -11,7 +11,7 @@ class FolderScanner {
 
     // Resolve a saved bookmark back to a security-scoped URL
     static func resolveBookmark(forSourceId sourceId: String) -> URL? {
-        guard let data = UserDefaults.standard.data(forKey: "folder_bookmark_\(sourceId)") else {
+        guard let data = UserDefaults.standard.data(forKey: AppKeys.folderBookmark(sourceId: sourceId)) else {
             return nil
         }
         var isStale = false
@@ -21,7 +21,7 @@ class FolderScanner {
         if isStale {
             // Re-save refreshed bookmark
             if let fresh = try? url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil) {
-                UserDefaults.standard.set(fresh, forKey: "folder_bookmark_\(sourceId)")
+                UserDefaults.standard.set(fresh, forKey: AppKeys.folderBookmark(sourceId: sourceId))
             }
         }
         return url

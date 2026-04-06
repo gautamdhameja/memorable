@@ -7,10 +7,10 @@ struct MoreView: View {
     @Environment(\.database) private var database
 
     @State private var smartAlbums: [SmartAlbum] = []
+    @State private var showAllAlbums = false
     @State private var showSources = false
     @State private var showDuplicates = false
     @State private var showUpgrade = false
-    @State private var showClearConfirm = false
     @State private var showReindexConfirm = false
 
     var body: some View {
@@ -27,12 +27,13 @@ struct MoreView: View {
                                 .foregroundStyle(Celestial.Colors.outline)
                                 .listRowBackground(Celestial.Colors.surfaceContainerHigh)
                         } else {
-                            ForEach(smartAlbums) { album in
+                            let visibleAlbums = showAllAlbums ? smartAlbums : Array(smartAlbums.prefix(4))
+                            ForEach(visibleAlbums) { album in
                                 NavigationLink {
                                     SmartAlbumResultsView(album: album, searchEngine: searchEngine)
                                 } label: {
                                     HStack(spacing: 12) {
-                                        Image(systemName: album.iconName)
+                                        Image(systemName: "rectangle.stack.fill")
                                             .foregroundStyle(Celestial.Colors.primaryDim)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(album.name)
@@ -47,10 +48,22 @@ struct MoreView: View {
                                 .listRowBackground(Celestial.Colors.surfaceContainerHigh)
                             }
                             .onDelete { offsets in
+                                let visible = showAllAlbums ? smartAlbums : Array(smartAlbums.prefix(4))
                                 for offset in offsets {
-                                    SmartAlbumStore.delete(id: smartAlbums[offset].id)
+                                    SmartAlbumStore.delete(id: visible[offset].id)
                                 }
                                 smartAlbums = SmartAlbumStore.load()
+                            }
+
+                            if smartAlbums.count > 4 {
+                                Button {
+                                    withAnimation { showAllAlbums.toggle() }
+                                } label: {
+                                    Text(showAllAlbums ? "Show Less" : "Show All (\(smartAlbums.count))")
+                                        .font(.footnote.weight(.medium))
+                                        .foregroundStyle(Celestial.Colors.primaryFixedDim)
+                                }
+                                .listRowBackground(Celestial.Colors.surfaceContainerHigh)
                             }
                         }
                     } header: {
@@ -111,7 +124,8 @@ struct MoreView: View {
                                 Text("Search Index")
                                     .font(.body.weight(.medium))
                                     .foregroundStyle(Celestial.Colors.onSurface)
-                                Text("\(indexingService.progress.completed) of \(indexingService.progress.total) items indexed")
+                                let _ = indexingService.indexVersion // trigger re-render on index reload
+                                Text("\(searchEngine.indexSize) photos, \(searchEngine.videoSize) videos indexed")
                                     .font(.footnote)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
@@ -125,17 +139,6 @@ struct MoreView: View {
                                 Text("Re-index Library")
                                     .font(.body.weight(.medium))
                                     .foregroundStyle(Celestial.Colors.onSurface)
-                            }
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-
-                        Button(action: { showClearConfirm = true }) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "trash")
-                                    .foregroundStyle(Celestial.Colors.error)
-                                Text("Clear Index")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(Celestial.Colors.error)
                             }
                         }
                         .listRowBackground(Celestial.Colors.surfaceContainerHigh)
@@ -207,9 +210,21 @@ struct MoreView: View {
                 }
                 .scrollContentBackground(.hidden)
             }
-            .navigationTitle("More")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 10) {
+                        Image("AppIconTransparent")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 36, height: 36)
+                        Text("More")
+                            .font(.system(.title3, design: .rounded, weight: .semibold))
+                            .foregroundStyle(Celestial.Colors.onSurface)
+                    }
+                }
+            }
             .preferredColorScheme(.dark)
             .onAppear { smartAlbums = SmartAlbumStore.load() }
             .sheet(isPresented: $showSources) {
@@ -227,6 +242,8 @@ struct MoreView: View {
                 Button("Re-index", role: .destructive) {
                     do {
                         try database.deleteAll()
+                        searchEngine.dropIndex()
+                        indexingService.isReady = false
                     } catch {
                         logger.error("Failed to clear index: \(error.localizedDescription)")
                     }
@@ -235,18 +252,6 @@ struct MoreView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This will clear the current index and rebuild it from scratch. Search will be unavailable during indexing.")
-            }
-            .alert("Clear Index", isPresented: $showClearConfirm) {
-                Button("Clear", role: .destructive) {
-                    do {
-                        try database.deleteAll()
-                    } catch {
-                        logger.error("Failed to clear index: \(error.localizedDescription)")
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This will delete all indexed data. You will need to rebuild the index to search again.")
             }
         }
     }
@@ -310,11 +315,16 @@ struct SmartAlbumMasonryGrid: View {
         }
         .fullScreenCover(item: $selectedPhoto) { result in
             if result.isVideo {
-                Color.clear.onAppear { selectedPhoto = nil }
+                Color.clear.onAppear {
+                    selectedPhoto = nil
+                    if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
+                        presentVideoPlayer(for: asset)
+                    }
+                }
             } else {
-                FullScreenPhotoViewer(
+                SearchResultsViewer(
                     initialResult: result,
-                    allResults: results
+                    allResults: results.filter { !$0.isVideo }
                 )
             }
         }
@@ -389,10 +399,19 @@ struct SurpriseExploreView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .fullScreenCover(item: $selectedPhoto) { result in
-            FullScreenPhotoViewer(
-                initialResult: result,
-                allResults: results
-            )
+            if result.isVideo {
+                Color.clear.onAppear {
+                    selectedPhoto = nil
+                    if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
+                        presentVideoPlayer(for: asset)
+                    }
+                }
+            } else {
+                SearchResultsViewer(
+                    initialResult: result,
+                    allResults: results.filter { !$0.isVideo }
+                )
+            }
         }
     }
 
