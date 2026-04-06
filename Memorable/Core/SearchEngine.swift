@@ -321,31 +321,72 @@ class SearchEngine {
                 videoScores = cpuScores
             }
 
-            for i in 0..<vCount {
-                    var frameScore = videoScores[i]
-                    if let dateRange = hints.dateRange, let videoDate = vDates[i] {
-                        if videoDate >= dateRange.start && videoDate <= dateRange.end {
-                            frameScore *= 1.5
-                        } else {
-                            let distStart = abs(videoDate.timeIntervalSince(dateRange.start)) / 86400
-                            let distEnd = abs(videoDate.timeIntervalSince(dateRange.end)) / 86400
-                            let daysDiff = min(distStart, distEnd)
-                            if daysDiff < 7 { frameScore *= 0.9 }
-                            else if daysDiff < 30 { frameScore *= 0.6 }
-                            else if daysDiff < 180 { frameScore *= 0.4 }
-                            else { frameScore *= 0.2 }
-                        }
-                    }
-
-                    let vid = vIds[i]
-                    if let existing = videoScoreMap[vid] {
-                        if frameScore > existing.score {
-                            videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], vPositions[i])
-                        }
-                    } else {
-                        videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], vPositions[i])
+            // Negative term penalty for videos
+            var adjustedVideoScores = videoScores
+            for negTerm in hints.negativeTerms {
+                let negEmbedding = try textEncoder.encode(text: "a photo of " + negTerm)
+                if let negScores = gpuVideoSearch?.search(queryEmbedding: negEmbedding), negScores.count == vCount {
+                    for i in 0..<vCount { adjustedVideoScores[i] -= negScores[i] * 0.3 }
+                } else {
+                    var vRowBuf = [Float](repeating: 0, count: embeddingDim)
+                    for i in 0..<vCount {
+                        let offset = i * embeddingDim
+                        for j in 0..<embeddingDim { vRowBuf[j] = Float(vMatrix[offset + j]) }
+                        var negDot: Float = 0
+                        vDSP_dotpr(negEmbedding, 1, vRowBuf, 1, &negDot, vDSP_Length(embeddingDim))
+                        adjustedVideoScores[i] -= negDot * 0.3
                     }
                 }
+            }
+
+            let rawVideoScores = adjustedVideoScores
+            let calendar = Calendar.current
+
+            for i in 0..<vCount {
+                let rawScore = rawVideoScores[i]
+                // Skip frames that don't visually match the query
+                guard rawScore >= minimumScoreThreshold else { continue }
+
+                var frameScore = rawScore
+
+                // Date boost
+                if let dateRange = hints.dateRange, let videoDate = vDates[i] {
+                    if videoDate >= dateRange.start && videoDate <= dateRange.end {
+                        frameScore *= 1.5
+                    } else {
+                        let distStart = abs(videoDate.timeIntervalSince(dateRange.start)) / 86400
+                        let distEnd = abs(videoDate.timeIntervalSince(dateRange.end)) / 86400
+                        let daysDiff = min(distStart, distEnd)
+                        if daysDiff < 7 { frameScore *= 0.9 }
+                        else if daysDiff < 30 { frameScore *= 0.6 }
+                        else if daysDiff < 180 { frameScore *= 0.4 }
+                        else { frameScore *= 0.2 }
+                    }
+                }
+
+                // Time-of-day boost
+                if let timeRange = hints.timeOfDayHours, let videoDate = vDates[i] {
+                    let hour = calendar.component(.hour, from: videoDate)
+                    let inRange: Bool
+                    if timeRange.start <= timeRange.end {
+                        inRange = hour >= timeRange.start && hour < timeRange.end
+                    } else {
+                        inRange = hour >= timeRange.start || hour < timeRange.end
+                    }
+                    frameScore *= inRange ? 1.3 : 0.7
+                }
+
+                guard frameScore >= minimumScoreThreshold else { continue }
+
+                let vid = vIds[i]
+                if let existing = videoScoreMap[vid] {
+                    if frameScore > existing.score {
+                        videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], vPositions[i])
+                    }
+                } else {
+                    videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], vPositions[i])
+                }
+            }
         }
 
         // Step 8: Combine photo + video results, sort, threshold, return
