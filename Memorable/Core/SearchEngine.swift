@@ -208,7 +208,7 @@ class SearchEngine {
             for i in 0..<count {
                 guard let photoDate = photoDates[i] else { continue }
                 if photoDate >= dateRange.start && photoDate <= dateRange.end {
-                    scores[i] *= 1.5       // Strong boost for in-range
+                    scores[i] *= 2.0       // Strong boost for in-range
                 } else {
                     // Graduated penalty based on distance from the range
                     let distStart = abs(photoDate.timeIntervalSince(dateRange.start)) / 86400
@@ -216,13 +216,13 @@ class SearchEngine {
                     let daysDiff = min(distStart, distEnd)
 
                     if daysDiff < 7 {
-                        scores[i] *= 0.9   // Within a week — mild penalty
+                        scores[i] *= 0.7   // Within a week
                     } else if daysDiff < 30 {
-                        scores[i] *= 0.6   // Within a month — moderate penalty
-                    } else if daysDiff < 180 {
-                        scores[i] *= 0.4   // Within 6 months — heavy penalty
+                        scores[i] *= 0.4   // Within a month
+                    } else if daysDiff < 90 {
+                        scores[i] *= 0.2   // Within 3 months
                     } else {
-                        scores[i] *= 0.2   // Older than 6 months — near-elimination
+                        scores[i] *= 0.1   // Beyond 3 months — effectively eliminated
                     }
                 }
             }
@@ -352,15 +352,15 @@ class SearchEngine {
                 // Date boost
                 if let dateRange = hints.dateRange, let videoDate = vDates[i] {
                     if videoDate >= dateRange.start && videoDate <= dateRange.end {
-                        frameScore *= 1.5
+                        frameScore *= 2.0
                     } else {
                         let distStart = abs(videoDate.timeIntervalSince(dateRange.start)) / 86400
                         let distEnd = abs(videoDate.timeIntervalSince(dateRange.end)) / 86400
                         let daysDiff = min(distStart, distEnd)
-                        if daysDiff < 7 { frameScore *= 0.9 }
-                        else if daysDiff < 30 { frameScore *= 0.6 }
-                        else if daysDiff < 180 { frameScore *= 0.4 }
-                        else { frameScore *= 0.2 }
+                        if daysDiff < 7 { frameScore *= 0.7 }
+                        else if daysDiff < 30 { frameScore *= 0.4 }
+                        else if daysDiff < 90 { frameScore *= 0.2 }
+                        else { frameScore *= 0.1 }
                     }
                 }
 
