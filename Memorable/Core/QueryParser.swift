@@ -10,6 +10,7 @@ struct QueryHints {
     var seasonHint: Season?
     var negativeTerms: [String] = []
     var timeOfDayHours: (start: Int, end: Int)?
+    var hasVisualQuery: Bool = true
 }
 
 struct DateRange {
@@ -73,13 +74,21 @@ enum QueryParserFallback {
             }
         }
 
-        if text.isEmpty { text = trimmed.lowercased() }
+        let cleanedText = text.trimmingCharacters(in: .whitespaces)
+        let hasVisual = !cleanedText.isEmpty
 
         #if DEBUG
-        logger.info("[QueryParser] input='\(trimmed)' → textQuery='\(text)', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), timeOfDay=\(timeOfDayHours.map { "\($0.start)-\($0.end)" } ?? "nil")")
+        logger.info("[QueryParser] input='\(trimmed)' → textQuery='\(hasVisual ? cleanedText : "a photo")', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), timeOfDay=\(timeOfDayHours.map { "\($0.start)-\($0.end)" } ?? "nil"), hasVisual=\(hasVisual)")
         #endif
 
-        return QueryHints(textQuery: text, dateRange: dateRange, locationHint: locationHint, negativeTerms: negTerms, timeOfDayHours: timeOfDayHours)
+        return QueryHints(
+            textQuery: hasVisual ? cleanedText : "a photo",
+            dateRange: dateRange,
+            locationHint: locationHint,
+            negativeTerms: negTerms,
+            timeOfDayHours: timeOfDayHours,
+            hasVisualQuery: hasVisual
+        )
     }
 
     private static func extractLocation(from original: String, text: inout String, locationHint: inout String?) {

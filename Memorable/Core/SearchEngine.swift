@@ -166,42 +166,9 @@ class SearchEngine {
 
         var hints = await QueryParser.parse(query: query)
 
-        // Geocode location hint if present
+        // Geocode location hint if present — ONLY the extracted location name, never modified
         if let locationName = hints.locationHint {
-            // Check if textQuery looks like additional location words (not visual content)
-            let visual = hints.textQuery.trimmingCharacters(in: .whitespaces).lowercased()
-            let locationRelatedWords: Set<String> = [
-                "old", "town", "city", "center", "centre", "downtown", "uptown",
-                "north", "south", "east", "west", "upper", "lower", "new", "port",
-                "beach", "bay", "hill", "hills", "park", "lake", "river", "island",
-                "mount", "valley", "heights", "village", "square", "market", "station",
-                "bridge", "garden", "gardens", "creek", "grove", "springs", "falls",
-                "point", "cape", "fort", "haven", "harbor", "harbour",
-                "campo", "platz", "strasse", "gasse", "berg", "burg", "stadt", "dorf",
-                "mitte", "kreuzberg", "prenzlauer", "charlottenburg", "neukolln",
-            ]
-            let visualWords = Set(visual.split(separator: " ").map(String.init))
-            let isVisualLocationOnly = !visual.isEmpty && !visualWords.isEmpty && visualWords.isSubset(of: locationRelatedWords)
-
-            // If textQuery is location-related, try combined geocoding for more precision
-            if isVisualLocationOnly {
-                let combined = "\(visual) \(locationName)"
-                if let geo = await geocodeLocation(combined) {
-                    hints.locationCoordinate = (geo.lat, geo.lon)
-                    hints.locationRadiusKm = geo.radiusKm
-                    hints.locationHint = combined
-                    hints.textQuery = ""
-                    #if DEBUG
-                    logger.info("[SearchEngine] Geocoded combined '\(combined)' → \(geo.lat), \(geo.lon), radius: \(geo.radiusKm)km")
-                    #endif
-                } else if let geo = await geocodeLocation(locationName) {
-                    hints.locationCoordinate = (geo.lat, geo.lon)
-                    hints.locationRadiusKm = geo.radiusKm
-                    #if DEBUG
-                    logger.info("[SearchEngine] Geocoded '\(locationName)' → \(geo.lat), \(geo.lon), radius: \(geo.radiusKm)km")
-                    #endif
-                }
-            } else if let geo = await geocodeLocation(locationName) {
+            if let geo = await geocodeLocation(locationName) {
                 hints.locationCoordinate = (geo.lat, geo.lon)
                 hints.locationRadiusKm = geo.radiusKm
                 #if DEBUG
@@ -278,108 +245,37 @@ class SearchEngine {
         #endif
 
         // =====================================================================
-        // DETECT PURE LOCATION QUERY
+        // PHASE 2: BRANCH ON QUERY INTENT
         // =====================================================================
 
-        let isPureLocationQuery: Bool = {
-            guard hints.locationCoordinate != nil else { return false }
-            let visual = hints.textQuery.trimmingCharacters(in: .whitespaces).lowercased()
-            // 1. Empty textQuery — parser consumed everything as location
-            if visual.isEmpty { return true }
-            // 2. textQuery exactly equals the location hint
-            if let loc = hints.locationHint?.lowercased(), visual == loc { return true }
-            // 3. All words in textQuery are location-related (e.g., "old town", "mitte")
-            let locationRelatedWords: Set<String> = [
-                "old", "town", "city", "center", "centre", "downtown", "uptown",
-                "north", "south", "east", "west", "upper", "lower", "new", "port",
-                "beach", "bay", "hill", "hills", "park", "lake", "river", "island",
-                "mount", "valley", "heights", "village", "square", "market", "station",
-                "bridge", "garden", "gardens", "creek", "grove", "springs", "falls",
-                "point", "cape", "fort", "haven", "harbor", "harbour",
-                "campo", "platz", "strasse", "gasse", "berg", "burg", "stadt", "dorf",
-                "mitte", "kreuzberg", "prenzlauer", "charlottenburg", "neukolln",
-            ]
-            let visualWords = Set(visual.split(separator: " ").map(String.init))
-            if !visualWords.isEmpty && visualWords.isSubset(of: locationRelatedWords) { return true }
-            // 4. Everything else → NOT a pure location query, run CLIP
-            return false
-        }()
-
-        // =====================================================================
-        // PURE LOCATION QUERY: skip CLIP, return all GPS-matched photos by date
-        // =====================================================================
-
-        if isPureLocationQuery {
-            var locationResults: [SearchResult] = []
-            for i in 0..<count {
-                guard candidateMask[i] else { continue }
-                locationResults.append(SearchResult(
-                    id: ids[i], score: 1.0, localIdentifier: localIds[i],
-                    creationDate: photoDates[i], isVideo: false, bestFramePosition: nil
-                ))
-            }
-            locationResults.sort { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
-
-            // Include videos from this location
-            if vCount > 0 {
-                var seenVideoIds = Set<String>()
-                for i in 0..<vCount {
-                    if let dateRange = hints.dateRange {
-                        guard let videoDate = vDates[i], videoDate >= dateRange.start && videoDate <= dateRange.end else { continue }
-                    }
-                    if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
-                        guard let lat = vLats[i], let lon = vLons[i] else { continue }
-                        let distanceKm = CLLocation(latitude: coord.lat, longitude: coord.lon)
-                            .distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
-                        guard distanceKm <= radiusKm else { continue }
-                    }
-                    let vid = vIds[i]
-                    guard !seenVideoIds.contains(vid) else { continue }
-                    seenVideoIds.insert(vid)
-                    locationResults.append(SearchResult(
-                        id: vid, score: 1.0, localIdentifier: vLocalIds[i],
-                        creationDate: vDates[i], isVideo: true, bestFramePosition: vPositions[i]
-                    ))
-                }
-                locationResults.sort { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
-            }
-
-            let capped = Array(locationResults.prefix(topK))
-
-            #if DEBUG
-            logger.info("[SearchEngine] Pure location query: \(capped.count) results within \(hints.locationRadiusKm ?? 0)km of '\(hints.locationHint ?? "")'")
-            #endif
-
-            return SearchResponse(results: capped, fallbackResults: [], filtersApplied: nil)
-        }
-
-        // If filters eliminated everything, compute fallback results from unfiltered CLIP search
         let filtersActive = hints.dateRange != nil || hints.locationCoordinate != nil
+
+        // Empty candidate set with active filters → provide fallback
         if candidateCount == 0 && filtersActive {
-            let queryEmbedding = try encodeQueryWithFusion(text: hints.textQuery)
-            var fallbackResults: [SearchResult] = []
-
-            if let gpuScores = gpuSearch?.search(queryEmbedding: queryEmbedding), gpuScores.count == count {
-                let fallbackSorted = gpuScores.enumerated().sorted { $0.element > $1.element }
-                fallbackResults = fallbackSorted.prefix(5)
-                    .filter { $0.element >= minimumScoreThreshold }
-                    .map { (index, score) in
-                        SearchResult(id: ids[index], score: score, localIdentifier: localIds[index],
-                                     creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
-                    }
-            }
-
+            let fallbackResults = hints.hasVisualQuery
+                ? computeFallbackResults(text: hints.textQuery, ids: ids, localIds: localIds, dates: photoDates, count: count)
+                : []
             let summary = FilterSummary(
                 dateDescription: hints.dateRange.map { formatDateRange($0) },
                 locationDescription: hints.locationHint,
                 visualQuery: hints.textQuery
             )
-
             return SearchResponse(results: [], fallbackResults: fallbackResults, filtersApplied: summary)
         }
 
+        // No visual content → return all candidates sorted by date
+        if !hints.hasVisualQuery {
+            return locationOnlyResults(
+                candidateMask: candidateMask, ids: ids, localIds: localIds,
+                dates: photoDates, count: count,
+                vIds: vIds, vLocalIds: vLocalIds, vDates: vDates,
+                vLats: vLats, vLons: vLons, vPositions: vPositions, vCount: vCount,
+                hints: hints, topK: topK
+            )
+        }
+
         // =====================================================================
-        // PHASE 2: CLIP SCORING — score all, then mask out non-candidates
+        // PHASE 3: CLIP SCORING — score all, then mask out non-candidates
         // =====================================================================
 
         let queryEmbedding = try encodeQueryWithFusion(text: hints.textQuery)
@@ -407,10 +303,10 @@ class SearchEngine {
         }
 
         // =====================================================================
-        // PHASE 3: SOFT BOOSTS — only on candidates that passed hard filters
+        // PHASE 4: SOFT BOOSTS — only on candidates that passed hard filters
         // =====================================================================
 
-        // Location proximity boost (mild, within the filtered radius)
+        // Location proximity boost
         if let target = targetLoc, let radiusKm = hints.locationRadiusKm {
             for i in 0..<count {
                 guard candidateMask[i] else { continue }
@@ -424,7 +320,7 @@ class SearchEngine {
             }
         }
 
-        // Time-of-day boost (boost only, no penalty — should not push results below threshold)
+        // Time-of-day boost (boost only, no penalty)
         if let timeRange = hints.timeOfDayHours {
             let calendar = Calendar.current
             for i in 0..<count {
@@ -437,10 +333,7 @@ class SearchEngine {
                 } else {
                     inRange = hour >= timeRange.start || hour < timeRange.end
                 }
-                if inRange {
-                    scores[i] *= SearchConfig.timeOfDayMatchBoost
-                }
-                // No penalty for wrong time — CLIP already handles visual matching
+                if inRange { scores[i] *= SearchConfig.timeOfDayMatchBoost }
             }
         }
 
@@ -480,7 +373,7 @@ class SearchEngine {
         }
 
         // =====================================================================
-        // PHASE 4: VIDEO SCORING — same hard filter approach
+        // PHASE 5: VIDEO SCORING
         // =====================================================================
 
         var videoScoreMap: [String: (score: Float, localId: String, date: Date?, framePosition: Double)] = [:]
@@ -506,29 +399,16 @@ class SearchEngine {
                 var frameScore = videoScores[i]
                 guard frameScore >= minimumScoreThreshold else { continue }
 
-                // Hard date filter for videos
                 if let dateRange = hints.dateRange {
-                    if let videoDate = vDates[i] {
-                        if videoDate < dateRange.start || videoDate > dateRange.end {
-                            continue
-                        }
-                    } else {
-                        continue
-                    }
+                    guard let videoDate = vDates[i], videoDate >= dateRange.start && videoDate <= dateRange.end else { continue }
                 }
-
-                // Hard location filter for videos
                 if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
-                    if let lat = vLats[i], let lon = vLons[i] {
-                        let distanceKm = CLLocation(latitude: coord.lat, longitude: coord.lon)
-                            .distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
-                        if distanceKm > radiusKm { continue }
-                    } else {
-                        continue // No GPS — can't verify location
-                    }
+                    guard let lat = vLats[i], let lon = vLons[i] else { continue }
+                    let distanceKm = CLLocation(latitude: coord.lat, longitude: coord.lon)
+                        .distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                    guard distanceKm <= radiusKm else { continue }
                 }
 
-                // Negative term penalty for videos
                 for negTerm in hints.negativeTerms {
                     let negEmbedding = try textEncoder.encode(text: "a photo of " + negTerm)
                     if let negScores = gpuVideoSearch?.search(queryEmbedding: negEmbedding), negScores.count == vCount {
@@ -536,15 +416,11 @@ class SearchEngine {
                     }
                 }
 
-                // Time-of-day boost for videos (boost only, no penalty)
                 if let timeRange = hints.timeOfDayHours, let videoDate = vDates[i] {
                     let hour = Calendar.current.component(.hour, from: videoDate)
-                    let inRange: Bool
-                    if timeRange.start <= timeRange.end {
-                        inRange = hour >= timeRange.start && hour < timeRange.end
-                    } else {
-                        inRange = hour >= timeRange.start || hour < timeRange.end
-                    }
+                    let inRange = timeRange.start <= timeRange.end
+                        ? hour >= timeRange.start && hour < timeRange.end
+                        : hour >= timeRange.start || hour < timeRange.end
                     if inRange { frameScore *= SearchConfig.timeOfDayMatchBoost }
                 }
 
@@ -562,7 +438,7 @@ class SearchEngine {
         }
 
         // =====================================================================
-        // PHASE 5: RANK AND RETURN
+        // PHASE 6: RANK AND RETURN
         // =====================================================================
 
         let sorted = scores.enumerated().sorted { $0.element > $1.element }
@@ -575,15 +451,11 @@ class SearchEngine {
         }
 
         var allResults = photoResults + videoResults
-        // Sort by score, but when scores are close (within 5%), prefer more recent photos
         allResults.sort { a, b in
             let scoreDiff = abs(a.score - b.score)
             let maxScore = max(a.score, b.score)
             if maxScore > 0 && scoreDiff / maxScore < 0.05 {
-                // Scores are close — prefer recency
-                let dateA = a.creationDate ?? .distantPast
-                let dateB = b.creationDate ?? .distantPast
-                return dateA > dateB
+                return (a.creationDate ?? .distantPast) > (b.creationDate ?? .distantPast)
             }
             return a.score > b.score
         }
@@ -598,7 +470,6 @@ class SearchEngine {
             logger.info("[Result #\(rank + 1)] \(type) id=\(r.id) local=\(r.localIdentifier) score=\(String(format: "%.3f", r.score)) date=\(dateStr)")
         }
         if finalResults.isEmpty {
-            // Log top 5 candidates that were close but didn't make it
             let nearMisses = sorted.prefix(5)
             for (index, score) in nearMisses {
                 let dateStr = photoDates[index].map { dateFormatter.string(from: $0) } ?? "no-date"
@@ -609,18 +480,9 @@ class SearchEngine {
         }
         #endif
 
-        // If filters were active but no results passed CLIP threshold, provide fallback
+        // If CLIP scoring produced no results but filters were active, provide fallback
         if finalResults.isEmpty && filtersActive {
-            var fallbackResults: [SearchResult] = []
-            if let gpuScores = gpuSearch?.search(queryEmbedding: queryEmbedding), gpuScores.count == count {
-                let fallbackSorted = gpuScores.enumerated().sorted { $0.element > $1.element }
-                fallbackResults = fallbackSorted.prefix(5)
-                    .filter { $0.element >= minimumScoreThreshold }
-                    .map { (index, score) in
-                        SearchResult(id: ids[index], score: score, localIdentifier: localIds[index],
-                                     creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
-                    }
-            }
+            let fallbackResults = computeFallbackResults(text: hints.textQuery, ids: ids, localIds: localIds, dates: photoDates, count: count)
             let summary = FilterSummary(
                 dateDescription: hints.dateRange.map { formatDateRange($0) },
                 locationDescription: hints.locationHint,
@@ -630,6 +492,71 @@ class SearchEngine {
         }
 
         return SearchResponse(results: finalResults, fallbackResults: [], filtersApplied: nil)
+    }
+
+    // MARK: - Helper Methods
+
+    private func locationOnlyResults(
+        candidateMask: [Bool], ids: [String], localIds: [String],
+        dates: [Date?], count: Int,
+        vIds: [String], vLocalIds: [String], vDates: [Date?],
+        vLats: [Double?], vLons: [Double?], vPositions: [Double], vCount: Int,
+        hints: QueryHints, topK: Int
+    ) -> SearchResponse {
+        var results: [SearchResult] = []
+
+        for i in 0..<count {
+            guard candidateMask[i] else { continue }
+            results.append(SearchResult(
+                id: ids[i], score: 1.0, localIdentifier: localIds[i],
+                creationDate: dates[i], isVideo: false, bestFramePosition: nil
+            ))
+        }
+
+        var seenVideoIds = Set<String>()
+        for i in 0..<vCount {
+            if let dateRange = hints.dateRange {
+                guard let videoDate = vDates[i], videoDate >= dateRange.start && videoDate <= dateRange.end else { continue }
+            }
+            if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
+                guard let lat = vLats[i], let lon = vLons[i] else { continue }
+                let distKm = CLLocation(latitude: coord.lat, longitude: coord.lon)
+                    .distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                guard distKm <= radiusKm else { continue }
+            }
+            let vid = vIds[i]
+            guard !seenVideoIds.contains(vid) else { continue }
+            seenVideoIds.insert(vid)
+            results.append(SearchResult(
+                id: vid, score: 1.0, localIdentifier: vLocalIds[i],
+                creationDate: vDates[i], isVideo: true, bestFramePosition: vPositions[i]
+            ))
+        }
+
+        results.sort { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
+        let capped = Array(results.prefix(topK))
+
+        #if DEBUG
+        logger.info("[SearchEngine] Location/date only query: \(capped.count) results")
+        #endif
+
+        return SearchResponse(results: capped, fallbackResults: [], filtersApplied: nil)
+    }
+
+    private func computeFallbackResults(
+        text: String, ids: [String], localIds: [String],
+        dates: [Date?], count: Int
+    ) -> [SearchResult] {
+        guard let queryEmbedding = try? encodeQueryWithFusion(text: text) else { return [] }
+        guard let gpuScores = gpuSearch?.search(queryEmbedding: queryEmbedding), gpuScores.count == count else { return [] }
+
+        let sorted = gpuScores.enumerated().sorted { $0.element > $1.element }
+        return sorted.prefix(5)
+            .filter { $0.element >= minimumScoreThreshold }
+            .map { (index, score) in
+                SearchResult(id: ids[index], score: score, localIdentifier: localIds[index],
+                             creationDate: dates[index], isVideo: false, bestFramePosition: nil)
+            }
     }
 
     // MARK: - Similar Photos

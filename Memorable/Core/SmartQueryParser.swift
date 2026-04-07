@@ -62,7 +62,8 @@ class SmartQueryParser {
                 }
             }
 
-            let visual = parsed.visualDescription.isEmpty ? query.lowercased() : parsed.visualDescription.lowercased()
+            let visual = parsed.visualDescription.isEmpty ? "" : parsed.visualDescription.lowercased()
+            let hasVisual = !visual.trimmingCharacters(in: .whitespaces).isEmpty
 
             // Time-of-day detection (Foundation Models doesn't extract this)
             let timeOfDayHours = TimeOfDayConfig.detect(in: query.lowercased())
@@ -70,21 +71,21 @@ class SmartQueryParser {
             // Use Foundation Models result, fill gaps with fallback only if needed
             var locationHint = parsed.locationName
             if locationHint == nil || locationHint?.isEmpty == true {
-                // Only run fallback location extraction if FM didn't find one
                 let fallbackHints = QueryParserFallback.parse(query: query)
                 locationHint = fallbackHints.locationHint
             }
 
             #if DEBUG
-            logger.info("[SmartParser] FM visual='\(visual)', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), raw FM location='\(parsed.locationName ?? "nil")'")
+            logger.info("[SmartParser] FM visual='\(hasVisual ? visual : "a photo")', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), hasVisual=\(hasVisual)")
             #endif
 
             return QueryHints(
-                textQuery: visual,
+                textQuery: hasVisual ? visual : "a photo",
                 dateRange: dateRange,
                 locationHint: locationHint,
                 negativeTerms: parsed.negativeTerms,
-                timeOfDayHours: timeOfDayHours
+                timeOfDayHours: timeOfDayHours,
+                hasVisualQuery: hasVisual
             )
         } catch {
             logger.error("Foundation model parse failed: \(error.localizedDescription), falling back to regex")

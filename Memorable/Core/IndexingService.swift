@@ -23,6 +23,7 @@ class IndexingService: ObservableObject {
     @Published var isReady = false
     @Published var newPhotosAvailable = false
     @Published var indexVersion: Int = 0
+    @Published var hitFreeLimit = false
 
     private let imageEncoder: ImageEncoder
     let searchEngine: SearchEngine
@@ -141,8 +142,6 @@ class IndexingService: ObservableObject {
             }
         }
     }
-
-    @Published var hitFreeLimit = false
 
     private func performIndexing() async {
         // Request background execution time so indexing continues when app is backgrounded
