@@ -109,7 +109,7 @@ class ProManager: ObservableObject {
         if entitled != isPro {
             isPro = entitled
             if !entitled {
-                logger.warning("Pro entitlement revoked (refund or family sharing removed)")
+                logger.error("Pro entitlement revoked (refund or family sharing removed)")
             }
         }
         #endif

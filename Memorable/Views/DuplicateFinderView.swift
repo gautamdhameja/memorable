@@ -78,9 +78,10 @@ struct DuplicateFinderView: View {
 
     private func startScan() {
         isScanning = true
+        let db = database
         Task.detached(priority: .userInitiated) {
             do {
-                let data = try database.loadAllEmbeddings()
+                let data = try db.loadAllEmbeddings()
                 let found = DuplicateFinder.findDuplicates(
                     ids: data.ids,
                     localIdentifiers: data.localIdentifiers,
