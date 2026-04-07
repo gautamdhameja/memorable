@@ -207,7 +207,8 @@ private enum TemporalParser {
                     dateRange = DateRange(start: date, end: date.addingTimeInterval(match.duration))
                 } else {
                     let dayStart = cal.startOfDay(for: date)
-                    dateRange = DateRange(start: dayStart, end: cal.date(byAdding: .day, value: 1, to: dayStart)!)
+                    let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+                    dateRange = DateRange(start: dayStart, end: dayEnd)
                 }
                 if let range = Range(match.range, in: cleaned) {
                     cleaned.replaceSubrange(range, with: "")
@@ -239,8 +240,9 @@ private enum TemporalParser {
         let pattern = /\b(20\d{2})\b/
         guard let match = text.firstMatch(of: pattern),
               let year = Int(match.1) else { return nil }
-        let start = cal.date(from: DateComponents(year: year, month: 1, day: 1))!
-        let end = cal.date(from: DateComponents(year: year, month: 12, day: 31, hour: 23, minute: 59, second: 59))!
+        guard let start = cal.date(from: DateComponents(year: year, month: 1, day: 1)),
+              let end = cal.date(from: DateComponents(year: year, month: 12, day: 31, hour: 23, minute: 59, second: 59))
+        else { return nil }
         return (DateRange(start: start, end: end), match.range)
     }
 
@@ -256,45 +258,43 @@ private enum TemporalParser {
         let currentYear = cal.component(.year, from: now)
         let currentMonth = cal.component(.month, from: now)
 
+        // Safe calendar helpers — use ?? today as fallback (should never trigger with valid inputs)
         func dayStart(_ date: Date) -> Date { cal.startOfDay(for: date) }
-        func dayEnd(_ date: Date) -> Date { cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: date))! }
-        func daysAgo(_ n: Int) -> Date { cal.date(byAdding: .day, value: -n, to: today)! }
+        func dayEnd(_ date: Date) -> Date { cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: date)) ?? date }
+        func daysAgo(_ n: Int) -> Date { cal.date(byAdding: .day, value: -n, to: today) ?? today }
+        func makeDate(_ y: Int, _ m: Int, _ d: Int) -> Date {
+            cal.date(from: DateComponents(year: y, month: m, day: d)) ?? today
+        }
         func monthRange(year: Int, month: Int) -> DateRange {
-            let start = cal.date(from: DateComponents(year: year, month: month, day: 1))!
-            let end = cal.date(byAdding: DateComponents(month: 1, day: -1), to: start)!
+            let start = makeDate(year, month, 1)
+            let end = cal.date(byAdding: DateComponents(month: 1, day: -1), to: start) ?? start
             return DateRange(start: start, end: dayEnd(end))
         }
         func fullYear(_ y: Int) -> DateRange {
-            DateRange(
-                start: cal.date(from: DateComponents(year: y, month: 1, day: 1))!,
-                end: cal.date(from: DateComponents(year: y, month: 12, day: 31, hour: 23, minute: 59, second: 59))!
-            )
+            let start = makeDate(y, 1, 1)
+            let end = cal.date(from: DateComponents(year: y, month: 12, day: 31, hour: 23, minute: 59, second: 59)) ?? start
+            return DateRange(start: start, end: end)
         }
         func seasonRange(year: Int, startMonth: Int, endMonth: Int) -> DateRange {
             if startMonth == 12 {
-                // Winter spans year boundary: Dec of year-1 to Feb of year
-                return DateRange(
-                    start: cal.date(from: DateComponents(year: year - 1, month: 12, day: 1))!,
-                    end: dayEnd(cal.date(from: DateComponents(year: year, month: 2, day: 28))!)
-                )
+                return DateRange(start: makeDate(year - 1, 12, 1), end: dayEnd(makeDate(year, 2, 28)))
             }
-            let start = cal.date(from: DateComponents(year: year, month: startMonth, day: 1))!
-            let endDate = cal.date(from: DateComponents(year: year, month: endMonth + 1, day: 0))!
+            let start = makeDate(year, startMonth, 1)
+            let endDate = cal.date(from: DateComponents(year: year, month: endMonth + 1, day: 0)) ?? start
             return DateRange(start: start, end: dayEnd(endDate))
         }
         func mostRecentPast(month: Int, dayStart: Int, dayEnd de: Int) -> DateRange {
-            // If this year's occurrence has passed, use this year. Otherwise last year.
-            let thisYear = cal.date(from: DateComponents(year: currentYear, month: month, day: de))!
+            let thisYear = makeDate(currentYear, month, de)
             let year = thisYear <= now ? currentYear : currentYear - 1
             return DateRange(
-                start: cal.date(from: DateComponents(year: year, month: month, day: dayStart))!,
-                end: TemporalParser.dayEndHelper(cal.date(from: DateComponents(year: year, month: month, day: de))!, cal: cal)
+                start: makeDate(year, month, dayStart),
+                end: TemporalParser.dayEndHelper(makeDate(year, month, de), cal: cal)
             )
         }
         func weekdayOfWeek(_ weekday: Int, weeksBack: Int) -> Date {
             let components = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today)
-            let monday = cal.date(from: components)!
-            return cal.date(byAdding: .day, value: -(weeksBack * 7) + (weekday - 2), to: monday)!
+            let monday = cal.date(from: components) ?? today
+            return cal.date(byAdding: .day, value: -(weeksBack * 7) + (weekday - 2), to: monday) ?? today
         }
 
         var patterns: [TemporalPattern] = []
@@ -308,17 +308,17 @@ private enum TemporalParser {
         // --- Relative weeks ---
         patterns.append(TemporalPattern(phrase: "last weekend") {
             let lastSat = weekdayOfWeek(7, weeksBack: 1)
-            let lastSun = cal.date(byAdding: .day, value: 1, to: lastSat)!
+            let lastSun = cal.date(byAdding: .day, value: 1, to: lastSat) ?? lastSat
             return DateRange(start: dayStart(lastSat), end: dayEnd(lastSun))
         })
         patterns.append(TemporalPattern(phrase: "this weekend") {
             let thisSat = weekdayOfWeek(7, weeksBack: 0)
-            let thisSun = cal.date(byAdding: .day, value: 1, to: thisSat)!
+            let thisSun = cal.date(byAdding: .day, value: 1, to: thisSat) ?? thisSat
             return DateRange(start: dayStart(thisSat), end: dayEnd(thisSun))
         })
         patterns.append(TemporalPattern(phrase: "two weeks ago") {
-            let start = weekdayOfWeek(2, weeksBack: 2) // Monday 2 weeks ago
-            let end = cal.date(byAdding: .day, value: 6, to: start)!
+            let start = weekdayOfWeek(2, weeksBack: 2)
+            let end = cal.date(byAdding: .day, value: 6, to: start) ?? start
             return DateRange(start: dayStart(start), end: dayEnd(end))
         })
         patterns.append(TemporalPattern(phrase: "past few days") { DateRange(start: daysAgo(5), end: now) })
@@ -326,7 +326,7 @@ private enum TemporalParser {
         patterns.append(TemporalPattern(phrase: "couple days ago") { DateRange(start: daysAgo(3), end: daysAgo(1)) })
         patterns.append(TemporalPattern(phrase: "last week") {
             let start = weekdayOfWeek(2, weeksBack: 1)
-            let end = cal.date(byAdding: .day, value: 6, to: start)!
+            let end = cal.date(byAdding: .day, value: 6, to: start) ?? start
             return DateRange(start: dayStart(start), end: dayEnd(end))
         })
         patterns.append(TemporalPattern(phrase: "this week") {
@@ -338,60 +338,68 @@ private enum TemporalParser {
 
         // --- Relative months ---
         patterns.append(TemporalPattern(phrase: "a couple months ago") {
-            DateRange(start: cal.date(byAdding: .month, value: -3, to: today)!,
-                      end: cal.date(byAdding: .month, value: -1, to: today)!)
+            let s = cal.date(byAdding: .month, value: -3, to: today) ?? today
+            let e = cal.date(byAdding: .month, value: -1, to: today) ?? today
+            return DateRange(start: s, end: e)
         })
         patterns.append(TemporalPattern(phrase: "couple months ago") {
-            DateRange(start: cal.date(byAdding: .month, value: -3, to: today)!,
-                      end: cal.date(byAdding: .month, value: -1, to: today)!)
+            let s = cal.date(byAdding: .month, value: -3, to: today) ?? today
+            let e = cal.date(byAdding: .month, value: -1, to: today) ?? today
+            return DateRange(start: s, end: e)
         })
         patterns.append(TemporalPattern(phrase: "past few months") {
-            DateRange(start: cal.date(byAdding: .month, value: -3, to: today)!, end: now)
+            DateRange(start: cal.date(byAdding: .month, value: -3, to: today) ?? today, end: now)
         })
         patterns.append(TemporalPattern(phrase: "few months ago") {
-            DateRange(start: cal.date(byAdding: .month, value: -3, to: today)!, end: now)
+            DateRange(start: cal.date(byAdding: .month, value: -3, to: today) ?? today, end: now)
         })
         patterns.append(TemporalPattern(phrase: "two months ago") {
-            let start = cal.date(byAdding: .month, value: -2, to: today)!
+            let start = cal.date(byAdding: .month, value: -2, to: today) ?? today
             return monthRange(year: cal.component(.year, from: start), month: cal.component(.month, from: start))
         })
         patterns.append(TemporalPattern(phrase: "a month ago") {
-            DateRange(start: cal.date(byAdding: .day, value: -37, to: today)!,
-                      end: cal.date(byAdding: .day, value: -23, to: today)!)
+            let s = cal.date(byAdding: .day, value: -37, to: today) ?? today
+            let e = cal.date(byAdding: .day, value: -23, to: today) ?? today
+            return DateRange(start: s, end: e)
         })
         patterns.append(TemporalPattern(phrase: "earlier this year") {
-            DateRange(start: cal.date(from: DateComponents(year: currentYear, month: 1, day: 1))!,
-                      end: cal.date(byAdding: .month, value: -3, to: today)!)
+            let s = makeDate(currentYear, 1, 1)
+            let e = cal.date(byAdding: .month, value: -3, to: today) ?? today
+            return DateRange(start: s, end: e)
         })
         patterns.append(TemporalPattern(phrase: "last month") {
-            let prevMonth = cal.date(byAdding: .month, value: -1, to: today)!
+            let prevMonth = cal.date(byAdding: .month, value: -1, to: today) ?? today
             return monthRange(year: cal.component(.year, from: prevMonth), month: cal.component(.month, from: prevMonth))
         })
         patterns.append(TemporalPattern(phrase: "this month") {
-            DateRange(start: cal.date(from: DateComponents(year: currentYear, month: currentMonth, day: 1))!, end: now)
+            DateRange(start: makeDate(currentYear, currentMonth, 1), end: now)
         })
 
         // --- Relative years ---
         patterns.append(TemporalPattern(phrase: "a few years ago") {
-            DateRange(start: cal.date(byAdding: .year, value: -4, to: today)!,
-                      end: cal.date(byAdding: .year, value: -2, to: today)!)
+            let s = cal.date(byAdding: .year, value: -4, to: today) ?? today
+            let e = cal.date(byAdding: .year, value: -2, to: today) ?? today
+            return DateRange(start: s, end: e)
         })
         patterns.append(TemporalPattern(phrase: "few years ago") {
-            DateRange(start: cal.date(byAdding: .year, value: -4, to: today)!,
-                      end: cal.date(byAdding: .year, value: -2, to: today)!)
+            let s = cal.date(byAdding: .year, value: -4, to: today) ?? today
+            let e = cal.date(byAdding: .year, value: -2, to: today) ?? today
+            return DateRange(start: s, end: e)
         })
         patterns.append(TemporalPattern(phrase: "a year ago") {
-            DateRange(start: cal.date(byAdding: .day, value: -380, to: today)!,
-                      end: cal.date(byAdding: .day, value: -350, to: today)!)
+            let s = cal.date(byAdding: .day, value: -380, to: today) ?? today
+            let e = cal.date(byAdding: .day, value: -350, to: today) ?? today
+            return DateRange(start: s, end: e)
         })
         patterns.append(TemporalPattern(phrase: "years ago") {
-            DateRange(start: cal.date(byAdding: .year, value: -5, to: today)!,
-                      end: cal.date(byAdding: .year, value: -2, to: today)!)
+            let s = cal.date(byAdding: .year, value: -5, to: today) ?? today
+            let e = cal.date(byAdding: .year, value: -2, to: today) ?? today
+            return DateRange(start: s, end: e)
         })
         patterns.append(TemporalPattern(phrase: "two years ago") { fullYear(currentYear - 2) })
         patterns.append(TemporalPattern(phrase: "last year") { fullYear(currentYear - 1) })
         patterns.append(TemporalPattern(phrase: "this year") {
-            DateRange(start: cal.date(from: DateComponents(year: currentYear, month: 1, day: 1))!, end: now)
+            DateRange(start: makeDate(currentYear, 1, 1), end: now)
         })
 
         // --- Seasons with year ---
@@ -427,95 +435,67 @@ private enum TemporalParser {
         // --- Holidays ---
         patterns.append(TemporalPattern(phrase: "christmas eve") {
             let year = currentMonth == 12 && cal.component(.day, from: now) >= 24 ? currentYear : currentYear - 1
-            return DateRange(
-                start: cal.date(from: DateComponents(year: year, month: 12, day: 23))!,
-                end: dayEnd(cal.date(from: DateComponents(year: year, month: 12, day: 25))!))
+            return DateRange(start: makeDate(year, 12, 23), end: dayEnd(makeDate(year, 12, 25)))
         })
         patterns.append(TemporalPattern(phrase: "christmas day") {
             let year = currentMonth == 12 && cal.component(.day, from: now) >= 26 ? currentYear : currentYear - 1
-            return DateRange(
-                start: cal.date(from: DateComponents(year: year, month: 12, day: 25))!,
-                end: dayEnd(cal.date(from: DateComponents(year: year, month: 12, day: 25))!))
+            return DateRange(start: makeDate(year, 12, 25), end: dayEnd(makeDate(year, 12, 25)))
         })
 
-        // "christmas YYYY" patterns
         for year in (currentYear - 5)...currentYear {
             patterns.append(TemporalPattern(phrase: "christmas \(year)") {
-                DateRange(
-                    start: cal.date(from: DateComponents(year: year, month: 12, day: 23))!,
-                    end: dayEnd(cal.date(from: DateComponents(year: year, month: 12, day: 27))!))
+                DateRange(start: makeDate(year, 12, 23), end: dayEnd(makeDate(year, 12, 27)))
             })
             patterns.append(TemporalPattern(phrase: "new year \(year)") {
-                DateRange(
-                    start: cal.date(from: DateComponents(year: year - 1, month: 12, day: 30))!,
-                    end: dayEnd(cal.date(from: DateComponents(year: year, month: 1, day: 2))!))
+                DateRange(start: makeDate(year - 1, 12, 30), end: dayEnd(makeDate(year, 1, 2)))
             })
         }
 
         patterns.append(TemporalPattern(phrase: "last christmas") {
             let year = currentMonth == 12 && cal.component(.day, from: now) >= 27 ? currentYear : currentYear - 1
-            return DateRange(
-                start: cal.date(from: DateComponents(year: year, month: 12, day: 23))!,
-                end: dayEnd(cal.date(from: DateComponents(year: year, month: 12, day: 27))!))
+            return DateRange(start: makeDate(year, 12, 23), end: dayEnd(makeDate(year, 12, 27)))
         })
         for alias in ["christmas", "xmas"] {
             patterns.append(TemporalPattern(phrase: alias) {
                 let year = currentMonth == 12 && cal.component(.day, from: now) >= 27 ? currentYear : currentYear - 1
-                return DateRange(
-                    start: cal.date(from: DateComponents(year: year, month: 12, day: 23))!,
-                    end: dayEnd(cal.date(from: DateComponents(year: year, month: 12, day: 27))!))
+                return DateRange(start: makeDate(year, 12, 23), end: dayEnd(makeDate(year, 12, 27)))
             })
         }
 
         patterns.append(TemporalPattern(phrase: "new years eve") {
             let year = currentMonth >= 1 && cal.component(.day, from: now) >= 2 ? currentYear : currentYear - 1
-            return DateRange(
-                start: cal.date(from: DateComponents(year: year - 1, month: 12, day: 31))!,
-                end: dayEnd(cal.date(from: DateComponents(year: year, month: 1, day: 1))!))
+            return DateRange(start: makeDate(year - 1, 12, 31), end: dayEnd(makeDate(year, 1, 1)))
         })
         patterns.append(TemporalPattern(phrase: "last new year") {
-            return DateRange(
-                start: cal.date(from: DateComponents(year: currentYear - 1, month: 12, day: 30))!,
-                end: dayEnd(cal.date(from: DateComponents(year: currentYear, month: 1, day: 2))!))
+            return DateRange(start: makeDate(currentYear - 1, 12, 30), end: dayEnd(makeDate(currentYear, 1, 2)))
         })
         for alias in ["new year", "new years"] {
             patterns.append(TemporalPattern(phrase: alias) {
                 let year = currentMonth >= 1 && cal.component(.day, from: now) >= 3 ? currentYear : currentYear - 1
-                return DateRange(
-                    start: cal.date(from: DateComponents(year: year - 1, month: 12, day: 30))!,
-                    end: dayEnd(cal.date(from: DateComponents(year: year, month: 1, day: 2))!))
+                return DateRange(start: makeDate(year - 1, 12, 30), end: dayEnd(makeDate(year, 1, 2)))
             })
         }
 
         patterns.append(TemporalPattern(phrase: "halloween") {
             let year = currentMonth >= 11 ? currentYear : currentYear - 1
-            return DateRange(
-                start: cal.date(from: DateComponents(year: year, month: 10, day: 29))!,
-                end: dayEnd(cal.date(from: DateComponents(year: year, month: 11, day: 1))!))
+            return DateRange(start: makeDate(year, 10, 29), end: dayEnd(makeDate(year, 11, 1)))
         })
 
         patterns.append(TemporalPattern(phrase: "thanksgiving") {
             let year = currentMonth == 12 || (currentMonth == 11 && cal.component(.day, from: now) >= 28) ? currentYear : currentYear - 1
-            return DateRange(
-                start: cal.date(from: DateComponents(year: year, month: 11, day: 20))!,
-                end: dayEnd(cal.date(from: DateComponents(year: year, month: 11, day: 30))!))
+            return DateRange(start: makeDate(year, 11, 20), end: dayEnd(makeDate(year, 11, 30)))
         })
 
         for alias in ["valentines", "valentine's day", "valentines day"] {
             patterns.append(TemporalPattern(phrase: alias) {
                 let year = currentMonth > 2 || (currentMonth == 2 && cal.component(.day, from: now) >= 15) ? currentYear : currentYear - 1
-                return DateRange(
-                    start: cal.date(from: DateComponents(year: year, month: 2, day: 13))!,
-                    end: dayEnd(cal.date(from: DateComponents(year: year, month: 2, day: 15))!))
+                return DateRange(start: makeDate(year, 2, 13), end: dayEnd(makeDate(year, 2, 15)))
             })
         }
 
         patterns.append(TemporalPattern(phrase: "easter") {
-            // Easter moves; use wide window Mar 15 - Apr 30
             let year = currentMonth >= 5 ? currentYear : currentYear - 1
-            return DateRange(
-                start: cal.date(from: DateComponents(year: year, month: 3, day: 15))!,
-                end: dayEnd(cal.date(from: DateComponents(year: year, month: 4, day: 30))!))
+            return DateRange(start: makeDate(year, 3, 15), end: dayEnd(makeDate(year, 4, 30)))
         })
 
         // --- Named months (with year variants) ---
@@ -548,6 +528,6 @@ private enum TemporalParser {
     }
 
     private static func dayEndHelper(_ date: Date, cal: Calendar) -> Date {
-        cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: date))!
+        cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: date)) ?? date
     }
 }

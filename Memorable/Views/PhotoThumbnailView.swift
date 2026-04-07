@@ -41,13 +41,15 @@ struct PhotoThumbnailView: View {
                         }
                     }
                     .overlay(alignment: .bottomTrailing) {
-                        Text("\(Int(result.score * 100))%")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Celestial.Colors.amber)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .modifier(GlassBadgeModifier())
-                            .padding(5)
+                        if result.score < 1.0 {
+                            Text("\(Int(result.score * 100))%")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Celestial.Colors.amber)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .modifier(GlassBadgeModifier())
+                                .padding(5)
+                        }
                     }
             } else {
                 Rectangle()

@@ -2,6 +2,18 @@ import Foundation
 import Accelerate
 import CoreLocation
 
+struct SearchResponse {
+    let results: [SearchResult]
+    let fallbackResults: [SearchResult]
+    let filtersApplied: FilterSummary?
+}
+
+struct FilterSummary {
+    let dateDescription: String?
+    let locationDescription: String?
+    let visualQuery: String
+}
+
 class SearchEngine {
     private var photoIds: [String] = []
     private var localIdentifiers: [String] = []
@@ -142,7 +154,7 @@ class SearchEngine {
 
     // MARK: - Search
 
-    func search(query: String, topK: Int = 50) async throws -> [SearchResult] {
+    func search(query: String, topK: Int = 50) async throws -> SearchResponse {
         if !isIndexLoaded {
             try loadIndex()
         }
@@ -156,7 +168,40 @@ class SearchEngine {
 
         // Geocode location hint if present
         if let locationName = hints.locationHint {
-            if let geo = await geocodeLocation(locationName) {
+            // Check if textQuery looks like additional location words (not visual content)
+            let visual = hints.textQuery.trimmingCharacters(in: .whitespaces).lowercased()
+            let locationRelatedWords: Set<String> = [
+                "old", "town", "city", "center", "centre", "downtown", "uptown",
+                "north", "south", "east", "west", "upper", "lower", "new", "port",
+                "beach", "bay", "hill", "hills", "park", "lake", "river", "island",
+                "mount", "valley", "heights", "village", "square", "market", "station",
+                "bridge", "garden", "gardens", "creek", "grove", "springs", "falls",
+                "point", "cape", "fort", "haven", "harbor", "harbour",
+                "campo", "platz", "strasse", "gasse", "berg", "burg", "stadt", "dorf",
+                "mitte", "kreuzberg", "prenzlauer", "charlottenburg", "neukolln",
+            ]
+            let visualWords = Set(visual.split(separator: " ").map(String.init))
+            let isVisualLocationOnly = !visual.isEmpty && !visualWords.isEmpty && visualWords.isSubset(of: locationRelatedWords)
+
+            // If textQuery is location-related, try combined geocoding for more precision
+            if isVisualLocationOnly {
+                let combined = "\(visual) \(locationName)"
+                if let geo = await geocodeLocation(combined) {
+                    hints.locationCoordinate = (geo.lat, geo.lon)
+                    hints.locationRadiusKm = geo.radiusKm
+                    hints.locationHint = combined
+                    hints.textQuery = ""
+                    #if DEBUG
+                    logger.info("[SearchEngine] Geocoded combined '\(combined)' → \(geo.lat), \(geo.lon), radius: \(geo.radiusKm)km")
+                    #endif
+                } else if let geo = await geocodeLocation(locationName) {
+                    hints.locationCoordinate = (geo.lat, geo.lon)
+                    hints.locationRadiusKm = geo.radiusKm
+                    #if DEBUG
+                    logger.info("[SearchEngine] Geocoded '\(locationName)' → \(geo.lat), \(geo.lon), radius: \(geo.radiusKm)km")
+                    #endif
+                }
+            } else if let geo = await geocodeLocation(locationName) {
                 hints.locationCoordinate = (geo.lat, geo.lon)
                 hints.locationRadiusKm = geo.radiusKm
                 #if DEBUG
@@ -165,17 +210,17 @@ class SearchEngine {
             }
         }
 
-        let results = try hybridSearch(hints: hints, topK: topK)
+        let response = try hybridSearch(hints: hints, topK: topK)
 
         #if DEBUG
-        logger.info("[SearchEngine] Search completed in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - searchStart))s, \(results.count) results")
+        logger.info("[SearchEngine] Search completed in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - searchStart))s, \(response.results.count) results")
         #endif
 
-        return results
+        return response
     }
 
 
-    func hybridSearch(hints: QueryHints, topK: Int = 50) throws -> [SearchResult] {
+    func hybridSearch(hints: QueryHints, topK: Int = 50) throws -> SearchResponse {
         let (ids, localIds, photoDates, photoLats, photoLons, photoOcrTexts, matrix, count,
              vIds, vLocalIds, vDates, vLats, vLons, vPositions, vMatrix, vCount): ([String], [String], [Date?], [Double?], [Double?], [String?], [Float16], Int, [String], [String], [Date?], [Double?], [Double?], [Double], [Float16], Int) = {
             lock.lock()
@@ -184,7 +229,7 @@ class SearchEngine {
                     videoIds, videoLocalIds, videoDates, videoLatitudes, videoLongitudes, videoFramePositions, videoEmbeddingMatrix, videoFrameCount)
         }()
 
-        guard count > 0 else { return [] }
+        guard count > 0 else { return SearchResponse(results: [], fallbackResults: [], filtersApplied: nil) }
 
         // =====================================================================
         // PHASE 1: HARD FILTERS — build candidate mask before any CLIP scoring
@@ -232,9 +277,105 @@ class SearchEngine {
         logger.info("[SearchEngine] Filter: \(candidateCount)/\(count) photos passed hard filters")
         #endif
 
-        // If filters eliminated everything, return empty — don't fall back to unfiltered
-        if candidateCount == 0 && (hints.dateRange != nil || hints.locationCoordinate != nil) {
-            return []
+        // =====================================================================
+        // DETECT PURE LOCATION QUERY
+        // =====================================================================
+
+        let isPureLocationQuery: Bool = {
+            guard hints.locationCoordinate != nil else { return false }
+            let visual = hints.textQuery.trimmingCharacters(in: .whitespaces).lowercased()
+            // 1. Empty textQuery — parser consumed everything as location
+            if visual.isEmpty { return true }
+            // 2. textQuery exactly equals the location hint
+            if let loc = hints.locationHint?.lowercased(), visual == loc { return true }
+            // 3. All words in textQuery are location-related (e.g., "old town", "mitte")
+            let locationRelatedWords: Set<String> = [
+                "old", "town", "city", "center", "centre", "downtown", "uptown",
+                "north", "south", "east", "west", "upper", "lower", "new", "port",
+                "beach", "bay", "hill", "hills", "park", "lake", "river", "island",
+                "mount", "valley", "heights", "village", "square", "market", "station",
+                "bridge", "garden", "gardens", "creek", "grove", "springs", "falls",
+                "point", "cape", "fort", "haven", "harbor", "harbour",
+                "campo", "platz", "strasse", "gasse", "berg", "burg", "stadt", "dorf",
+                "mitte", "kreuzberg", "prenzlauer", "charlottenburg", "neukolln",
+            ]
+            let visualWords = Set(visual.split(separator: " ").map(String.init))
+            if !visualWords.isEmpty && visualWords.isSubset(of: locationRelatedWords) { return true }
+            // 4. Everything else → NOT a pure location query, run CLIP
+            return false
+        }()
+
+        // =====================================================================
+        // PURE LOCATION QUERY: skip CLIP, return all GPS-matched photos by date
+        // =====================================================================
+
+        if isPureLocationQuery {
+            var locationResults: [SearchResult] = []
+            for i in 0..<count {
+                guard candidateMask[i] else { continue }
+                locationResults.append(SearchResult(
+                    id: ids[i], score: 1.0, localIdentifier: localIds[i],
+                    creationDate: photoDates[i], isVideo: false, bestFramePosition: nil
+                ))
+            }
+            locationResults.sort { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
+
+            // Include videos from this location
+            if vCount > 0 {
+                var seenVideoIds = Set<String>()
+                for i in 0..<vCount {
+                    if let dateRange = hints.dateRange {
+                        guard let videoDate = vDates[i], videoDate >= dateRange.start && videoDate <= dateRange.end else { continue }
+                    }
+                    if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
+                        guard let lat = vLats[i], let lon = vLons[i] else { continue }
+                        let distanceKm = CLLocation(latitude: coord.lat, longitude: coord.lon)
+                            .distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                        guard distanceKm <= radiusKm else { continue }
+                    }
+                    let vid = vIds[i]
+                    guard !seenVideoIds.contains(vid) else { continue }
+                    seenVideoIds.insert(vid)
+                    locationResults.append(SearchResult(
+                        id: vid, score: 1.0, localIdentifier: vLocalIds[i],
+                        creationDate: vDates[i], isVideo: true, bestFramePosition: vPositions[i]
+                    ))
+                }
+                locationResults.sort { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
+            }
+
+            let capped = Array(locationResults.prefix(topK))
+
+            #if DEBUG
+            logger.info("[SearchEngine] Pure location query: \(capped.count) results within \(hints.locationRadiusKm ?? 0)km of '\(hints.locationHint ?? "")'")
+            #endif
+
+            return SearchResponse(results: capped, fallbackResults: [], filtersApplied: nil)
+        }
+
+        // If filters eliminated everything, compute fallback results from unfiltered CLIP search
+        let filtersActive = hints.dateRange != nil || hints.locationCoordinate != nil
+        if candidateCount == 0 && filtersActive {
+            let queryEmbedding = try encodeQueryWithFusion(text: hints.textQuery)
+            var fallbackResults: [SearchResult] = []
+
+            if let gpuScores = gpuSearch?.search(queryEmbedding: queryEmbedding), gpuScores.count == count {
+                let fallbackSorted = gpuScores.enumerated().sorted { $0.element > $1.element }
+                fallbackResults = fallbackSorted.prefix(5)
+                    .filter { $0.element >= minimumScoreThreshold }
+                    .map { (index, score) in
+                        SearchResult(id: ids[index], score: score, localIdentifier: localIds[index],
+                                     creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
+                    }
+            }
+
+            let summary = FilterSummary(
+                dateDescription: hints.dateRange.map { formatDateRange($0) },
+                locationDescription: hints.locationHint,
+                visualQuery: hints.textQuery
+            )
+
+            return SearchResponse(results: [], fallbackResults: fallbackResults, filtersApplied: summary)
         }
 
         // =====================================================================
@@ -276,9 +417,9 @@ class SearchEngine {
                 guard let lat = photoLats[i], let lon = photoLons[i] else { continue }
                 let distanceKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
                 if distanceKm < radiusKm * 0.1 {
-                    scores[i] *= 1.15   // Very close to target point
+                    scores[i] *= SearchConfig.locationCloseBoost
                 } else if distanceKm < radiusKm * 0.3 {
-                    scores[i] *= 1.08   // Reasonably close
+                    scores[i] *= SearchConfig.locationNearBoost
                 }
             }
         }
@@ -434,7 +575,18 @@ class SearchEngine {
         }
 
         var allResults = photoResults + videoResults
-        allResults.sort { $0.score > $1.score }
+        // Sort by score, but when scores are close (within 5%), prefer more recent photos
+        allResults.sort { a, b in
+            let scoreDiff = abs(a.score - b.score)
+            let maxScore = max(a.score, b.score)
+            if maxScore > 0 && scoreDiff / maxScore < 0.05 {
+                // Scores are close — prefer recency
+                let dateA = a.creationDate ?? .distantPast
+                let dateB = b.creationDate ?? .distantPast
+                return dateA > dateB
+            }
+            return a.score > b.score
+        }
         let finalResults = Array(allResults.prefix(topK))
 
         #if DEBUG
@@ -457,7 +609,27 @@ class SearchEngine {
         }
         #endif
 
-        return finalResults
+        // If filters were active but no results passed CLIP threshold, provide fallback
+        if finalResults.isEmpty && filtersActive {
+            var fallbackResults: [SearchResult] = []
+            if let gpuScores = gpuSearch?.search(queryEmbedding: queryEmbedding), gpuScores.count == count {
+                let fallbackSorted = gpuScores.enumerated().sorted { $0.element > $1.element }
+                fallbackResults = fallbackSorted.prefix(5)
+                    .filter { $0.element >= minimumScoreThreshold }
+                    .map { (index, score) in
+                        SearchResult(id: ids[index], score: score, localIdentifier: localIds[index],
+                                     creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
+                    }
+            }
+            let summary = FilterSummary(
+                dateDescription: hints.dateRange.map { formatDateRange($0) },
+                locationDescription: hints.locationHint,
+                visualQuery: hints.textQuery
+            )
+            return SearchResponse(results: [], fallbackResults: fallbackResults, filtersApplied: summary)
+        }
+
+        return SearchResponse(results: finalResults, fallbackResults: [], filtersApplied: nil)
     }
 
     // MARK: - Similar Photos
@@ -503,6 +675,26 @@ class SearchEngine {
     }
 
     // MARK: - Private
+
+    private func formatDateRange(_ range: DateRange) -> String {
+        let formatter = DateFormatter()
+        let calendar = Calendar.current
+        let daysBetween = calendar.dateComponents([.day], from: range.start, to: range.end).day ?? 0
+
+        if daysBetween <= 1 {
+            formatter.dateStyle = .medium
+            return formatter.string(from: range.start)
+        } else if daysBetween <= 35 {
+            formatter.dateFormat = "MMMM yyyy"
+            return formatter.string(from: range.start)
+        } else if daysBetween > 350 && daysBetween < 380 {
+            formatter.dateFormat = "yyyy"
+            return formatter.string(from: range.start)
+        } else {
+            formatter.dateStyle = .medium
+            return "\(formatter.string(from: range.start)) to \(formatter.string(from: range.end))"
+        }
+    }
 
     private func geocodeLocation(_ name: String) async -> (lat: Double, lon: Double, radiusKm: Double)? {
         await withCheckedContinuation { continuation in

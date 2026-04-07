@@ -21,6 +21,8 @@ struct SearchView: View {
     @State private var smartAlbums: [SmartAlbum] = []
     @State private var totalLibraryCount: Int = 0
     @State private var searchTimeMs: Int = 0
+    @State private var fallbackResults: [SearchResult] = []
+    @State private var filterSummary: FilterSummary?
     @State private var placeholderIndex: Int = 0
     @State private var placeholderTimer: Task<Void, Never>?
 
@@ -114,7 +116,7 @@ struct SearchView: View {
                             searchingState
                         } else if let error = searchError {
                             errorState(error)
-                        } else if !searchText.isEmpty && results.isEmpty {
+                        } else if !searchText.isEmpty && results.isEmpty && !isSearching {
                             noResultsState
                         } else if !searchText.isEmpty {
                             resultsGrid(results: results)
@@ -498,20 +500,100 @@ struct SearchView: View {
     }
 
     private var noResultsState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 16) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 36, weight: .thin))
                 .foregroundStyle(Celestial.Colors.outlineVariant)
                 .accessibilityHidden(true)
-            Text("No matching photos found")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-            Text("Try a different description")
-                .font(.footnote)
-                .foregroundStyle(Celestial.Colors.outline)
+
+            if let summary = filterSummary {
+                VStack(spacing: 6) {
+                    Text("No photos found")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+
+                    let constraints = [summary.locationDescription.map { "near \($0)" },
+                                       summary.dateDescription].compactMap { $0 }
+                    if !constraints.isEmpty {
+                        Text("for \"\(summary.visualQuery)\" \(constraints.joined(separator: ", "))")
+                            .font(.footnote)
+                            .foregroundStyle(Celestial.Colors.outline)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+
+                if !fallbackResults.isEmpty {
+                    VStack(spacing: 10) {
+                        HStack {
+                            Text("Other \"\(summary.visualQuery)\" photos")
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(Celestial.Colors.amber)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+
+                        let columns = [
+                            GridItem(.flexible(), spacing: 8),
+                            GridItem(.flexible(), spacing: 8),
+                            GridItem(.flexible(), spacing: 8),
+                        ]
+                        LazyVGrid(columns: columns, spacing: 8) {
+                            ForEach(fallbackResults) { result in
+                                FallbackThumbnail(result: result)
+                                    .onTapGesture {
+                                        if result.isVideo {
+                                            if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
+                                                presentVideoPlayer(for: asset)
+                                            }
+                                        } else {
+                                            // Use fallbackResults for the viewer since main results are empty
+                                            lastResults = fallbackResults.filter { !$0.isVideo }
+                                            selectedPhoto = result
+                                        }
+                                    }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                }
+            } else {
+                Text("No matching photos found")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                Text("Try a different description")
+                    .font(.footnote)
+                    .foregroundStyle(Celestial.Colors.outline)
+            }
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 80)
+        .padding(.top, 60)
+    }
+
+    private struct FallbackThumbnail: View {
+        let result: SearchResult
+        @State private var image: UIImage?
+
+        var body: some View {
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                        .clipped()
+                } else {
+                    Color(Celestial.Colors.surfaceContainer)
+                }
+            }
+            .aspectRatio(1, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .task {
+                if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
+                    image = await PhotoLibrary.loadThumbnail(for: asset)
+                }
+            }
+        }
     }
 
     private var emptyState: some View {
@@ -674,21 +756,23 @@ struct SearchView: View {
 
         Task {
             do {
-                let searchResults = try await searchEngine.search(query: query, topK: 50)
-                results = searchResults
+                let response = try await searchEngine.search(query: query, topK: 50)
+                results = response.results
+                fallbackResults = response.fallbackResults
+                filterSummary = response.filtersApplied
                 searchTimeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
 
                 #if DEBUG
-                logger.info("[SearchView] '\(query)': \(searchResults.count) results in \(searchTimeMs)ms")
+                logger.info("[SearchView] '\(query)': \(response.results.count) results in \(searchTimeMs)ms")
                 #endif
 
-                if !searchResults.isEmpty {
+                if !response.results.isEmpty {
                     if saveToHistory {
                         SearchHistory.add(query: query)
                         searchHistory = SearchHistory.load()
                     }
                     lastQuery = query
-                    lastResults = searchResults
+                    lastResults = response.results
                 }
             } catch {
                 logger.error("Search failed: \(error.localizedDescription)")

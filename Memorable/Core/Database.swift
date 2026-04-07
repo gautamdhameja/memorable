@@ -38,6 +38,7 @@ protocol DatabaseProtocol {
     func allIndexedVideoIdentifiers() throws -> Set<String>
     func loadAllVideoEmbeddings() throws -> VideoEmbeddingIndex
     func deleteOrphanedVideos(localIdentifiers: Set<String>) throws
+    func trimToLimit(_ limit: Int) throws
 
     // Sources
     func insertSource(_ source: PhotoSource) throws
@@ -452,6 +453,40 @@ class AppDatabase: DatabaseProtocol {
     func insertVideoFrames(_ frames: [IndexedVideoFrame]) throws {
         try dbQueue.write { db in
             for frame in frames { try frame.insert(db) }
+        }
+    }
+
+    func trimToLimit(_ limit: Int) throws {
+        try dbQueue.write { db in
+            // Keep the most recently indexed photos, delete the rest
+            let photoCount = try IndexedPhoto.fetchCount(db)
+            if photoCount > limit {
+                try db.execute(sql: """
+                    DELETE FROM indexed_photos WHERE id NOT IN (
+                        SELECT id FROM indexed_photos ORDER BY indexedAt DESC LIMIT ?
+                    )
+                """, arguments: [limit])
+            }
+
+            // Delete all videos beyond the limit (videos count toward the total)
+            let remainingPhotos = try IndexedPhoto.fetchCount(db)
+            let videoLimit = max(limit - remainingPhotos, 0)
+            let videoCount = try IndexedVideo.fetchCount(db)
+            if videoCount > videoLimit {
+                // Delete excess video frames first, then videos
+                try db.execute(sql: """
+                    DELETE FROM indexed_video_frames WHERE videoId IN (
+                        SELECT id FROM indexed_videos WHERE id NOT IN (
+                            SELECT id FROM indexed_videos ORDER BY indexedAt DESC LIMIT ?
+                        )
+                    )
+                """, arguments: [videoLimit])
+                try db.execute(sql: """
+                    DELETE FROM indexed_videos WHERE id NOT IN (
+                        SELECT id FROM indexed_videos ORDER BY indexedAt DESC LIMIT ?
+                    )
+                """, arguments: [videoLimit])
+            }
         }
     }
 

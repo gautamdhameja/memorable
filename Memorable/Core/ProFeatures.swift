@@ -2,7 +2,7 @@ import Foundation
 import StoreKit
 
 enum FreeTier {
-    static let maxPhotos = 200
+    static let maxPhotos = 500
 }
 
 @MainActor
@@ -11,14 +11,20 @@ class ProManager: ObservableObject {
 
     static let productId = "com.blockdeep.memorable.pro"
 
-    // TEMP: forced true for screenshots — revert before submission
+    #if DEBUG
     @Published var isPro: Bool = true
+    #else
+    @Published var isPro: Bool = false
+    #endif
     @Published var product: Product?
     @Published var purchaseError: String?
     @Published var isRestoring: Bool = false
     @Published var restoreMessage: String?
 
     private var transactionListener: Task<Void, Never>?
+
+    /// Called when Pro is revoked (refund). Set by AppState to trim index.
+    var onProRevoked: (() -> Void)?
 
     private init() {
         transactionListener = listenForTransactions()
@@ -94,7 +100,6 @@ class ProManager: ObservableObject {
     /// Called on every launch to verify the user still has the entitlement.
     /// If they got a refund, isPro is revoked.
     func verifyEntitlement() async {
-        if Self.productId.isEmpty { return } // TEMP: skip for screenshots
         #if !DEBUG
         var entitled = false
         for await result in Transaction.currentEntitlements {
@@ -110,6 +115,7 @@ class ProManager: ObservableObject {
             isPro = entitled
             if !entitled {
                 logger.error("Pro entitlement revoked (refund or family sharing removed)")
+                onProRevoked?()
             }
         }
         #endif
@@ -138,7 +144,10 @@ class ProManager: ObservableObject {
                 case .verified(let transaction):
                     if transaction.productID == productId {
                         if transaction.revocationDate != nil {
-                            await MainActor.run { self.isPro = false }
+                            await MainActor.run {
+                                self.isPro = false
+                                self.onProRevoked?()
+                            }
                         } else {
                             await MainActor.run { self.unlock() }
                         }

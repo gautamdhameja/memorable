@@ -98,6 +98,17 @@ class AppState: ObservableObject {
             captionService.prepare(textEncoder: txtEncoder)
             isModelLoaded = true
 
+            // Wire up refund handler: trim index to free tier limit
+            ProManager.shared.onProRevoked = { [weak self] in
+                do {
+                    try AppDatabase.shared.trimToLimit(FreeTier.maxPhotos)
+                    try search.loadIndex()
+                    self?.indexingService?.indexVersion += 1
+                } catch {
+                    logger.error("Failed to trim index after refund: \(error.localizedDescription)")
+                }
+            }
+
             #if DEBUG
             let indexStart = CFAbsoluteTimeGetCurrent()
             #endif

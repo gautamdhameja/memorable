@@ -319,7 +319,7 @@ struct SmartAlbumResultsView: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .task {
             do {
-                results = try await searchEngine.search(query: album.query, topK: 50)
+                results = try await searchEngine.search(query: album.query, topK: 50).results
             } catch {
                 logger.error("Smart album search failed: \(error.localizedDescription)")
             }
@@ -447,7 +447,7 @@ struct SurpriseExploreView: View {
         query = surprise
         Task {
             do {
-                results = try await searchEngine.search(query: surprise, topK: 20)
+                results = try await searchEngine.search(query: surprise, topK: 20).results
             } catch {
                 logger.error("Explore search failed: \(error.localizedDescription)")
             }
