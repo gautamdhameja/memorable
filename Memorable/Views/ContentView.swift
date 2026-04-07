@@ -35,6 +35,12 @@ struct ContentView: View {
                 }
             }
         }
+        .task {
+            // If models were already downloaded, onChange won't fire — initialize directly
+            if modelDownloader.isDownloaded && !appState.isModelLoaded && appState.errorMessage == nil {
+                await appState.initialize()
+            }
+        }
     }
 
     // MARK: - Subviews
@@ -139,7 +145,7 @@ struct ContentView: View {
                     .font(.system(size: 38, weight: .semibold, design: .rounded))
                     .foregroundStyle(Celestial.Colors.onSurface)
 
-                Text("Every moment, one search away")
+                Text("Every memory, one search away!")
                     .font(.system(.body, design: .rounded, weight: .medium))
                     .foregroundStyle(Celestial.Colors.amber)
             }
@@ -150,9 +156,10 @@ struct ContentView: View {
                 .tint(Celestial.Colors.primaryDim)
                 .controlSize(.regular)
 
-            Text("Preparing your experience...")
+            Text(appState.loadingStatus)
                 .font(.footnote)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .animation(.easeInOut(duration: 0.2), value: appState.loadingStatus)
 
             Spacer()
                 .frame(height: 60)

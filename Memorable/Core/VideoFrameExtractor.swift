@@ -5,13 +5,7 @@ import Photos
 class VideoFrameExtractor {
 
     static func frameCount(forDuration duration: Double) -> Int {
-        if duration < 10 {
-            return 2
-        } else if duration <= 60 {
-            return 3
-        } else {
-            return 5
-        }
+        VideoFrameConfig.frameCount(forDuration: duration)
     }
 
     static func framePositions(count: Int) -> [Double] {
@@ -56,7 +50,7 @@ class VideoFrameExtractor {
     }
 
     static func loadAVAsset(from phAsset: PHAsset) async -> AVAsset? {
-        await withTimeout(seconds: 15) { completion in
+        await withTimeout(seconds: TimeoutConfig.videoLoad) { completion in
             let options = PHVideoRequestOptions()
             options.isNetworkAccessAllowed = false
             options.deliveryMode = .highQualityFormat

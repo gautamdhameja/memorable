@@ -112,15 +112,32 @@ class IndexingService: ObservableObject {
 
     private func checkForNewPhotos() {
         let db = database
+        let engine = searchEngine
         Task.detached {
-            let totalInLibrary = PhotoLibrary.fetchAllMedia().count
+            let allMedia = PhotoLibrary.fetchAllMedia()
+            let totalInLibrary = allMedia.count
+
             do {
                 let totalIndexed = try db.indexedCount() + db.videoIndexedCount()
+
                 if totalInLibrary > totalIndexed {
                     await MainActor.run { self.newPhotosAvailable = true }
+                } else if totalInLibrary < totalIndexed {
+                    // Photos were deleted — run lightweight orphan cleanup
+                    var currentIds = Set<String>()
+                    for i in 0..<allMedia.count {
+                        currentIds.insert(allMedia.object(at: i).localIdentifier)
+                    }
+                    let indexedPhotoIds = try db.allIndexedIdentifiers()
+                    let orphaned = indexedPhotoIds.subtracting(currentIds)
+                    if !orphaned.isEmpty && orphaned.count < indexedPhotoIds.count / 2 {
+                        try db.deleteOrphanedPhotos(localIdentifiers: orphaned)
+                        try engine.loadIndex()
+                        await MainActor.run { self.indexVersion += 1 }
+                    }
                 }
             } catch {
-                logger.error("Error checking for new photos: \(error.localizedDescription)")
+                logger.error("Error checking for photo changes: \(error.localizedDescription)")
             }
         }
     }
@@ -542,7 +559,7 @@ class IndexingService: ObservableObject {
             // Safety: skip if more than 20% are orphaned (likely a permissions issue, not real deletions)
             let totalIndexed = indexedPhotoIds.count + indexedVideoIds.count
             let orphanRatio = Double(totalOrphans) / Double(max(totalIndexed, 1))
-            if orphanRatio > 0.2 {
+            if orphanRatio > IndexingConfig.maxOrphanRatio {
                 #if DEBUG
                 logger.warning("Orphan cleanup skipped: \(totalOrphans)/\(totalIndexed) (\(Int(orphanRatio * 100))%) exceeds 20% threshold")
                 #endif

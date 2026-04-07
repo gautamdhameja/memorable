@@ -13,7 +13,7 @@ struct EmbeddingIndex {
     var embeddings: [Float16]
 }
 
-typealias VideoEmbeddingIndex = (videoIds: [String], localIdentifiers: [String], dates: [Date?], framePositions: [Double], embeddings: [Float16])
+typealias VideoEmbeddingIndex = (videoIds: [String], localIdentifiers: [String], dates: [Date?], latitudes: [Double?], longitudes: [Double?], framePositions: [Double], embeddings: [Float16])
 
 // MARK: - Database Protocol
 
@@ -376,10 +376,10 @@ class AppDatabase: DatabaseProtocol {
         }
     }
 
-    func loadAllVideoEmbeddings() throws -> (videoIds: [String], localIdentifiers: [String], dates: [Date?], framePositions: [Double], embeddings: [Float16]) {
+    func loadAllVideoEmbeddings() throws -> VideoEmbeddingIndex {
         try dbQueue.read { db in
             let sql = """
-                SELECT v.id, v.localIdentifier, v.creationDate, f.framePosition, f.embedding
+                SELECT v.id, v.localIdentifier, v.creationDate, v.latitude, v.longitude, f.framePosition, f.embedding
                 FROM indexed_video_frames f
                 JOIN indexed_videos v ON f.videoId = v.id
                 ORDER BY v.creationDate DESC, f.framePosition ASC
@@ -389,6 +389,8 @@ class AppDatabase: DatabaseProtocol {
             var allVideoIds: [String] = []
             var allLocalIds: [String] = []
             var allDates: [Date?] = []
+            var allLats: [Double?] = []
+            var allLons: [Double?] = []
             var allPositions: [Double] = []
             var allEmbeddings: [Float16] = []
 
@@ -399,6 +401,8 @@ class AppDatabase: DatabaseProtocol {
                 allVideoIds.append(row["id"] as String)
                 allLocalIds.append(row["localIdentifier"] as String)
                 allDates.append(row["creationDate"] as Date?)
+                allLats.append(row["latitude"] as Double?)
+                allLons.append(row["longitude"] as Double?)
                 allPositions.append(row["framePosition"] as Double)
 
                 embeddingData.withUnsafeBytes { rawBuffer in
@@ -407,7 +411,7 @@ class AppDatabase: DatabaseProtocol {
                 }
             }
 
-            return (allVideoIds, allLocalIds, allDates, allPositions, allEmbeddings)
+            return (allVideoIds, allLocalIds, allDates, allLats, allLons, allPositions, allEmbeddings)
         }
     }
 

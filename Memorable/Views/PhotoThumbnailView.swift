@@ -18,15 +18,37 @@ struct PhotoThumbnailView: View {
     private var aspectRatio: CGFloat {
         guard let thumb = thumbnail else { return 4.0/3.0 }
         guard thumb.size.height > 0 else { return 4.0/3.0 }
-        return thumb.size.width / thumb.size.height
+        let raw = thumb.size.width / thumb.size.height
+        // Clamp to avoid extremes: min 9:16 portrait, max 16:9 landscape
+        return min(max(raw, 9.0/16.0), 16.0/9.0)
     }
 
     var body: some View {
-        ZStack {
+        Group {
             if let thumb = thumbnail {
                 Image(uiImage: thumb)
                     .resizable()
                     .aspectRatio(aspectRatio, contentMode: .fit)
+                    .overlay(alignment: .topLeading) {
+                        if result.isVideo {
+                            Image(systemName: "video.fill")
+                                .font(.footnote)
+                                .foregroundStyle(Celestial.Colors.onSurface)
+                                .padding(4)
+                                .background(.ultraThinMaterial)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .padding(5)
+                        }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        Text("\(Int(result.score * 100))%")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Celestial.Colors.amber)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .modifier(GlassBadgeModifier())
+                            .padding(5)
+                    }
             } else {
                 Rectangle()
                     .fill(Celestial.Colors.surfaceContainer)
@@ -37,36 +59,8 @@ struct PhotoThumbnailView: View {
                             .controlSize(.small)
                     }
             }
-
-            VStack {
-                if result.isVideo {
-                    HStack {
-                        Image(systemName: "video.fill")
-                            .font(.footnote)
-                            .foregroundStyle(Celestial.Colors.onSurface)
-                            .padding(4)
-                            .background(.ultraThinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                        Spacer()
-                    }
-                    .padding(5)
-                }
-
-                Spacer()
-
-                HStack {
-                    Spacer()
-                    Text("\(Int(result.score * 100))%")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Celestial.Colors.amber)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .modifier(GlassBadgeModifier())
-                }
-                .padding(5)
-            }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
         .accessibilityAddTraits(.isImage)

@@ -64,11 +64,27 @@ class SmartQueryParser {
 
             let visual = parsed.visualDescription.isEmpty ? query.lowercased() : parsed.visualDescription.lowercased()
 
+            // Time-of-day detection (Foundation Models doesn't extract this)
+            let timeOfDayHours = TimeOfDayConfig.detect(in: query.lowercased())
+
+            // Use Foundation Models result, fill gaps with fallback only if needed
+            var locationHint = parsed.locationName
+            if locationHint == nil || locationHint?.isEmpty == true {
+                // Only run fallback location extraction if FM didn't find one
+                let fallbackHints = QueryParserFallback.parse(query: query)
+                locationHint = fallbackHints.locationHint
+            }
+
+            #if DEBUG
+            logger.info("[SmartParser] FM visual='\(visual)', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), raw FM location='\(parsed.locationName ?? "nil")'")
+            #endif
+
             return QueryHints(
                 textQuery: visual,
                 dateRange: dateRange,
-                locationHint: parsed.locationName,
-                negativeTerms: parsed.negativeTerms
+                locationHint: locationHint,
+                negativeTerms: parsed.negativeTerms,
+                timeOfDayHours: timeOfDayHours
             )
         } catch {
             logger.error("Foundation model parse failed: \(error.localizedDescription), falling back to regex")

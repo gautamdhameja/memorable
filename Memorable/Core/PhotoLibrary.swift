@@ -10,7 +10,7 @@ class PhotoLibrary {
 
     // Get a UIImage from a PHAsset at a specific size for embedding
     static func loadImage(for asset: PHAsset, targetSize: CGSize = CGSize(width: 224, height: 224)) async -> UIImage? {
-        await withTimeout(seconds: 10) { completion in
+        await withTimeout(seconds: TimeoutConfig.imageLoad) { completion in
             let options = PHImageRequestOptions()
             options.deliveryMode = .highQualityFormat
             options.isSynchronous = false
@@ -33,19 +33,31 @@ class PhotoLibrary {
         }
     }
 
-    // Get a thumbnail for display in search results
-    static func loadThumbnail(for asset: PHAsset, targetSize: CGSize = CGSize(width: 400, height: 400)) async -> UIImage? {
-        await withTimeout(seconds: 10) { completion in
+    // Get a thumbnail for display in search results — preserves original aspect ratio
+    static func loadThumbnail(for asset: PHAsset, maxDimension: CGFloat = 400) async -> UIImage? {
+        // Compute target size that preserves the asset's aspect ratio
+        let assetWidth = CGFloat(asset.pixelWidth)
+        let assetHeight = CGFloat(asset.pixelHeight)
+        let targetSize: CGSize
+        if assetWidth > assetHeight {
+            let scale = maxDimension / assetWidth
+            targetSize = CGSize(width: maxDimension, height: assetHeight * scale)
+        } else {
+            let scale = maxDimension / assetHeight
+            targetSize = CGSize(width: assetWidth * scale, height: maxDimension)
+        }
+
+        return await withTimeout(seconds: TimeoutConfig.imageLoad) { completion in
             let options = PHImageRequestOptions()
             options.deliveryMode = .highQualityFormat
             options.isSynchronous = false
             options.isNetworkAccessAllowed = false
-            options.resizeMode = .exact
+            options.resizeMode = .fast
 
             PHImageManager.default().requestImage(
                 for: asset,
                 targetSize: targetSize,
-                contentMode: .aspectFill,
+                contentMode: .aspectFit,
                 options: options
             ) { image, info in
                 let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
@@ -81,7 +93,7 @@ class PhotoLibrary {
 
     static func getQuickLookURL(for asset: PHAsset) async -> URL? {
         if asset.mediaType == .video {
-            return await withTimeout(seconds: 15) { completion in
+            return await withTimeout(seconds: TimeoutConfig.videoLoad) { completion in
                 let options = PHVideoRequestOptions()
                 options.isNetworkAccessAllowed = false
                 options.deliveryMode = .highQualityFormat
@@ -91,7 +103,7 @@ class PhotoLibrary {
                 }
             }
         } else {
-            return await withTimeout(seconds: 15) { completion in
+            return await withTimeout(seconds: TimeoutConfig.videoLoad) { completion in
                 let options = PHImageRequestOptions()
                 options.isNetworkAccessAllowed = false
                 options.deliveryMode = .highQualityFormat

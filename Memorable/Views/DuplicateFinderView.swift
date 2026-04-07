@@ -183,7 +183,7 @@ struct DuplicatePairRow: View {
                     .frame(width: 80, height: 80)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
         .accessibilityLabel("Photo")
     }
 

@@ -31,6 +31,7 @@ class AppState: ObservableObject {
     @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
     @Published var isModelLoaded = false
     @Published var errorMessage: String?
+    @Published var loadingStatus: String = "Preparing your experience..."
 
     var imageEncoder: ImageEncoder?
     var textEncoder: TextEncoder?
@@ -63,19 +64,33 @@ class AppState: ObservableObject {
             let modelStart = CFAbsoluteTimeGetCurrent()
             #endif
 
-            let imgEncoder = try ImageEncoder()
+            loadingStatus = "Waking up the neural engine..."
+
+            let imgEncoder = try await Task.detached {
+                try ImageEncoder()
+            }.value
+
             #if DEBUG
             logger.info("[AppState] ImageEncoder loaded in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - modelStart))s")
             let textStart = CFAbsoluteTimeGetCurrent()
             #endif
 
-            let txtEncoder = try TextEncoder()
+            loadingStatus = "Understanding words and images..."
+
+            let txtEncoder = try await Task.detached {
+                try TextEncoder()
+            }.value
 
             #if DEBUG
             logger.info("[AppState] TextEncoder loaded in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - textStart))s")
             #endif
 
-            let search = SearchEngine(textEncoder: txtEncoder)
+            loadingStatus = "Spinning up the search engine..."
+
+            let search = await Task.detached {
+                SearchEngine(textEncoder: txtEncoder)
+            }.value
+
             imageEncoder = imgEncoder
             textEncoder = txtEncoder
             searchEngine = search
@@ -86,6 +101,8 @@ class AppState: ObservableObject {
             #if DEBUG
             let indexStart = CFAbsoluteTimeGetCurrent()
             #endif
+
+            loadingStatus = "Getting your memories ready..."
 
             await indexingService?.checkAndLoadExistingIndex()
 

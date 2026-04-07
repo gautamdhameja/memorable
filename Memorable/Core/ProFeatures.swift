@@ -11,11 +11,8 @@ class ProManager: ObservableObject {
 
     static let productId = "com.blockdeep.memorable.pro"
 
-    #if DEBUG
+    // TEMP: forced true for screenshots — revert before submission
     @Published var isPro: Bool = true
-    #else
-    @Published var isPro: Bool = false
-    #endif
     @Published var product: Product?
     @Published var purchaseError: String?
     @Published var isRestoring: Bool = false
@@ -97,6 +94,7 @@ class ProManager: ObservableObject {
     /// Called on every launch to verify the user still has the entitlement.
     /// If they got a refund, isPro is revoked.
     func verifyEntitlement() async {
+        if Self.productId.isEmpty { return } // TEMP: skip for screenshots
         #if !DEBUG
         var entitled = false
         for await result in Transaction.currentEntitlements {

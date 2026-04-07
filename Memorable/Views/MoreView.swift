@@ -19,6 +19,32 @@ struct MoreView: View {
                 Celestial.Colors.background.ignoresSafeArea()
 
                 List {
+                    // New photos available
+                    if indexingService.newPhotosAvailable {
+                        Section {
+                            Button(action: {
+                                indexingService.indexNewPhotosOnly()
+                            }) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "photo.badge.plus")
+                                        .foregroundStyle(Celestial.Colors.amber)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("New photos found")
+                                            .font(.body.weight(.medium))
+                                            .foregroundStyle(Celestial.Colors.onSurface)
+                                        Text("Tap to index new photos")
+                                            .font(.footnote)
+                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "arrow.clockwise")
+                                        .foregroundStyle(Celestial.Colors.amber)
+                                }
+                            }
+                            .listRowBackground(Celestial.Colors.amber.opacity(0.1))
+                        }
+                    }
+
                     // Smart Albums
                     Section {
                         if smartAlbums.isEmpty {

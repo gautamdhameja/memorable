@@ -17,9 +17,9 @@ class DuplicateFinder {
         localIdentifiers: [String],
         embeddings: [Float16],
         embeddingDim: Int = EmbeddingConfig.dimensions,
-        threshold: Float = 0.95
+        threshold: Float = SearchConfig.duplicateThreshold
     ) -> [DuplicatePair] {
-        let maxPhotos = min(ids.count, 10_000)
+        let maxPhotos = min(ids.count, IndexingConfig.maxDuplicateScanPhotos)
 
         #if !targetEnvironment(simulator)
         // GPU-accelerated path

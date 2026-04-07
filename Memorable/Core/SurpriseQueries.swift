@@ -70,7 +70,7 @@ class SurpriseQueries {
         let lastSize = UserDefaults.standard.integer(forKey: lastValidatedCountKey)
         if lastSize > 0 {
             let growth = Double(currentSize - lastSize) / Double(max(lastSize, 1))
-            if growth < 0.1 && currentSize > 0 {
+            if growth < IndexingConfig.surpriseRevalidationGrowth && currentSize > 0 {
                 return // Skip validation, index hasn't changed enough
             }
         }

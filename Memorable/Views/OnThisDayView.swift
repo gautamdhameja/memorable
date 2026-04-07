@@ -157,7 +157,8 @@ struct MemoryThumbnail: View {
     private var aspectRatio: CGFloat {
         guard let thumb = thumbnail else { return 4.0/3.0 }
         guard thumb.size.height > 0 else { return 4.0/3.0 }
-        return thumb.size.width / thumb.size.height
+        let raw = thumb.size.width / thumb.size.height
+        return min(max(raw, 9.0/16.0), 16.0/9.0)
     }
 
     var body: some View {
@@ -177,7 +178,7 @@ struct MemoryThumbnail: View {
                     }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(creationDate.map { "Memory from \(DateFormatter.mediumDate.string(from: $0))" } ?? "Memory photo")
         .accessibilityAddTraits(.isImage)

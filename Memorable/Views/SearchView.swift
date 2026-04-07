@@ -16,6 +16,7 @@ struct SearchView: View {
     @State private var showSaveAlbum = false
     @State private var albumName = ""
     @ObservedObject private var proManager = ProManager.shared
+    @Environment(\.scenePhase) private var scenePhase
     @State private var searchHistory: [String] = []
     @State private var smartAlbums: [SmartAlbum] = []
     @State private var totalLibraryCount: Int = 0
@@ -83,10 +84,6 @@ struct SearchView: View {
                         // Indexing banners
                         if indexingService.progress.isRunning {
                             IndexingBannerView(indexingService: indexingService)
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 12)
-                        } else if indexingService.newPhotosAvailable {
-                            newPhotosBanner
                                 .padding(.horizontal, 16)
                                 .padding(.bottom, 12)
                         }
@@ -160,6 +157,7 @@ struct SearchView: View {
                             showSaveAlbum = true
                         }) {
                             Image(systemName: "folder.badge.plus")
+                                .font(.system(size: 16))
                                 .foregroundStyle(Celestial.Colors.primaryDim)
                         }
                         .accessibilityLabel("Save as smart album")
@@ -213,6 +211,26 @@ struct SearchView: View {
             .onDisappear {
                 placeholderTimer?.cancel()
             }
+            .onChange(of: indexingService.indexVersion) {
+                // Index changed (e.g., photos deleted) — clear stale results
+                if !results.isEmpty {
+                    results = []
+                    lastResults = []
+                    searchText = ""
+                }
+            }
+            .onChange(of: scenePhase) {
+                if scenePhase == .active {
+                    // Remove any results pointing to deleted assets
+                    if !results.isEmpty {
+                        let cleaned = results.filter { PhotoLibrary.getAsset(by: $0.localIdentifier) != nil }
+                        if cleaned.count != results.count {
+                            results = cleaned
+                            lastResults = cleaned
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -262,26 +280,6 @@ struct SearchView: View {
     }
 
     // MARK: - Banners
-
-    private var newPhotosBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "photo.badge.plus")
-                .foregroundStyle(Celestial.Colors.primaryDim)
-                .accessibilityHidden(true)
-            Text("New photos found")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(Celestial.Colors.onSurface)
-            Spacer()
-            Button("Index Now") {
-                indexingService.indexNewPhotosOnly()
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(Celestial.Colors.primaryFixedDim)
-            .accessibilityHint("Indexes newly added photos")
-        }
-        .padding(16)
-        .modifier(GlassPanelModifier(cornerRadius: 16))
-    }
 
     private var freeLimitBanner: some View {
         HStack(spacing: 10) {
@@ -571,7 +569,7 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Result summary
             HStack {
-                Text("\(results.count) results")
+                Text("\(results.count) \(results.count == 1 ? "result" : "results")")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 if searchTimeMs > 0 {
@@ -593,7 +591,7 @@ struct SearchView: View {
                         .tracking(1.5)
                         .foregroundStyle(Celestial.Colors.amber)
                     Spacer()
-                    Text("\(group.results.count) results")
+                    Text("\(group.results.count) \(group.results.count == 1 ? "result" : "results")")
                         .font(.footnote)
                         .foregroundStyle(Celestial.Colors.outline)
                 }

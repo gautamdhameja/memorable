@@ -16,15 +16,17 @@ class SearchEngine {
     private var videoIds: [String] = []
     private var videoLocalIds: [String] = []
     private var videoDates: [Date?] = []
+    private var videoLatitudes: [Double?] = []
+    private var videoLongitudes: [Double?] = []
     private var videoFramePositions: [Double] = []
     private var videoEmbeddingMatrix: [Float16] = []
     private var videoFrameCount: Int = 0
     private var uniqueVideoCount: Int = 0
 
     private let embeddingDim = EmbeddingConfig.dimensions
-    private let minimumScoreThreshold: Float = 0.18
+    private let minimumScoreThreshold = SearchConfig.minimumScoreThreshold
 
-    static let maxRecommendedPhotos = 100_000
+    static let maxRecommendedPhotos = IndexingConfig.largeLibraryThreshold
 
     // GPU-accelerated search
     private var gpuSearch: GPUSimilaritySearch?
@@ -66,6 +68,8 @@ class SearchEngine {
         self.videoIds = videoData.videoIds
         self.videoLocalIds = videoData.localIdentifiers
         self.videoDates = videoData.dates
+        self.videoLatitudes = videoData.latitudes
+        self.videoLongitudes = videoData.longitudes
         self.videoFramePositions = videoData.framePositions
         self.videoEmbeddingMatrix = videoData.embeddings
         self.videoFrameCount = videoData.videoIds.count
@@ -123,6 +127,8 @@ class SearchEngine {
         videoIds.removeAll()
         videoLocalIds.removeAll()
         videoDates.removeAll()
+        videoLatitudes.removeAll()
+        videoLongitudes.removeAll()
         videoFramePositions.removeAll()
         videoEmbeddingMatrix.removeAll()
         videoFrameCount = 0
@@ -150,7 +156,13 @@ class SearchEngine {
 
         // Geocode location hint if present
         if let locationName = hints.locationHint {
-            hints.locationCoordinate = await geocodeLocation(locationName)
+            if let geo = await geocodeLocation(locationName) {
+                hints.locationCoordinate = (geo.lat, geo.lon)
+                hints.locationRadiusKm = geo.radiusKm
+                #if DEBUG
+                logger.info("[SearchEngine] Geocoded '\(locationName)' → \(geo.lat), \(geo.lon), radius: \(geo.radiusKm)km")
+                #endif
+            }
         }
 
         let results = try hybridSearch(hints: hints, topK: topK)
@@ -165,30 +177,76 @@ class SearchEngine {
 
     func hybridSearch(hints: QueryHints, topK: Int = 50) throws -> [SearchResult] {
         let (ids, localIds, photoDates, photoLats, photoLons, photoOcrTexts, matrix, count,
-             vIds, vLocalIds, vDates, vPositions, vMatrix, vCount): ([String], [String], [Date?], [Double?], [Double?], [String?], [Float16], Int, [String], [String], [Date?], [Double], [Float16], Int) = {
+             vIds, vLocalIds, vDates, vLats, vLons, vPositions, vMatrix, vCount): ([String], [String], [Date?], [Double?], [Double?], [String?], [Float16], Int, [String], [String], [Date?], [Double?], [Double?], [Double], [Float16], Int) = {
             lock.lock()
             defer { lock.unlock() }
             return (photoIds, localIdentifiers, dates, latitudes, longitudes, ocrTexts, embeddingMatrix, photoCount,
-                    videoIds, videoLocalIds, videoDates, videoFramePositions, videoEmbeddingMatrix, videoFrameCount)
+                    videoIds, videoLocalIds, videoDates, videoLatitudes, videoLongitudes, videoFramePositions, videoEmbeddingMatrix, videoFrameCount)
         }()
 
         guard count > 0 else { return [] }
 
-        // Step 1: Multi-prompt fusion encoding
+        // =====================================================================
+        // PHASE 1: HARD FILTERS — build candidate mask before any CLIP scoring
+        // =====================================================================
+
+        var candidateMask = [Bool](repeating: true, count: count)
+
+        // Date filter: discard photos outside the specified date range
+        if let dateRange = hints.dateRange {
+            for i in 0..<count {
+                if let photoDate = photoDates[i] {
+                    if photoDate < dateRange.start || photoDate > dateRange.end {
+                        candidateMask[i] = false
+                    }
+                } else {
+                    // No date metadata + user specified a time → not useful
+                    candidateMask[i] = false
+                }
+            }
+        }
+
+        // Location filter: discard photos outside the radius AND photos without GPS.
+        // When the user specifies a location, we need GPS proof that the photo was there.
+        var targetLoc: CLLocation?
+        if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
+            let target = CLLocation(latitude: coord.lat, longitude: coord.lon)
+            targetLoc = target
+            for i in 0..<count {
+                guard candidateMask[i] else { continue }
+                if let lat = photoLats[i], let lon = photoLons[i] {
+                    let distanceKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                    if distanceKm > radiusKm {
+                        candidateMask[i] = false
+                    }
+                } else {
+                    // No GPS data — can't verify location, exclude
+                    candidateMask[i] = false
+                }
+            }
+        }
+
+        let candidateCount = candidateMask.filter { $0 }.count
+
+        #if DEBUG
+        logger.info("[SearchEngine] Filter: \(candidateCount)/\(count) photos passed hard filters")
+        #endif
+
+        // If filters eliminated everything, return empty — don't fall back to unfiltered
+        if candidateCount == 0 && (hints.dateRange != nil || hints.locationCoordinate != nil) {
+            return []
+        }
+
+        // =====================================================================
+        // PHASE 2: CLIP SCORING — score all, then mask out non-candidates
+        // =====================================================================
+
         let queryEmbedding = try encodeQueryWithFusion(text: hints.textQuery)
 
-        // Step 2: Compute dot products (GPU with CPU fallback)
         var scores: [Float]
         if let gpuScores = gpuSearch?.search(queryEmbedding: queryEmbedding), gpuScores.count == count {
             scores = gpuScores
-            #if DEBUG
-            logger.info("[SearchEngine] Using GPU path for \(count) photos")
-            #endif
         } else {
-            #if DEBUG
-            logger.info("[SearchEngine] Using CPU fallback for \(count) photos")
-            #endif
-            // CPU fallback — convert Float16 rows to Float32 for vDSP
             scores = [Float](repeating: 0, count: count)
             var rowBuf = [Float](repeating: 0, count: embeddingDim)
             for i in 0..<count {
@@ -200,108 +258,90 @@ class SearchEngine {
             }
         }
 
-        // Save raw CLIP scores before boosts — used for visual relevance threshold
-        let rawScores = scores
+        // Zero out non-candidates
+        for i in 0..<count {
+            if !candidateMask[i] {
+                scores[i] = -1.0
+            }
+        }
 
-        // Step 3: Date boost — when user specifies a time range, strongly prefer matches
-        if let dateRange = hints.dateRange {
+        // =====================================================================
+        // PHASE 3: SOFT BOOSTS — only on candidates that passed hard filters
+        // =====================================================================
+
+        // Location proximity boost (mild, within the filtered radius)
+        if let target = targetLoc, let radiusKm = hints.locationRadiusKm {
             for i in 0..<count {
-                guard let photoDate = photoDates[i] else { continue }
-                if photoDate >= dateRange.start && photoDate <= dateRange.end {
-                    scores[i] *= 2.0       // Strong boost for in-range
-                } else {
-                    // Graduated penalty based on distance from the range
-                    let distStart = abs(photoDate.timeIntervalSince(dateRange.start)) / 86400
-                    let distEnd = abs(photoDate.timeIntervalSince(dateRange.end)) / 86400
-                    let daysDiff = min(distStart, distEnd)
-
-                    if daysDiff < 7 {
-                        scores[i] *= 0.7   // Within a week
-                    } else if daysDiff < 30 {
-                        scores[i] *= 0.4   // Within a month
-                    } else if daysDiff < 90 {
-                        scores[i] *= 0.2   // Within 3 months
-                    } else {
-                        scores[i] *= 0.1   // Beyond 3 months — effectively eliminated
-                    }
+                guard candidateMask[i] else { continue }
+                guard let lat = photoLats[i], let lon = photoLons[i] else { continue }
+                let distanceKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                if distanceKm < radiusKm * 0.1 {
+                    scores[i] *= 1.15   // Very close to target point
+                } else if distanceKm < radiusKm * 0.3 {
+                    scores[i] *= 1.08   // Reasonably close
                 }
             }
         }
 
-        // Step 3b: Time-of-day boost
+        // Time-of-day boost (boost only, no penalty — should not push results below threshold)
         if let timeRange = hints.timeOfDayHours {
             let calendar = Calendar.current
             for i in 0..<count {
+                guard candidateMask[i] else { continue }
                 guard let photoDate = photoDates[i] else { continue }
                 let hour = calendar.component(.hour, from: photoDate)
-
                 let inRange: Bool
                 if timeRange.start <= timeRange.end {
                     inRange = hour >= timeRange.start && hour < timeRange.end
                 } else {
-                    // Wraps midnight, e.g. (20, 4)
                     inRange = hour >= timeRange.start || hour < timeRange.end
                 }
-
                 if inRange {
-                    scores[i] *= 1.3
-                } else {
-                    scores[i] *= 0.7
+                    scores[i] *= SearchConfig.timeOfDayMatchBoost
                 }
+                // No penalty for wrong time — CLIP already handles visual matching
             }
         }
 
-        // Step 4: Location proximity boost
-        if let target = hints.locationCoordinate {
-            let targetLoc = CLLocation(latitude: target.lat, longitude: target.lon)
-            for i in 0..<count {
-                guard let lat = photoLats[i], let lon = photoLons[i] else { continue }
-                let photoLoc = CLLocation(latitude: lat, longitude: lon)
-                let distanceKm = targetLoc.distance(from: photoLoc) / 1000.0
-
-                if distanceKm < 5 {
-                    scores[i] *= 1.5       // Within 5km — strong boost
-                } else if distanceKm < 25 {
-                    scores[i] *= 1.3       // Within 25km — moderate boost
-                } else if distanceKm < 100 {
-                    scores[i] *= 1.1       // Within 100km — slight boost
-                }
-                // No penalty for far away — visual similarity still matters
-            }
-        }
-
-        // Step 5: Negative term penalty (use GPU if available)
+        // Negative term penalty
         for negTerm in hints.negativeTerms {
             let negEmbedding = try textEncoder.encode(text: "a photo of " + negTerm)
             if let negScores = gpuSearch?.search(queryEmbedding: negEmbedding), negScores.count == count {
-                for i in 0..<count { scores[i] -= negScores[i] * 0.3 }
+                for i in 0..<count {
+                    guard candidateMask[i] else { continue }
+                    scores[i] -= negScores[i] * SearchConfig.negativeTermWeight
+                }
             } else {
                 var rowBuf = [Float](repeating: 0, count: embeddingDim)
                 for i in 0..<count {
+                    guard candidateMask[i] else { continue }
                     let offset = i * embeddingDim
                     for j in 0..<embeddingDim { rowBuf[j] = Float(matrix[offset + j]) }
                     var negDot: Float = 0
                     vDSP_dotpr(negEmbedding, 1, rowBuf, 1, &negDot, vDSP_Length(embeddingDim))
-                    scores[i] -= negDot * 0.3
+                    scores[i] -= negDot * SearchConfig.negativeTermWeight
                 }
             }
         }
 
-        // Step 6: OCR text boost for screenshots
+        // OCR text boost
         let queryWords = hints.textQuery.lowercased().split(separator: " ").map(String.init)
         if !queryWords.isEmpty {
             for i in 0..<count {
+                guard candidateMask[i] else { continue }
                 guard let ocrTextOpt = photoOcrTexts[safe: i], let ocrText = ocrTextOpt else { continue }
                 let text = ocrText.lowercased()
                 let matchCount = queryWords.filter { text.contains($0) }.count
                 if matchCount > 0 {
-                    let ocrBoost: Float = 0.15 * Float(matchCount) / Float(queryWords.count)
-                    scores[i] += ocrBoost
+                    scores[i] += SearchConfig.ocrBoostPerWord * Float(matchCount) / Float(queryWords.count)
                 }
             }
         }
 
-        // Step 7: Compute video frame scores (GPU with CPU fallback)
+        // =====================================================================
+        // PHASE 4: VIDEO SCORING — same hard filter approach
+        // =====================================================================
+
         var videoScoreMap: [String: (score: Float, localId: String, date: Date?, framePosition: Double)] = [:]
 
         if vCount > 0 {
@@ -321,59 +361,50 @@ class SearchEngine {
                 videoScores = cpuScores
             }
 
-            // Negative term penalty for videos
-            var adjustedVideoScores = videoScores
-            for negTerm in hints.negativeTerms {
-                let negEmbedding = try textEncoder.encode(text: "a photo of " + negTerm)
-                if let negScores = gpuVideoSearch?.search(queryEmbedding: negEmbedding), negScores.count == vCount {
-                    for i in 0..<vCount { adjustedVideoScores[i] -= negScores[i] * 0.3 }
-                } else {
-                    var vRowBuf = [Float](repeating: 0, count: embeddingDim)
-                    for i in 0..<vCount {
-                        let offset = i * embeddingDim
-                        for j in 0..<embeddingDim { vRowBuf[j] = Float(vMatrix[offset + j]) }
-                        var negDot: Float = 0
-                        vDSP_dotpr(negEmbedding, 1, vRowBuf, 1, &negDot, vDSP_Length(embeddingDim))
-                        adjustedVideoScores[i] -= negDot * 0.3
-                    }
-                }
-            }
-
-            let rawVideoScores = adjustedVideoScores
-            let calendar = Calendar.current
-
             for i in 0..<vCount {
-                let rawScore = rawVideoScores[i]
-                // Skip frames that don't visually match the query
-                guard rawScore >= minimumScoreThreshold else { continue }
+                var frameScore = videoScores[i]
+                guard frameScore >= minimumScoreThreshold else { continue }
 
-                var frameScore = rawScore
-
-                // Date boost
-                if let dateRange = hints.dateRange, let videoDate = vDates[i] {
-                    if videoDate >= dateRange.start && videoDate <= dateRange.end {
-                        frameScore *= 2.0
+                // Hard date filter for videos
+                if let dateRange = hints.dateRange {
+                    if let videoDate = vDates[i] {
+                        if videoDate < dateRange.start || videoDate > dateRange.end {
+                            continue
+                        }
                     } else {
-                        let distStart = abs(videoDate.timeIntervalSince(dateRange.start)) / 86400
-                        let distEnd = abs(videoDate.timeIntervalSince(dateRange.end)) / 86400
-                        let daysDiff = min(distStart, distEnd)
-                        if daysDiff < 7 { frameScore *= 0.7 }
-                        else if daysDiff < 30 { frameScore *= 0.4 }
-                        else if daysDiff < 90 { frameScore *= 0.2 }
-                        else { frameScore *= 0.1 }
+                        continue
                     }
                 }
 
-                // Time-of-day boost
+                // Hard location filter for videos
+                if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
+                    if let lat = vLats[i], let lon = vLons[i] {
+                        let distanceKm = CLLocation(latitude: coord.lat, longitude: coord.lon)
+                            .distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                        if distanceKm > radiusKm { continue }
+                    } else {
+                        continue // No GPS — can't verify location
+                    }
+                }
+
+                // Negative term penalty for videos
+                for negTerm in hints.negativeTerms {
+                    let negEmbedding = try textEncoder.encode(text: "a photo of " + negTerm)
+                    if let negScores = gpuVideoSearch?.search(queryEmbedding: negEmbedding), negScores.count == vCount {
+                        frameScore -= negScores[i] * SearchConfig.negativeTermWeight
+                    }
+                }
+
+                // Time-of-day boost for videos (boost only, no penalty)
                 if let timeRange = hints.timeOfDayHours, let videoDate = vDates[i] {
-                    let hour = calendar.component(.hour, from: videoDate)
+                    let hour = Calendar.current.component(.hour, from: videoDate)
                     let inRange: Bool
                     if timeRange.start <= timeRange.end {
                         inRange = hour >= timeRange.start && hour < timeRange.end
                     } else {
                         inRange = hour >= timeRange.start || hour < timeRange.end
                     }
-                    frameScore *= inRange ? 1.3 : 0.7
+                    if inRange { frameScore *= SearchConfig.timeOfDayMatchBoost }
                 }
 
                 guard frameScore >= minimumScoreThreshold else { continue }
@@ -389,10 +420,12 @@ class SearchEngine {
             }
         }
 
-        // Step 8: Combine photo + video results, sort, threshold, return
-        // Filter on raw CLIP score first (visual relevance), then on boosted score (contextual relevance)
+        // =====================================================================
+        // PHASE 5: RANK AND RETURN
+        // =====================================================================
+
         let sorted = scores.enumerated().sorted { $0.element > $1.element }
-        let photoResults = sorted.prefix(topK).filter { rawScores[$0.offset] >= minimumScoreThreshold && $0.element >= minimumScoreThreshold }.map { (index, score) in
+        let photoResults = sorted.prefix(topK).filter { $0.element >= minimumScoreThreshold }.map { (index, score) in
             SearchResult(id: ids[index], score: score, localIdentifier: localIds[index], creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
         }
 
@@ -402,7 +435,27 @@ class SearchEngine {
 
         var allResults = photoResults + videoResults
         allResults.sort { $0.score > $1.score }
-        let finalResults = Array(allResults.filter { $0.score >= minimumScoreThreshold }.prefix(topK))
+        let finalResults = Array(allResults.prefix(topK))
+
+        #if DEBUG
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
+        for (rank, r) in finalResults.enumerated() {
+            let dateStr = r.creationDate.map { dateFormatter.string(from: $0) } ?? "no-date"
+            let type = r.isVideo ? "VIDEO" : "PHOTO"
+            logger.info("[Result #\(rank + 1)] \(type) id=\(r.id) local=\(r.localIdentifier) score=\(String(format: "%.3f", r.score)) date=\(dateStr)")
+        }
+        if finalResults.isEmpty {
+            // Log top 5 candidates that were close but didn't make it
+            let nearMisses = sorted.prefix(5)
+            for (index, score) in nearMisses {
+                let dateStr = photoDates[index].map { dateFormatter.string(from: $0) } ?? "no-date"
+                let hasGPS = photoLats[index] != nil
+                let passed = candidateMask[index]
+                logger.info("[NearMiss] id=\(ids[index]) score=\(String(format: "%.3f", score)) date=\(dateStr) gps=\(hasGPS) passedFilter=\(passed)")
+            }
+        }
+        #endif
 
         return finalResults
     }
@@ -451,14 +504,39 @@ class SearchEngine {
 
     // MARK: - Private
 
-    private func geocodeLocation(_ name: String) async -> (lat: Double, lon: Double)? {
+    private func geocodeLocation(_ name: String) async -> (lat: Double, lon: Double, radiusKm: Double)? {
         await withCheckedContinuation { continuation in
             geocoder.geocodeAddressString(name) { placemarks, error in
-                if let location = placemarks?.first?.location {
-                    continuation.resume(returning: (location.coordinate.latitude, location.coordinate.longitude))
-                } else {
+                guard let placemark = placemarks?.first, let location = placemark.location else {
                     continuation.resume(returning: nil)
+                    return
                 }
+
+                // Determine minimum radius from placemark hierarchy
+                let hierarchyRadiusKm: Double
+                if placemark.subLocality != nil {
+                    hierarchyRadiusKm = 10.0     // Neighborhood
+                } else if placemark.locality != nil {
+                    hierarchyRadiusKm = 50.0     // City
+                } else if placemark.subAdministrativeArea != nil {
+                    hierarchyRadiusKm = 100.0    // County/district
+                } else if placemark.administrativeArea != nil {
+                    hierarchyRadiusKm = 300.0    // State/province/island
+                } else if placemark.country != nil {
+                    hierarchyRadiusKm = 800.0    // Country
+                } else {
+                    hierarchyRadiusKm = 100.0    // Unknown
+                }
+
+                // Use CLCircularRegion if available, but never go below the hierarchy minimum
+                var radiusKm: Double
+                if let region = placemark.region as? CLCircularRegion {
+                    radiusKm = max(region.radius / 1000.0, hierarchyRadiusKm)
+                } else {
+                    radiusKm = hierarchyRadiusKm
+                }
+
+                continuation.resume(returning: (location.coordinate.latitude, location.coordinate.longitude, radiusKm))
             }
         }
     }
