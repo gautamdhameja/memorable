@@ -10,6 +10,7 @@ struct QueryHints {
     var seasonHint: Season?
     var negativeTerms: [String] = []
     var timeOfDayHours: (start: Int, end: Int)?
+    var hasVisualQuery: Bool = true
 }
 
 struct DateRange {
@@ -73,13 +74,21 @@ enum QueryParserFallback {
             }
         }
 
-        if text.isEmpty { text = trimmed.lowercased() }
+        let cleanedText = text.trimmingCharacters(in: .whitespaces)
+        let hasVisual = !cleanedText.isEmpty
 
         #if DEBUG
-        logger.info("[QueryParser] input='\(trimmed)' → textQuery='\(text)', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), timeOfDay=\(timeOfDayHours.map { "\($0.start)-\($0.end)" } ?? "nil")")
+        logger.info("[QueryParser] input='\(trimmed)' → textQuery='\(hasVisual ? cleanedText : "a photo")', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), timeOfDay=\(timeOfDayHours.map { "\($0.start)-\($0.end)" } ?? "nil"), hasVisual=\(hasVisual)")
         #endif
 
-        return QueryHints(textQuery: text, dateRange: dateRange, locationHint: locationHint, negativeTerms: negTerms, timeOfDayHours: timeOfDayHours)
+        return QueryHints(
+            textQuery: hasVisual ? cleanedText : "a photo",
+            dateRange: dateRange,
+            locationHint: locationHint,
+            negativeTerms: negTerms,
+            timeOfDayHours: timeOfDayHours,
+            hasVisualQuery: hasVisual
+        )
     }
 
     private static func extractLocation(from original: String, text: inout String, locationHint: inout String?) {
@@ -89,6 +98,21 @@ enum QueryParserFallback {
             text = text.replacingOccurrences(of: place.lowercased(), with: "")
                 .trimmingCharacters(in: .whitespaces)
             return
+        }
+
+        // Strategy 1b: NLTagger with constructed context
+        // NLTagger often fails on bare place names ("San Diego") but succeeds
+        // when given context ("photos from San Diego"). Try wrapping.
+        let contextual = "photos from \(original)"
+        if let place = extractPlaceViaTagger(contextual) {
+            // Verify the detected place actually came from the original text,
+            // not from the word "photos"
+            if original.localizedCaseInsensitiveContains(place) {
+                locationHint = place
+                text = text.replacingOccurrences(of: place.lowercased(), with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                return
+            }
         }
 
         // Strategy 2: Location preposition pattern — "in/at/near/from <words>"
@@ -128,6 +152,40 @@ enum QueryParserFallback {
                 .replacingOccurrences(of: "  ", with: " ")
                 .trimmingCharacters(in: .whitespaces)
             return
+        }
+
+        // Strategy 3: Bare multi-word proper noun fallback
+        // If the entire remaining text is 1-4 capitalized words with no obvious
+        // visual content words, treat it as a potential location.
+        // The geocoder in SearchEngine will validate. If it fails to geocode,
+        // the search proceeds as normal CLIP search.
+        let remainingWords = text.split(separator: " ").map(String.init)
+        if remainingWords.count >= 1 && remainingWords.count <= 4 && locationHint == nil {
+            let originalWords = original.trimmingCharacters(in: .whitespaces)
+                .split(separator: " ").map(String.init)
+            // Filter out words consumed by temporal parser
+            let nonTemporalOriginalWords = originalWords.filter { word in
+                text.localizedCaseInsensitiveContains(word)
+            }
+            let allCapitalized = nonTemporalOriginalWords.allSatisfy { word in
+                guard let first = word.first else { return false }
+                return first.isUppercase
+            }
+
+            if allCapitalized && !nonTemporalOriginalWords.isEmpty {
+                let visualWords: Set<String> = ["sunset", "sunrise", "beach", "mountain",
+                    "food", "dog", "cat", "car", "tree", "flower", "snow",
+                    "rain", "night", "morning", "selfie", "people", "baby",
+                    "wedding", "birthday", "christmas", "halloween"]
+                let isLikelyVisual = nonTemporalOriginalWords.allSatisfy {
+                    visualWords.contains($0.lowercased())
+                }
+
+                if !isLikelyVisual {
+                    locationHint = nonTemporalOriginalWords.joined(separator: " ")
+                    text = ""
+                }
+            }
         }
     }
 

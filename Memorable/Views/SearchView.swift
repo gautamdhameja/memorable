@@ -223,6 +223,20 @@ struct SearchView: View {
             }
             .onChange(of: scenePhase) {
                 if scenePhase == .active {
+                    // Reload search index if it was dropped due to memory pressure
+                    if !searchEngine.isIndexLoaded {
+                        Task {
+                            do {
+                                try searchEngine.loadIndex()
+                                #if DEBUG
+                                logger.info("[SearchView] Reloaded search index after foreground return")
+                                #endif
+                            } catch {
+                                logger.error("Failed to reload index on foreground: \(error.localizedDescription)")
+                            }
+                        }
+                    }
+
                     // Remove any results pointing to deleted assets
                     if !results.isEmpty {
                         let cleaned = results.filter { PhotoLibrary.getAsset(by: $0.localIdentifier) != nil }
@@ -320,11 +334,13 @@ struct SearchView: View {
             if !searchHistory.isEmpty {
                 searchHistoryView
             }
-            Text("Search your \(searchEngine.totalSize) photos & videos")
-                .font(.footnote)
-                .foregroundStyle(Celestial.Colors.outline)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 24)
+            if searchEngine.totalSize > 0 {
+                Text("Search your \(searchEngine.totalSize) photos & videos")
+                    .font(.footnote)
+                    .foregroundStyle(Celestial.Colors.outline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 24)
+            }
         }
     }
 
@@ -602,7 +618,7 @@ struct SearchView: View {
                 .font(.system(size: 52, weight: .thin))
                 .foregroundStyle(Celestial.Colors.outlineVariant)
                 .accessibilityHidden(true)
-            if indexingService.isReady {
+            if indexingService.isReady && searchEngine.totalSize > 0 {
                 Text("Search your \(searchEngine.totalSize) photos & videos")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
@@ -649,6 +665,22 @@ struct SearchView: View {
 
     private func resultsGrid(results: [SearchResult]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Location fallback banner
+            if let summary = filterSummary, !results.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(Celestial.Colors.amber)
+                    let location = summary.locationDescription ?? ""
+                    Text("Showing all photos\(location.isEmpty ? "" : " near \(location)")")
+                        .font(.footnote)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 4)
+            }
+
             // Result summary
             HStack {
                 Text("\(results.count) \(results.count == 1 ? "result" : "results")")
