@@ -3,7 +3,7 @@ import UIKit
 import Accelerate
 
 class ImageEncoder {
-    private let model: MLModel
+    private var model: MLModel
 
     init() throws {
         // Load the compiled Core ML model from the app bundle
@@ -21,23 +21,24 @@ class ImageEncoder {
 
     // Encode a UIImage into a 768-dimensional normalized embedding vector
     func encode(image: UIImage) throws -> [Float] {
-        // Step 1: Preprocess the image to a 224x224 pixel buffer
         guard let pixelBuffer = image.toPixelBuffer(width: 224, height: 224) else {
             throw ImageEncoderError.preprocessingFailed
         }
 
-        // Step 2: Convert pixel buffer to MLMultiArray with CLIP normalization
         let inputArray = try pixelBufferToMLMultiArray(pixelBuffer: pixelBuffer, width: 224, height: 224)
-
-        // Step 3: Create model input
         let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
             "pixel_values": MLFeatureValue(multiArray: inputArray)
         ])
 
-        // Step 4: Run inference
-        let output = try model.prediction(from: inputFeatures)
+        let output: MLFeatureProvider
+        do {
+            output = try model.prediction(from: inputFeatures)
+        } catch {
+            logger.warning("[ImageEncoder] Prediction failed, reloading model: \(error.localizedDescription)")
+            try reloadModel()
+            output = try model.prediction(from: inputFeatures)
+        }
 
-        // Step 5: Extract embedding from output
         guard let embeddingArray = output.featureValue(for: "image_embedding")?.multiArrayValue else {
             throw ImageEncoderError.outputExtractionFailed
         }
@@ -45,6 +46,19 @@ class ImageEncoder {
         var embedding = embeddingArray.toFloatArray()
         embedding.l2Normalize()
         return embedding
+    }
+
+    private func reloadModel() throws {
+        let config = MLModelConfiguration()
+        #if targetEnvironment(simulator)
+        config.computeUnits = .cpuOnly
+        #else
+        config.computeUnits = .all
+        #endif
+        guard let modelURL = Bundle.main.url(forResource: "MobileCLIP2_S4_ImageEncoder", withExtension: "mlmodelc") else {
+            throw ImageEncoderError.modelNotFound
+        }
+        self.model = try MLModel(contentsOf: modelURL, configuration: config)
     }
 
     private func pixelBufferToMLMultiArray(pixelBuffer: CVPixelBuffer, width: Int, height: Int) throws -> MLMultiArray {
@@ -110,7 +124,14 @@ class ImageEncoder {
 
         // Run batch prediction
         let batchProvider = MLArrayBatchProvider(array: featureProviders)
-        let batchResults = try model.predictions(from: batchProvider, options: MLPredictionOptions())
+        let batchResults: MLBatchProvider
+        do {
+            batchResults = try model.predictions(from: batchProvider, options: MLPredictionOptions())
+        } catch {
+            logger.warning("[ImageEncoder] Batch prediction failed, reloading model: \(error.localizedDescription)")
+            try reloadModel()
+            batchResults = try model.predictions(from: batchProvider, options: MLPredictionOptions())
+        }
 
         // Extract embeddings
         var embeddings: [[Float]] = []

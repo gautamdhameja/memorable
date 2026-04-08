@@ -1,7 +1,7 @@
 import CoreML
 
 class TextEncoder {
-    private let model: MLModel
+    private var model: MLModel
     private let tokenizer: CLIPTokenizer
     private let contextLength: Int = 77
 
@@ -35,7 +35,15 @@ class TextEncoder {
         let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
             "input_ids": MLFeatureValue(multiArray: inputArray)
         ])
-        let output = try model.prediction(from: inputFeatures)
+
+        let output: MLFeatureProvider
+        do {
+            output = try model.prediction(from: inputFeatures)
+        } catch {
+            logger.warning("[TextEncoder] Prediction failed, reloading model: \(error.localizedDescription)")
+            try reloadModel()
+            output = try model.prediction(from: inputFeatures)
+        }
 
         guard let embeddingArray = output.featureValue(for: "text_embedding")?.multiArrayValue else {
             throw TextEncoderError.outputExtractionFailed
@@ -44,6 +52,19 @@ class TextEncoder {
         var embedding = embeddingArray.toFloatArray()
         embedding.l2Normalize()
         return embedding
+    }
+
+    private func reloadModel() throws {
+        let config = MLModelConfiguration()
+        #if targetEnvironment(simulator)
+        config.computeUnits = .cpuOnly
+        #else
+        config.computeUnits = .all
+        #endif
+        guard let modelURL = Bundle.main.url(forResource: "MobileCLIP2_S4_TextEncoder", withExtension: "mlmodelc") else {
+            throw TextEncoderError.modelNotFound
+        }
+        self.model = try MLModel(contentsOf: modelURL, configuration: config)
     }
 
     enum TextEncoderError: LocalizedError {

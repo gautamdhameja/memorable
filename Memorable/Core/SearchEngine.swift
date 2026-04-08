@@ -87,6 +87,16 @@ class SearchEngine {
         self.videoFrameCount = videoData.videoIds.count
         self.uniqueVideoCount = Set(videoData.videoIds).count
 
+        // Recreate GPU search objects if they were dropped (e.g. after memory warning)
+        #if !targetEnvironment(simulator)
+        if gpuSearch == nil {
+            gpuSearch = GPUSimilaritySearch()
+        }
+        if gpuVideoSearch == nil {
+            gpuVideoSearch = GPUSimilaritySearch()
+        }
+        #endif
+
         // Build GPU search indices
         gpuSearch?.buildIndex(embeddings: data.embeddings, count: data.ids.count)
         if videoData.videoIds.count > 0 {
