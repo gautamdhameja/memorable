@@ -487,8 +487,8 @@ class SearchEngine {
 
         // Sparse CLIP fallback: merge location results when CLIP matched very few candidates
         // Threshold: fewer than 5 results AND less than 10% of candidates matched
-        let clipMatchedTooFew = finalResults.count < 5 && candidateCount > 0
-            && Double(finalResults.count) / Double(candidateCount) < 0.1
+        let clipMatchedTooFew = finalResults.count < SearchConfig.sparseClipMinResults && candidateCount > 0
+            && Double(finalResults.count) / Double(candidateCount) < SearchConfig.sparseClipMaxRatio
         if clipMatchedTooFew && filtersActive {
             // All candidates have CLIP scores from the GPU matmul.
             // Sort ALL candidates by CLIP score (not just those above threshold).
@@ -520,7 +520,7 @@ class SearchEngine {
             // Sort by CLIP score descending. All candidates get ranked by visual
             // relevance, even those below the normal threshold.
             candidateResults.sort { $0.score > $1.score }
-            let merged = Array(candidateResults.prefix(topK))
+            let merged = Array(candidateResults.prefix(SearchConfig.locationResultsCap))
 
             let summary = FilterSummary(
                 dateDescription: hints.dateRange.map { formatDateRange($0) },
@@ -582,10 +582,10 @@ class SearchEngine {
         results.sort { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
 
         #if DEBUG
-        logger.info("[SearchEngine] locationOnlyResults: \(results.count) total before cap, returning \(min(results.count, 500))")
+        logger.info("[SearchEngine] locationOnlyResults: \(results.count) total before cap, returning \(min(results.count, SearchConfig.locationResultsCap))")
         #endif
 
-        let capped = Array(results.prefix(500))
+        let capped = Array(results.prefix(SearchConfig.locationResultsCap))
 
         return SearchResponse(results: capped, fallbackResults: [], filtersApplied: nil)
     }

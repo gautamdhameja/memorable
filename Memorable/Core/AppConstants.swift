@@ -32,6 +32,15 @@ enum SearchConfig {
     /// Max results per search
     static let topK = 50
 
+    /// Max results for location-only and sparse CLIP fallback queries
+    static let locationResultsCap = 500
+
+    /// Sparse CLIP fallback: minimum result count below which fallback triggers
+    static let sparseClipMinResults = 5
+
+    /// Sparse CLIP fallback: max ratio of results to candidates for fallback to trigger
+    static let sparseClipMaxRatio = 0.1
+
     // Location proximity boost (applied within the filtered radius)
     // These are mild — the hard filter already removed irrelevant locations
     static let locationCloseBoost: Float = 1.15   // Within 10% of radius
