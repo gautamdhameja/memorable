@@ -3,6 +3,7 @@ import Photos
 
 struct ZoomableAsyncImage: View {
     let result: SearchResult
+    var onSingleTap: (() -> Void)? = nil
 
     @State private var image: UIImage?
     @State private var scale: CGFloat = 1.0
@@ -41,6 +42,9 @@ struct ZoomableAsyncImage: View {
                                 lastScale = 2.5
                             }
                         }
+                    }
+                    .onTapGesture(count: 1) {
+                        onSingleTap?()
                     }
                     .onChange(of: scale) {
                         if !isZoomed {

@@ -16,8 +16,10 @@ struct SearchResultsViewer: View {
 
             TabView(selection: $currentIndex) {
                 ForEach(Array(allResults.enumerated()), id: \.element.id) { index, result in
-                    ZoomableAsyncImage(result: result)
-                        .tag(index)
+                    ZoomableAsyncImage(result: result, onSingleTap: {
+                        withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
+                    })
+                    .tag(index)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
@@ -87,9 +89,6 @@ struct SearchResultsViewer: View {
         .statusBar(hidden: true)
         .onAppear {
             currentIndex = allResults.firstIndex(where: { $0.id == initialResult.id }) ?? 0
-        }
-        .onTapGesture(count: 1) {
-            withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
         }
         .gesture(
             DragGesture(minimumDistance: 80)

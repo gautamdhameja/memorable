@@ -649,6 +649,22 @@ struct SearchView: View {
 
     private func resultsGrid(results: [SearchResult]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Location fallback banner
+            if let summary = filterSummary, !results.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(Celestial.Colors.amber)
+                    let location = summary.locationDescription ?? ""
+                    Text("Showing all photos\(location.isEmpty ? "" : " near \(location)")")
+                        .font(.footnote)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 4)
+            }
+
             // Result summary
             HStack {
                 Text("\(results.count) \(results.count == 1 ? "result" : "results")")

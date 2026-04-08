@@ -97,7 +97,9 @@ final class QueryParserTests: XCTestCase {
 
     func testEmptyQuery() {
         let hints = QueryParserFallback.parse(query: "")
-        XCTAssertTrue(hints.textQuery.isEmpty || hints.textQuery == "")
+        // Empty query has no visual content — textQuery defaults to "a photo"
+        XCTAssertFalse(hints.hasVisualQuery)
+        XCTAssertEqual(hints.textQuery, "a photo")
     }
 
     func testOnlyTemporalQuery() {

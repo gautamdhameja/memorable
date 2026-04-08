@@ -242,6 +242,11 @@ class SearchEngine {
 
         #if DEBUG
         logger.info("[SearchEngine] Filter: \(candidateCount)/\(count) photos passed hard filters")
+        if hints.locationCoordinate != nil {
+            let withGPS = (0..<count).filter { photoLats[$0] != nil && photoLons[$0] != nil }.count
+            let passedDate = hints.dateRange == nil ? count : (0..<count).filter { candidateMask[$0] || photoLats[$0] == nil }.count
+            logger.info("[SearchEngine] GPS stats: \(withGPS)/\(count) photos have GPS, \(candidateCount) passed all filters")
+        }
         #endif
 
         // =====================================================================
@@ -270,7 +275,7 @@ class SearchEngine {
                 dates: photoDates, count: count,
                 vIds: vIds, vLocalIds: vLocalIds, vDates: vDates,
                 vLats: vLats, vLons: vLons, vPositions: vPositions, vCount: vCount,
-                hints: hints, topK: topK
+                hints: hints
             )
         }
 
@@ -480,18 +485,59 @@ class SearchEngine {
         }
         #endif
 
-        // If CLIP scoring produced no results but filters were active, provide fallback
-        if finalResults.isEmpty && filtersActive {
-            let fallbackResults = computeFallbackResults(text: hints.textQuery, ids: ids, localIds: localIds, dates: photoDates, count: count)
+        // Sparse CLIP fallback: merge location results when CLIP matched very few candidates
+        // Threshold: fewer than 5 results AND less than 10% of candidates matched
+        let clipMatchedTooFew = finalResults.count < 5 && candidateCount > 0
+            && Double(finalResults.count) / Double(candidateCount) < 0.1
+        if clipMatchedTooFew && filtersActive {
+            // All candidates have CLIP scores from the GPU matmul.
+            // Sort ALL candidates by CLIP score (not just those above threshold).
+            // This way "old town" photos that scored 0.16 rank above random
+            // San Diego photos that scored 0.08.
+            var candidateResults: [SearchResult] = []
+            for i in 0..<count {
+                guard candidateMask[i] else { continue }
+                candidateResults.append(SearchResult(
+                    id: ids[i],
+                    score: scores[i],
+                    localIdentifier: localIds[i],
+                    creationDate: photoDates[i],
+                    isVideo: false,
+                    bestFramePosition: nil
+                ))
+            }
+
+            // Also include video candidates if they passed filters
+            let fallbackVideoResults = videoScoreMap
+                .filter { $0.value.score > 0 }
+                .map { (videoId, data) in
+                    SearchResult(id: videoId, score: data.score,
+                        localIdentifier: data.localId, creationDate: data.date,
+                        isVideo: true, bestFramePosition: data.framePosition)
+                }
+            candidateResults.append(contentsOf: fallbackVideoResults)
+
+            // Sort by CLIP score descending. All candidates get ranked by visual
+            // relevance, even those below the normal threshold.
+            candidateResults.sort { $0.score > $1.score }
+            let merged = Array(candidateResults.prefix(topK))
+
             let summary = FilterSummary(
                 dateDescription: hints.dateRange.map { formatDateRange($0) },
                 locationDescription: hints.locationHint,
                 visualQuery: hints.textQuery
             )
-            return SearchResponse(results: [], fallbackResults: fallbackResults, filtersApplied: summary)
+            return SearchResponse(results: merged, fallbackResults: [], filtersApplied: summary)
         }
 
-        return SearchResponse(results: finalResults, fallbackResults: [], filtersApplied: nil)
+        let appliedSummary: FilterSummary? = filtersActive
+            ? FilterSummary(
+                dateDescription: hints.dateRange.map { formatDateRange($0) },
+                locationDescription: hints.locationHint,
+                visualQuery: hints.textQuery
+            )
+            : nil
+        return SearchResponse(results: finalResults, fallbackResults: [], filtersApplied: appliedSummary)
     }
 
     // MARK: - Helper Methods
@@ -501,7 +547,7 @@ class SearchEngine {
         dates: [Date?], count: Int,
         vIds: [String], vLocalIds: [String], vDates: [Date?],
         vLats: [Double?], vLons: [Double?], vPositions: [Double], vCount: Int,
-        hints: QueryHints, topK: Int
+        hints: QueryHints
     ) -> SearchResponse {
         var results: [SearchResult] = []
 
@@ -534,11 +580,12 @@ class SearchEngine {
         }
 
         results.sort { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
-        let capped = Array(results.prefix(topK))
 
         #if DEBUG
-        logger.info("[SearchEngine] Location/date only query: \(capped.count) results")
+        logger.info("[SearchEngine] locationOnlyResults: \(results.count) total before cap, returning \(min(results.count, 500))")
         #endif
+
+        let capped = Array(results.prefix(500))
 
         return SearchResponse(results: capped, fallbackResults: [], filtersApplied: nil)
     }
