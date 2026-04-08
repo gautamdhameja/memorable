@@ -100,6 +100,21 @@ enum QueryParserFallback {
             return
         }
 
+        // Strategy 1b: NLTagger with constructed context
+        // NLTagger often fails on bare place names ("San Diego") but succeeds
+        // when given context ("photos from San Diego"). Try wrapping.
+        let contextual = "photos from \(original)"
+        if let place = extractPlaceViaTagger(contextual) {
+            // Verify the detected place actually came from the original text,
+            // not from the word "photos"
+            if original.localizedCaseInsensitiveContains(place) {
+                locationHint = place
+                text = text.replacingOccurrences(of: place.lowercased(), with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                return
+            }
+        }
+
         // Strategy 2: Location preposition pattern — "in/at/near/from <words>"
         // Take words after the preposition until we hit another preposition or temporal word
         let lowered = text
@@ -137,6 +152,40 @@ enum QueryParserFallback {
                 .replacingOccurrences(of: "  ", with: " ")
                 .trimmingCharacters(in: .whitespaces)
             return
+        }
+
+        // Strategy 3: Bare multi-word proper noun fallback
+        // If the entire remaining text is 1-4 capitalized words with no obvious
+        // visual content words, treat it as a potential location.
+        // The geocoder in SearchEngine will validate. If it fails to geocode,
+        // the search proceeds as normal CLIP search.
+        let remainingWords = text.split(separator: " ").map(String.init)
+        if remainingWords.count >= 1 && remainingWords.count <= 4 && locationHint == nil {
+            let originalWords = original.trimmingCharacters(in: .whitespaces)
+                .split(separator: " ").map(String.init)
+            // Filter out words consumed by temporal parser
+            let nonTemporalOriginalWords = originalWords.filter { word in
+                text.localizedCaseInsensitiveContains(word)
+            }
+            let allCapitalized = nonTemporalOriginalWords.allSatisfy { word in
+                guard let first = word.first else { return false }
+                return first.isUppercase
+            }
+
+            if allCapitalized && !nonTemporalOriginalWords.isEmpty {
+                let visualWords: Set<String> = ["sunset", "sunrise", "beach", "mountain",
+                    "food", "dog", "cat", "car", "tree", "flower", "snow",
+                    "rain", "night", "morning", "selfie", "people", "baby",
+                    "wedding", "birthday", "christmas", "halloween"]
+                let isLikelyVisual = nonTemporalOriginalWords.allSatisfy {
+                    visualWords.contains($0.lowercased())
+                }
+
+                if !isLikelyVisual {
+                    locationHint = nonTemporalOriginalWords.joined(separator: " ")
+                    text = ""
+                }
+            }
         }
     }
 
