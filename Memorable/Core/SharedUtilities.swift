@@ -77,11 +77,11 @@ func presentVideoPlayer(for phAsset: PHAsset) {
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
 
-        let player = AVPlayer(playerItem: AVPlayerItem(asset: avAsset))
-        let controller = AVPlayerViewController()
-        controller.player = player
-
         await MainActor.run {
+            let player = AVPlayer(playerItem: AVPlayerItem(asset: avAsset))
+            let controller = AVPlayerViewController()
+            controller.player = player
+
             if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                let rootVC = windowScene.windows.first?.rootViewController {
                 var topVC = rootVC
