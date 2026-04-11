@@ -222,6 +222,16 @@ struct MoreView: View {
                         }
                         .listRowBackground(Celestial.Colors.surfaceContainerHigh)
 
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: "sparkles")
+                                .foregroundStyle(Celestial.Colors.outlineVariant)
+                            Text(AppCopy.aiDisclaimer)
+                                .font(.footnote)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+
                         HStack(spacing: 12) {
                             Image(systemName: "info.circle")
                                 .foregroundStyle(Celestial.Colors.outlineVariant)

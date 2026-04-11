@@ -67,15 +67,10 @@ struct SearchResultsViewer: View {
                     if currentIndex < allResults.count {
                         let result = allResults[currentIndex]
                         HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                if let date = result.creationDate {
-                                    Text(date.formatted(date: .long, time: .shortened))
-                                        .font(.footnote.weight(.medium))
-                                        .foregroundStyle(.white)
-                                }
-                                Text("\(Int(result.score * 100))% match")
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.6))
+                            if let date = result.creationDate {
+                                Text(date.formatted(date: .long, time: .shortened))
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundStyle(.white)
                             }
                             Spacer()
                         }

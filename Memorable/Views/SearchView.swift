@@ -791,6 +791,15 @@ struct SearchView: View {
                 .padding(.vertical, 24)
                 .frame(maxWidth: .infinity)
             }
+
+            Text(AppCopy.aiDisclaimer)
+                .font(.caption2)
+                .foregroundStyle(Celestial.Colors.outline)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+                .padding(.top, hasMore ? 0 : 24)
+                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity)
         }
     }
 

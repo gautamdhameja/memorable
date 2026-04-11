@@ -7,6 +7,14 @@ enum PhotoSourceType: String {
     case folder = "folder"
 }
 
+// MARK: - Copy
+
+enum AppCopy {
+    /// User-facing disclaimer shown wherever search results are displayed.
+    /// Keep in sync across SearchView and MoreView.
+    static let aiDisclaimer = "Memorable uses on-device AI — results may miss photos or include unrelated ones."
+}
+
 // MARK: - UserDefaults Keys
 
 enum AppKeys {
