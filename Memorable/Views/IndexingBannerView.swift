@@ -32,7 +32,7 @@ struct IndexingBannerView: View {
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         if indexingService.progress.phase == .videos {
-                            Text("Photos ready — you can search now")
+                            Text("Photos ready. You can search now.")
                                 .font(.footnote)
                                 .foregroundStyle(Celestial.Colors.amber)
                         }
