@@ -592,8 +592,7 @@ class AppDatabase: DatabaseProtocol {
             for row in rows {
                 guard let date: Date = row["creationDate"] else { continue }
                 let year = calendar.component(.year, from: date)
-                if yearGroups[year] == nil { yearGroups[year] = [] }
-                yearGroups[year]?.append(row["localIdentifier"])
+                yearGroups[year, default: []].append(row["localIdentifier"])
             }
 
             return yearGroups

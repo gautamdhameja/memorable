@@ -81,10 +81,10 @@ class SmartQueryParser {
             var landmarkRecombined = false
             let originalWordCount = query.trimmingCharacters(in: .whitespaces)
                 .split(separator: " ").count
-            if originalWordCount <= 3
-                && !visualDesc.isEmpty
-                && locName != nil && !locName!.isEmpty {
-                let locWords = locName!.split(separator: " ").count
+            if originalWordCount <= 3,
+               !visualDesc.isEmpty,
+               let currentLoc = locName, !currentLoc.isEmpty {
+                let locWords = currentLoc.split(separator: " ").count
                 // Only recombine if the "location" is a single word.
                 // Real cities are often multi-word ("San Diego", "New York").
                 // Misidentified name fragments are usually single words
@@ -97,9 +97,9 @@ class SmartQueryParser {
                         "denver", "austin", "miami", "orlando", "atlanta",
                         "dallas", "houston", "phoenix", "vegas", "sacramento",
                         "brooklyn", "manhattan", "queens"]
-                    if !commonCities.contains(locName!.lowercased()) {
-                        let combined = (locName! + " " + visualDesc).lowercased()
-                        let reversed = (visualDesc + " " + locName!).lowercased()
+                    if !commonCities.contains(currentLoc.lowercased()) {
+                        let combined = (currentLoc + " " + visualDesc).lowercased()
+                        let reversed = (visualDesc + " " + currentLoc).lowercased()
                         let queryLower = query.lowercased()
                             .trimmingCharacters(in: .whitespaces)
                         if combined == queryLower || reversed == queryLower {
@@ -115,8 +115,9 @@ class SmartQueryParser {
             var visual = visualDesc.isEmpty ? "" : visualDesc.lowercased()
 
             // If FM returned empty visual but detected a location, use location as visual query too
-            if visual.trimmingCharacters(in: .whitespaces).isEmpty && locName != nil && !locName!.isEmpty {
-                visual = locName!.lowercased()
+            if visual.trimmingCharacters(in: .whitespaces).isEmpty,
+               let loc = locName, !loc.isEmpty {
+                visual = loc.lowercased()
             }
 
             let hasVisual = !visual.trimmingCharacters(in: .whitespaces).isEmpty

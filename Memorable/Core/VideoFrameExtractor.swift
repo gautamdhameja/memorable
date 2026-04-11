@@ -27,7 +27,13 @@ class VideoFrameExtractor {
         generator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
         generator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
 
-        guard let duration = try? await asset.load(.duration) else { return [] }
+        let duration: CMTime
+        do {
+            duration = try await asset.load(.duration)
+        } catch {
+            logger.error("[VideoFrameExtractor] Failed to load asset duration: \(error.localizedDescription)")
+            return []
+        }
         let durationSeconds = CMTimeGetSeconds(duration)
         guard durationSeconds > 0 else { return [] }
 
@@ -42,6 +48,9 @@ class VideoFrameExtractor {
                 let image = UIImage(cgImage: cgImage)
                 results.append((position: position, image: image))
             } catch {
+                #if DEBUG
+                logger.error("[VideoFrameExtractor] Failed to extract frame at \(position): \(error.localizedDescription)")
+                #endif
                 continue
             }
         }

@@ -43,6 +43,10 @@ struct SearchView: View {
     private let initialVisibleCount = 50
     @State private var visibleCount: Int = 50
 
+    // Tracks the in-flight search so we can cancel it when a new search
+    // starts or when the index is rebuilt under us.
+    @State private var searchTask: Task<Void, Never>?
+
     // Post-search upgrade flow (free tier)
     @State private var hasCompletedFirstSearch = false
     @State private var searchesSinceDismiss = 0
@@ -236,7 +240,9 @@ struct SearchView: View {
                 }
             }
             .onChange(of: indexingService.indexVersion) {
-                // Index changed (e.g., photos deleted) — clear stale results
+                // Index changed (e.g., photos deleted). Cancel any in-flight
+                // search so it can't land stale results on top, then clear.
+                searchTask?.cancel()
                 if !results.isEmpty {
                     results = []
                     lastResults = []
@@ -876,15 +882,20 @@ struct SearchView: View {
     private func performSearch(saveToHistory: Bool = false) {
         guard !searchText.isEmpty, indexingService.isReady else { return }
         Haptics.light()
+        // Cancel any previous search so stale results can't land on top of
+        // the new one (race condition when the user types quickly or when
+        // the index is rebuilt mid-query).
+        searchTask?.cancel()
         isSearching = true
         searchError = nil
         visibleCount = initialVisibleCount
         let query = searchText
         let startTime = CFAbsoluteTimeGetCurrent()
 
-        Task {
+        searchTask = Task {
             do {
                 let response = try await searchEngine.search(query: query)
+                if Task.isCancelled { return }
                 results = response.results
                 fallbackResults = response.fallbackResults
                 filterSummary = response.filtersApplied

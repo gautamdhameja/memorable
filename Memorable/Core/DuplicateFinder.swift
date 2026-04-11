@@ -21,6 +21,15 @@ class DuplicateFinder {
     ) -> [DuplicatePair] {
         let maxPhotos = min(ids.count, IndexingConfig.maxDuplicateScanPhotos)
 
+        // Invariant: the flat embeddings buffer must hold at least one row per
+        // photo we intend to scan. Bail out instead of letting pointer
+        // arithmetic walk off the end if a caller ever passes inconsistent data.
+        guard embeddings.count >= maxPhotos * embeddingDim,
+              localIdentifiers.count >= ids.count else {
+            logger.error("DuplicateFinder: array size mismatch (ids=\(ids.count), localIds=\(localIdentifiers.count), embeddings=\(embeddings.count), expected >=\(maxPhotos * embeddingDim))")
+            return []
+        }
+
         #if !targetEnvironment(simulator)
         // GPU-accelerated path
         if let gpu = GPUSimilaritySearch() {

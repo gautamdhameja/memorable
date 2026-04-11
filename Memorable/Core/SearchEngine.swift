@@ -14,6 +14,11 @@ struct FilterSummary {
     let visualQuery: String
 }
 
+enum SearchEngineError: Error {
+    /// Embedding matrix rows do not match metadata count. Refuse to load.
+    case corruptedIndex
+}
+
 class SearchEngine {
     private var photoIds: [String] = []
     private var localIdentifiers: [String] = []
@@ -74,6 +79,21 @@ class SearchEngine {
 
         let data = try database.loadAllEmbeddings()
         let videoData = try database.loadAllVideoEmbeddings()
+
+        // Invariant: the embedding matrix must contain exactly one row per id
+        // (count * embeddingDim floats). If this ever fails we refuse to load
+        // the index rather than let the downstream pointer arithmetic walk off
+        // the end of the buffer. Same check for videos.
+        let expectedPhotoMatrix = data.ids.count * embeddingDim
+        let expectedVideoMatrix = videoData.videoIds.count * embeddingDim
+        guard data.embeddings.count == expectedPhotoMatrix else {
+            logger.error("[SearchEngine] Photo embedding matrix size mismatch: have \(data.embeddings.count), expected \(expectedPhotoMatrix)")
+            throw SearchEngineError.corruptedIndex
+        }
+        guard videoData.embeddings.count == expectedVideoMatrix else {
+            logger.error("[SearchEngine] Video embedding matrix size mismatch: have \(videoData.embeddings.count), expected \(expectedVideoMatrix)")
+            throw SearchEngineError.corruptedIndex
+        }
 
         lock.lock()
         defer { lock.unlock() }

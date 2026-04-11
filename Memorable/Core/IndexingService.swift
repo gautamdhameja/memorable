@@ -121,7 +121,13 @@ class IndexingService: ObservableObject {
         guard !progress.isRunning else { return }
         let db = database
         let engine = searchEngine
-        Task.detached {
+        // Strong [self] capture is safe because IndexingService is
+        // @MainActor-isolated (implicitly Sendable in Swift 6). The task is
+        // short-lived (single library fetch + DB query) so there is no
+        // lifetime concern; explicit capture silences Swift 6 strict
+        // concurrency diagnostics about implicit self across a detached
+        // task boundary.
+        Task.detached { [self] in
             let allMedia = PhotoLibrary.fetchAllMedia()
             let totalInLibrary = allMedia.count
 
@@ -131,7 +137,7 @@ class IndexingService: ObservableObject {
                 if totalInLibrary > totalIndexed {
                     await MainActor.run { self.newPhotosAvailable = true }
                 } else if totalInLibrary < totalIndexed {
-                    // Photos were deleted — run lightweight orphan cleanup
+                    // Photos were deleted. Run lightweight orphan cleanup.
                     var currentIds = Set<String>()
                     for i in 0..<allMedia.count {
                         currentIds.insert(allMedia.object(at: i).localIdentifier)
@@ -452,8 +458,14 @@ class IndexingService: ObservableObject {
         beginBackgroundTask()
         defer { endBackgroundTask() }
 
+        // Bail out if we can't acquire the security-scoped resource. Continuing
+        // without access would fail later with confusing permission errors.
         let hasAccess = url.startAccessingSecurityScopedResource()
-        defer { if hasAccess { url.stopAccessingSecurityScopedResource() } }
+        guard hasAccess else {
+            logger.error("[IndexingService] Could not acquire security-scoped access for folder: \(url.lastPathComponent)")
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
 
         let sourceId = UUID().uuidString
 
@@ -697,8 +709,14 @@ class IndexingService: ObservableObject {
 
         // Photos
         while true {
-            guard let batch = try? database.photosNeedingLocationBackfill(limit: 500),
-                  !batch.isEmpty else { break }
+            let batch: [(localIdentifier: String, lat: Double, lon: Double)]
+            do {
+                batch = try database.photosNeedingLocationBackfill(limit: 500)
+            } catch {
+                logger.error("[Geocoder] Failed to fetch photo backfill batch: \(error.localizedDescription)")
+                break
+            }
+            if batch.isEmpty { break }
             let actionable = batch.filter { !failedIds.contains($0.localIdentifier) }
             guard !actionable.isEmpty else { break }
             for (localId, lat, lon) in actionable {
@@ -729,8 +747,14 @@ class IndexingService: ObservableObject {
 
         // Videos
         while true {
-            guard let batch = try? database.videosNeedingLocationBackfill(limit: 500),
-                  !batch.isEmpty else { break }
+            let batch: [(localIdentifier: String, lat: Double, lon: Double)]
+            do {
+                batch = try database.videosNeedingLocationBackfill(limit: 500)
+            } catch {
+                logger.error("[Geocoder] Failed to fetch video backfill batch: \(error.localizedDescription)")
+                break
+            }
+            if batch.isEmpty { break }
             let actionable = batch.filter { !failedIds.contains($0.localIdentifier) }
             guard !actionable.isEmpty else { break }
             for (localId, lat, lon) in actionable {

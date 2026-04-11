@@ -85,7 +85,10 @@ class PhotoLibrary {
     // MARK: - Quick Look Support
 
     private static var quickLookCacheDir: URL = {
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        // The iOS sandbox always provides a caches directory, but fall back to
+        // the temp directory instead of crashing if the system somehow doesn't.
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
         let dir = caches.appendingPathComponent("QuickLookPreviews", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir

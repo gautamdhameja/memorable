@@ -3,7 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var modelDownloader = ModelDownloader()
-    @State private var onboardingComplete = UserDefaults.standard.bool(forKey: AppKeys.onboardingComplete)
+    @AppStorage(AppKeys.onboardingComplete) private var onboardingComplete: Bool = false
 
     var body: some View {
         ZStack {

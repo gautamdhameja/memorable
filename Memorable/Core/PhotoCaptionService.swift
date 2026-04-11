@@ -277,9 +277,11 @@ class PhotoCaptionService {
         if let fresh = available.randomElement() {
             caption = fresh
         } else {
-            // All used — reset and pick any
+            // All used. Reset and pick any. Fall back to a generic placeholder
+            // rather than "" if the category somehow has no captions at all,
+            // so callers never have to handle an empty string.
             usedCaptions.removeAll()
-            caption = category.captions.randomElement() ?? ""
+            caption = category.captions.randomElement() ?? "Memory"
         }
 
         usedCaptions.insert(caption)

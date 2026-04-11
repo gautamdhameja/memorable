@@ -53,8 +53,16 @@ class FolderScanner {
 
     // Load a UIImage from a file URL at the target size for embedding
     static func loadImage(from url: URL, targetSize: CGSize = CGSize(width: 224, height: 224)) -> UIImage? {
-        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            #if DEBUG
+            logger.error("[FolderScanner] Failed to open image source: \(url.lastPathComponent)")
+            #endif
+            return nil
+        }
+        guard let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+            #if DEBUG
+            logger.error("[FolderScanner] Failed to decode image: \(url.lastPathComponent)")
+            #endif
             return nil
         }
 

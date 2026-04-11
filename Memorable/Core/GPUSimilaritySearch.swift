@@ -39,15 +39,16 @@ class GPUSimilaritySearch {
         #endif
 
         self.count = count
-        guard count > 0 else {
+        guard count > 0, embeddings.count >= count * embeddingDim else {
             matrixBuffer = nil
             cachedGraph = nil
             return
         }
 
         let byteCount = count * embeddingDim * MemoryLayout<Float16>.size
-        matrixBuffer = embeddings.withUnsafeBufferPointer { ptr in
-            device.makeBuffer(bytes: ptr.baseAddress!, length: byteCount, options: .storageModeShared)
+        matrixBuffer = embeddings.withUnsafeBufferPointer { ptr -> MTLBuffer? in
+            guard let baseAddress = ptr.baseAddress else { return nil }
+            return device.makeBuffer(bytes: baseAddress, length: byteCount, options: .storageModeShared)
         }
 
         // Build and cache the MPSGraph
