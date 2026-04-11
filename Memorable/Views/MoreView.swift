@@ -13,6 +13,13 @@ struct MoreView: View {
     @State private var showUpgrade = false
     @State private var showReindexConfirm = false
 
+    private var appVersionString: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "v\(version) (\(build))"
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -235,7 +242,7 @@ struct MoreView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "info.circle")
                                 .foregroundStyle(Celestial.Colors.outlineVariant)
-                            Text("Memorable v1.0")
+                            Text("Memorable \(appVersionString)")
                                 .font(.footnote)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
