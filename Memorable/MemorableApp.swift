@@ -112,6 +112,12 @@ class AppState: ObservableObject {
                 }
             }
 
+            // ProManager.init() fires verifyEntitlement on launch to detect
+            // refunds, but that Task may complete before the callback above
+            // is set, losing the trim. Re-verify now that the callback is
+            // wired so a refunded user always gets their index trimmed.
+            await ProManager.shared.verifyEntitlement()
+
             #if DEBUG
             let indexStart = CFAbsoluteTimeGetCurrent()
             #endif
