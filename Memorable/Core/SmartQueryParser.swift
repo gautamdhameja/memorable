@@ -42,6 +42,17 @@ class SmartQueryParser {
         Parse this photo search query into structured fields.
         Today's date: \(ISO8601DateFormatter().string(from: Date()))
 
+        IMPORTANT RULES:
+        - Landmark names are visual descriptions, NOT locations. "Hoover Dam",
+          "Eiffel Tower", "Golden Gate Bridge", "Big Ben" should go in
+          visualDescription, not locationName.
+        - locationName is for cities, countries, regions, neighborhoods.
+          Examples: "Paris", "San Diego", "Berlin", "Old Town".
+        - If the query is ONLY a landmark name with no city/region, set
+          locationName to null.
+        - Never split a proper noun across visualDescription and locationName.
+          "Hoover Dam" is one thing, not "dam" + "Hoover".
+
         Query: "\(query)"
         """
 
@@ -62,15 +73,60 @@ class SmartQueryParser {
                 }
             }
 
-            let visual = parsed.visualDescription.isEmpty ? "" : parsed.visualDescription.lowercased()
+            // Sanity check: if the original query is short and FM split it
+            // across visual + location, it likely misunderstood a compound
+            // proper noun (e.g. "Hoover Dam" -> visual="dam", location="Hoover")
+            var visualDesc = parsed.visualDescription
+            var locName = parsed.locationName
+            var landmarkRecombined = false
+            let originalWordCount = query.trimmingCharacters(in: .whitespaces)
+                .split(separator: " ").count
+            if originalWordCount <= 3
+                && !visualDesc.isEmpty
+                && locName != nil && !locName!.isEmpty {
+                let locWords = locName!.split(separator: " ").count
+                // Only recombine if the "location" is a single word.
+                // Real cities are often multi-word ("San Diego", "New York").
+                // Misidentified name fragments are usually single words
+                // ("Hoover", "Eiffel", "Golden").
+                if locWords == 1 {
+                    let commonCities: Set<String> = ["berlin", "paris", "london", "tokyo",
+                        "rome", "madrid", "munich", "vienna", "prague", "amsterdam",
+                        "barcelona", "istanbul", "dubai", "singapore", "sydney",
+                        "melbourne", "chicago", "boston", "seattle", "portland",
+                        "denver", "austin", "miami", "orlando", "atlanta",
+                        "dallas", "houston", "phoenix", "vegas", "sacramento",
+                        "brooklyn", "manhattan", "queens"]
+                    if !commonCities.contains(locName!.lowercased()) {
+                        let combined = (locName! + " " + visualDesc).lowercased()
+                        let reversed = (visualDesc + " " + locName!).lowercased()
+                        let queryLower = query.lowercased()
+                            .trimmingCharacters(in: .whitespaces)
+                        if combined == queryLower || reversed == queryLower {
+                            // FM split a compound proper noun. Treat as visual only.
+                            visualDesc = queryLower
+                            locName = nil
+                            landmarkRecombined = true
+                        }
+                    }
+                }
+            }
+
+            var visual = visualDesc.isEmpty ? "" : visualDesc.lowercased()
+
+            // If FM returned empty visual but detected a location, use location as visual query too
+            if visual.trimmingCharacters(in: .whitespaces).isEmpty && locName != nil && !locName!.isEmpty {
+                visual = locName!.lowercased()
+            }
+
             let hasVisual = !visual.trimmingCharacters(in: .whitespaces).isEmpty
 
             // Time-of-day detection (Foundation Models doesn't extract this)
             let timeOfDayHours = TimeOfDayConfig.detect(in: query.lowercased())
 
             // Use Foundation Models result, fill gaps with fallback only if needed
-            var locationHint = parsed.locationName
-            if locationHint == nil || locationHint?.isEmpty == true {
+            var locationHint = locName
+            if !landmarkRecombined && (locationHint == nil || locationHint?.isEmpty == true) {
                 let fallbackHints = QueryParserFallback.parse(query: query)
                 locationHint = fallbackHints.locationHint
             }

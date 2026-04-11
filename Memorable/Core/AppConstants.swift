@@ -41,19 +41,55 @@ enum SearchConfig {
     /// Sparse CLIP fallback: max ratio of results to candidates for fallback to trigger
     static let sparseClipMaxRatio = 0.1
 
-    // Location proximity boost (applied within the filtered radius)
+    // Location proximity boost (additive, applied within the filtered radius)
     // These are mild — the hard filter already removed irrelevant locations
-    static let locationCloseBoost: Float = 1.15   // Within 10% of radius
-    static let locationNearBoost: Float = 1.08     // Within 30% of radius
+    static let locationCloseBoost: Float = 0.05    // Within 10% of radius
+    static let locationNearBoost: Float = 0.03     // Within 30% of radius
 
     // Time-of-day boost (boost only — no penalty for wrong time)
-    static let timeOfDayMatchBoost: Float = 1.3
+    static let timeOfDayMatchBoost: Float = 0.06
 
     // Negative term penalty weight
     static let negativeTermWeight: Float = 0.3
 
     // OCR text boost per matching word (scaled by match ratio)
     static let ocrBoostPerWord: Float = 0.15
+
+    // Scene label boost per matching label (additive on top of CLIP)
+    static let sceneLabelBoostPerMatch: Float = 0.08
+}
+
+// MARK: - Scene Label Synonyms
+
+enum SceneLabelConfig {
+    static let synonyms: [String: Set<String>] = [
+        "lunch": ["food", "restaurant", "dining", "meal", "eating"],
+        "dinner": ["food", "restaurant", "dining", "meal", "eating"],
+        "breakfast": ["food", "restaurant", "dining", "meal", "coffee", "eating"],
+        "food": ["food", "restaurant", "dining", "meal", "eating"],
+        "brunch": ["food", "restaurant", "dining", "coffee", "eating"],
+        "beach": ["beach", "ocean", "water", "sand", "coast"],
+        "hiking": ["outdoor", "mountain", "trail", "nature", "hill"],
+        "party": ["celebration", "people", "indoor", "crowd"],
+        "wedding": ["celebration", "people", "formal", "dress"],
+        "selfie": ["selfie", "portrait", "face"],
+        "dog": ["dog", "animal", "pet"],
+        "cat": ["cat", "animal", "pet"],
+        "car": ["car", "vehicle", "road", "driving"],
+        "sunset": ["sunset", "sky", "outdoor", "horizon"],
+        "snow": ["snow", "winter", "outdoor", "cold"],
+        "garden": ["garden", "flower", "plant", "outdoor"],
+        "pool": ["pool", "swimming", "water"],
+        "coffee": ["coffee", "cafe", "drink", "food"],
+        "street": ["street", "urban", "building", "outdoor", "city"],
+        "market": ["market", "shopping", "outdoor", "food", "crowd"],
+        "mountain": ["mountain", "hill", "outdoor", "nature", "landscape"],
+        "forest": ["forest", "tree", "nature", "outdoor", "wood"],
+        "rain": ["rain", "weather", "outdoor", "wet"],
+        "night": ["night", "dark", "light", "city"],
+        "river": ["river", "water", "nature", "outdoor"],
+        "lake": ["lake", "water", "nature", "outdoor"],
+    ]
 }
 
 // MARK: - Time-of-Day Ranges

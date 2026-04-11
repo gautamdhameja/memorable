@@ -18,14 +18,14 @@ final class SearchConfigTests: XCTestCase {
 
     // MARK: - Boost Values
 
-    func testTimeOfDayBoostGreaterThanOne() {
-        XCTAssertGreaterThan(SearchConfig.timeOfDayMatchBoost, 1.0,
-            "Time-of-day match should boost, not penalize")
+    func testTimeOfDayBoostPositive() {
+        XCTAssertGreaterThan(SearchConfig.timeOfDayMatchBoost, 0.0,
+            "Time-of-day additive boost should be positive")
     }
 
     func testLocationBoostsArePositive() {
-        XCTAssertGreaterThan(SearchConfig.locationCloseBoost, 1.0)
-        XCTAssertGreaterThan(SearchConfig.locationNearBoost, 1.0)
+        XCTAssertGreaterThan(SearchConfig.locationCloseBoost, 0.0)
+        XCTAssertGreaterThan(SearchConfig.locationNearBoost, 0.0)
         XCTAssertGreaterThan(SearchConfig.locationCloseBoost, SearchConfig.locationNearBoost,
             "Closer location should get higher boost")
     }

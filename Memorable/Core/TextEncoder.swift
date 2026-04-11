@@ -40,7 +40,9 @@ class TextEncoder {
         do {
             output = try model.prediction(from: inputFeatures)
         } catch {
+            #if DEBUG
             logger.warning("[TextEncoder] Prediction failed, reloading model: \(error.localizedDescription)")
+            #endif
             try reloadModel()
             output = try model.prediction(from: inputFeatures)
         }

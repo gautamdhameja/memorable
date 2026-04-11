@@ -21,6 +21,11 @@ class SearchEngine {
     private var latitudes: [Double?] = []
     private var longitudes: [Double?] = []
     private var ocrTexts: [String?] = []
+    private var photoCities: [String?] = []
+    private var photoStates: [String?] = []
+    private var photoCountries: [String?] = []
+    private var photoLocationNames: [String?] = []
+    private var photoSceneLabels: [String?] = []
     private var embeddingMatrix: [Float16] = []
     private var photoCount: Int = 0
 
@@ -31,6 +36,10 @@ class SearchEngine {
     private var videoLatitudes: [Double?] = []
     private var videoLongitudes: [Double?] = []
     private var videoFramePositions: [Double] = []
+    private var videoCities: [String?] = []
+    private var videoStates: [String?] = []
+    private var videoCountries: [String?] = []
+    private var videoLocationNames: [String?] = []
     private var videoEmbeddingMatrix: [Float16] = []
     private var videoFrameCount: Int = 0
     private var uniqueVideoCount: Int = 0
@@ -74,6 +83,11 @@ class SearchEngine {
         self.latitudes = data.latitudes
         self.longitudes = data.longitudes
         self.ocrTexts = data.ocrTexts
+        self.photoCities = data.locationCities
+        self.photoStates = data.locationStates
+        self.photoCountries = data.locationCountries
+        self.photoLocationNames = data.locationNames
+        self.photoSceneLabels = data.sceneLabels
         self.embeddingMatrix = data.embeddings
         self.photoCount = data.ids.count
 
@@ -83,6 +97,10 @@ class SearchEngine {
         self.videoLatitudes = videoData.latitudes
         self.videoLongitudes = videoData.longitudes
         self.videoFramePositions = videoData.framePositions
+        self.videoCities = videoData.locationCities
+        self.videoStates = videoData.locationStates
+        self.videoCountries = videoData.locationCountries
+        self.videoLocationNames = videoData.locationNames
         self.videoEmbeddingMatrix = videoData.embeddings
         self.videoFrameCount = videoData.videoIds.count
         self.uniqueVideoCount = Set(videoData.videoIds).count
@@ -144,6 +162,11 @@ class SearchEngine {
         latitudes.removeAll()
         longitudes.removeAll()
         ocrTexts.removeAll()
+        photoCities.removeAll()
+        photoStates.removeAll()
+        photoCountries.removeAll()
+        photoLocationNames.removeAll()
+        photoSceneLabels.removeAll()
         embeddingMatrix.removeAll()
         photoCount = 0
         videoIds.removeAll()
@@ -152,6 +175,10 @@ class SearchEngine {
         videoLatitudes.removeAll()
         videoLongitudes.removeAll()
         videoFramePositions.removeAll()
+        videoCities.removeAll()
+        videoStates.removeAll()
+        videoCountries.removeAll()
+        videoLocationNames.removeAll()
         videoEmbeddingMatrix.removeAll()
         videoFrameCount = 0
         uniqueVideoCount = 0
@@ -198,12 +225,20 @@ class SearchEngine {
 
 
     func hybridSearch(hints: QueryHints, topK: Int = 50) throws -> SearchResponse {
-        let (ids, localIds, photoDates, photoLats, photoLons, photoOcrTexts, matrix, count,
-             vIds, vLocalIds, vDates, vLats, vLons, vPositions, vMatrix, vCount): ([String], [String], [Date?], [Double?], [Double?], [String?], [Float16], Int, [String], [String], [Date?], [Double?], [Double?], [Double], [Float16], Int) = {
+        let (ids, localIds, photoDates, photoLats, photoLons, photoOcrTexts,
+             pCities, pStates, pCountries, pLocNames, photoLabels, matrix, count,
+             vIds, vLocalIds, vDates, vLats, vLons, vPositions,
+             vCities, vStates, vCountries, vLocNames, vMatrix, vCount):
+            ([String], [String], [Date?], [Double?], [Double?], [String?],
+             [String?], [String?], [String?], [String?], [String?], [Float16], Int,
+             [String], [String], [Date?], [Double?], [Double?], [Double],
+             [String?], [String?], [String?], [String?], [Float16], Int) = {
             lock.lock()
             defer { lock.unlock() }
-            return (photoIds, localIdentifiers, dates, latitudes, longitudes, ocrTexts, embeddingMatrix, photoCount,
-                    videoIds, videoLocalIds, videoDates, videoLatitudes, videoLongitudes, videoFramePositions, videoEmbeddingMatrix, videoFrameCount)
+            return (photoIds, localIdentifiers, dates, latitudes, longitudes, ocrTexts,
+                    photoCities, photoStates, photoCountries, photoLocationNames, photoSceneLabels, embeddingMatrix, photoCount,
+                    videoIds, videoLocalIds, videoDates, videoLatitudes, videoLongitudes, videoFramePositions,
+                    videoCities, videoStates, videoCountries, videoLocationNames, videoEmbeddingMatrix, videoFrameCount)
         }()
 
         guard count > 0 else { return SearchResponse(results: [], fallbackResults: [], filtersApplied: nil) }
@@ -228,21 +263,42 @@ class SearchEngine {
             }
         }
 
-        // Location filter: discard photos outside the radius AND photos without GPS.
-        // When the user specifies a location, we need GPS proof that the photo was there.
+        // Location filter: two-tier approach.
+        // Tier 1: String matching on reverse-geocoded location strings (preferred).
+        // Tier 2: GPS distance fallback for photos not yet reverse-geocoded.
         var targetLoc: CLLocation?
-        if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
-            let target = CLLocation(latitude: coord.lat, longitude: coord.lon)
-            targetLoc = target
+        if let locationQuery = hints.locationHint {
+            let queryLower = locationQuery.lowercased()
+
+            // Prepare GPS fallback coordinates
+            if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
+                targetLoc = CLLocation(latitude: coord.lat, longitude: coord.lon)
+            }
+
             for i in 0..<count {
                 guard candidateMask[i] else { continue }
-                if let lat = photoLats[i], let lon = photoLons[i] {
-                    let distanceKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
-                    if distanceKm > radiusKm {
+
+                // Tier 1: String matching on reverse-geocoded location strings
+                if let city = pCities[i], !city.isEmpty {
+                    let matched =
+                        city.lowercased().contains(queryLower) ||
+                        (pStates[i]?.lowercased().contains(queryLower) ?? false) ||
+                        (pCountries[i]?.lowercased().contains(queryLower) ?? false) ||
+                        (pLocNames[i]?.lowercased().contains(queryLower) ?? false)
+                    if !matched {
+                        candidateMask[i] = false
+                    }
+                    continue
+                }
+
+                // Tier 2: GPS distance fallback (photo has GPS but no location strings yet)
+                if let target = targetLoc, let radiusKm = hints.locationRadiusKm,
+                   let lat = photoLats[i], let lon = photoLons[i] {
+                    let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                    if distKm > radiusKm {
                         candidateMask[i] = false
                     }
                 } else {
-                    // No GPS data — can't verify location, exclude
                     candidateMask[i] = false
                 }
             }
@@ -263,7 +319,7 @@ class SearchEngine {
         // PHASE 2: BRANCH ON QUERY INTENT
         // =====================================================================
 
-        let filtersActive = hints.dateRange != nil || hints.locationCoordinate != nil
+        let filtersActive = hints.dateRange != nil || hints.locationHint != nil
 
         // Empty candidate set with active filters → provide fallback
         if candidateCount == 0 && filtersActive {
@@ -284,8 +340,10 @@ class SearchEngine {
                 candidateMask: candidateMask, ids: ids, localIds: localIds,
                 dates: photoDates, count: count,
                 vIds: vIds, vLocalIds: vLocalIds, vDates: vDates,
-                vLats: vLats, vLons: vLons, vPositions: vPositions, vCount: vCount,
-                hints: hints
+                vLats: vLats, vLons: vLons, vPositions: vPositions,
+                vCities: vCities, vStates: vStates, vCountries: vCountries, vLocNames: vLocNames,
+                vCount: vCount,
+                hints: hints, targetLoc: targetLoc
             )
         }
 
@@ -321,16 +379,17 @@ class SearchEngine {
         // PHASE 4: SOFT BOOSTS — only on candidates that passed hard filters
         // =====================================================================
 
-        // Location proximity boost
+        // Location proximity boost (Tier 2 GPS matches only — Tier 1 string matches are equally "in" the location)
         if let target = targetLoc, let radiusKm = hints.locationRadiusKm {
             for i in 0..<count {
                 guard candidateMask[i] else { continue }
+                guard pCities[i] == nil || pCities[i]?.isEmpty == true else { continue }
                 guard let lat = photoLats[i], let lon = photoLons[i] else { continue }
                 let distanceKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
                 if distanceKm < radiusKm * 0.1 {
-                    scores[i] *= SearchConfig.locationCloseBoost
+                    scores[i] += SearchConfig.locationCloseBoost
                 } else if distanceKm < radiusKm * 0.3 {
-                    scores[i] *= SearchConfig.locationNearBoost
+                    scores[i] += SearchConfig.locationNearBoost
                 }
             }
         }
@@ -348,7 +407,7 @@ class SearchEngine {
                 } else {
                     inRange = hour >= timeRange.start || hour < timeRange.end
                 }
-                if inRange { scores[i] *= SearchConfig.timeOfDayMatchBoost }
+                if inRange { scores[i] += SearchConfig.timeOfDayMatchBoost }
             }
         }
 
@@ -387,6 +446,31 @@ class SearchEngine {
             }
         }
 
+        // Scene label boost (with synonym expansion)
+        if !queryWords.isEmpty {
+            for i in 0..<count {
+                guard candidateMask[i] else { continue }
+                guard let labelsStr = photoLabels[safe: i], let labels = labelsStr else { continue }
+                let labelSet = Set(SceneClassifier.stringToLabels(labels))
+
+                var matchScore: Float = 0
+                for word in queryWords {
+                    if labelSet.contains(word) {
+                        matchScore += SearchConfig.sceneLabelBoostPerMatch
+                    }
+                    if let synonyms = SceneLabelConfig.synonyms[word] {
+                        let hits = synonyms.intersection(labelSet).count
+                        if hits > 0 {
+                            matchScore += SearchConfig.sceneLabelBoostPerMatch * 0.5 * Float(hits)
+                        }
+                    }
+                }
+                if matchScore > 0 {
+                    scores[i] += matchScore
+                }
+            }
+        }
+
         // =====================================================================
         // PHASE 5: VIDEO SCORING
         // =====================================================================
@@ -417,11 +501,22 @@ class SearchEngine {
                 if let dateRange = hints.dateRange {
                     guard let videoDate = vDates[i], videoDate >= dateRange.start && videoDate <= dateRange.end else { continue }
                 }
-                if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
-                    guard let lat = vLats[i], let lon = vLons[i] else { continue }
-                    let distanceKm = CLLocation(latitude: coord.lat, longitude: coord.lon)
-                        .distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
-                    guard distanceKm <= radiusKm else { continue }
+                if let locationQuery = hints.locationHint {
+                    let queryLower = locationQuery.lowercased()
+                    if let city = vCities[i], !city.isEmpty {
+                        let matched =
+                            city.lowercased().contains(queryLower) ||
+                            (vStates[i]?.lowercased().contains(queryLower) ?? false) ||
+                            (vCountries[i]?.lowercased().contains(queryLower) ?? false) ||
+                            (vLocNames[i]?.lowercased().contains(queryLower) ?? false)
+                        if !matched { continue }
+                    } else if let target = targetLoc, let radiusKm = hints.locationRadiusKm,
+                              let lat = vLats[i], let lon = vLons[i] {
+                        let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                        if distKm > radiusKm { continue }
+                    } else {
+                        continue
+                    }
                 }
 
                 for negTerm in hints.negativeTerms {
@@ -436,7 +531,7 @@ class SearchEngine {
                     let inRange = timeRange.start <= timeRange.end
                         ? hour >= timeRange.start && hour < timeRange.end
                         : hour >= timeRange.start || hour < timeRange.end
-                    if inRange { frameScore *= SearchConfig.timeOfDayMatchBoost }
+                    if inRange { frameScore += SearchConfig.timeOfDayMatchBoost }
                 }
 
                 guard frameScore >= minimumScoreThreshold else { continue }
@@ -556,8 +651,10 @@ class SearchEngine {
         candidateMask: [Bool], ids: [String], localIds: [String],
         dates: [Date?], count: Int,
         vIds: [String], vLocalIds: [String], vDates: [Date?],
-        vLats: [Double?], vLons: [Double?], vPositions: [Double], vCount: Int,
-        hints: QueryHints
+        vLats: [Double?], vLons: [Double?], vPositions: [Double],
+        vCities: [String?], vStates: [String?], vCountries: [String?], vLocNames: [String?],
+        vCount: Int,
+        hints: QueryHints, targetLoc: CLLocation?
     ) -> SearchResponse {
         var results: [SearchResult] = []
 
@@ -574,11 +671,22 @@ class SearchEngine {
             if let dateRange = hints.dateRange {
                 guard let videoDate = vDates[i], videoDate >= dateRange.start && videoDate <= dateRange.end else { continue }
             }
-            if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
-                guard let lat = vLats[i], let lon = vLons[i] else { continue }
-                let distKm = CLLocation(latitude: coord.lat, longitude: coord.lon)
-                    .distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
-                guard distKm <= radiusKm else { continue }
+            if let locationQuery = hints.locationHint {
+                let queryLower = locationQuery.lowercased()
+                if let city = vCities[i] {
+                    let matched =
+                        city.lowercased().contains(queryLower) ||
+                        (vStates[i]?.lowercased().contains(queryLower) ?? false) ||
+                        (vCountries[i]?.lowercased().contains(queryLower) ?? false) ||
+                        (vLocNames[i]?.lowercased().contains(queryLower) ?? false)
+                    if !matched { continue }
+                } else if let target = targetLoc, let radiusKm = hints.locationRadiusKm,
+                          let lat = vLats[i], let lon = vLons[i] {
+                    let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                    if distKm > radiusKm { continue }
+                } else {
+                    continue
+                }
             }
             let vid = vIds[i]
             guard !seenVideoIds.contains(vid) else { continue }

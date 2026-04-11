@@ -85,6 +85,41 @@ final class QueryParserTests: XCTestCase {
         // locationHint may or may not be nil depending on parse order, but dateRange must be set
     }
 
+    // MARK: - Landmark Names (should NOT be extracted as locations)
+
+    func testHooverDamIsVisualNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Hoover Dam")
+        XCTAssertNil(hints.locationHint, "Hoover Dam is a landmark, not a location")
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertTrue(hints.textQuery.contains("hoover"), "textQuery should contain full landmark name")
+        XCTAssertTrue(hints.textQuery.contains("dam"), "textQuery should contain full landmark name")
+    }
+
+    func testEiffelTowerIsVisualNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Eiffel Tower")
+        // NLTagger may or may not detect "Eiffel" as a place, but either way
+        // the landmark guard should prevent splitting
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertTrue(hints.textQuery.lowercased().contains("tower"))
+    }
+
+    func testBerlinSunsetKeepsVisualQuery() {
+        // NLTagger may or may not detect "Berlin" as a place depending on
+        // the environment (simulator vs device). Either way, "sunset" must
+        // remain in the visual query and not be misidentified as a location.
+        let hints = QueryParserFallback.parse(query: "Berlin sunset")
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertTrue(hints.textQuery.contains("sunset"),
+            "sunset must be in textQuery, got: \(hints.textQuery)")
+        XCTAssertFalse(hints.locationHint == "sunset",
+            "sunset must not be extracted as a location")
+    }
+
+    func testSanDiegoExtractsAsLocation() {
+        let hints = QueryParserFallback.parse(query: "San Diego")
+        XCTAssertNotNil(hints.locationHint, "San Diego should be detected as a location")
+    }
+
     // MARK: - Query Truncation
 
     func testLongQueryTruncated() {

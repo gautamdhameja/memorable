@@ -38,8 +38,11 @@ class AppState: ObservableObject {
     var searchEngine: SearchEngine?
     var indexingService: IndexingService?
     let captionService = PhotoCaptionService()
+    private var isInitializing = false
 
     func initialize() async {
+        guard !isInitializing && !isModelLoaded else { return }
+        isInitializing = true
         #if DEBUG
         let initStart = CFAbsoluteTimeGetCurrent()
         logger.info("[AppState] initialize() started")

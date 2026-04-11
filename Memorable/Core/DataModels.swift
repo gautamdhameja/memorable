@@ -24,6 +24,11 @@ struct IndexedPhoto: Codable, FetchableRecord, PersistableRecord {
     var sharpnessScore: Double?
     var sourceId: String = PhotoSourceType.photokit.rawValue
     var filePath: String?
+    var locationCity: String?
+    var locationState: String?
+    var locationCountry: String?
+    var locationName: String?
+    var sceneLabels: String?
 
     static let databaseTableName = "indexed_photos"
 }
@@ -54,6 +59,10 @@ struct IndexedVideo: Codable, FetchableRecord, PersistableRecord {
     var frameCount: Int
     var indexedAt: Date
     var sourceId: String = PhotoSourceType.photokit.rawValue
+    var locationCity: String?
+    var locationState: String?
+    var locationCountry: String?
+    var locationName: String?
 
     static let databaseTableName = "indexed_videos"
 }

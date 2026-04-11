@@ -33,6 +33,8 @@ class IndexingService: ObservableObject {
     private let batchSize = 20
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var surpriseValidationTask: Task<Void, Never>?
+    private let reverseGeocoder = ReverseGeocoder()
+    private var geocodingTask: Task<Void, Never>?
 
     init(imageEncoder: ImageEncoder, searchEngine: SearchEngine, database: DatabaseProtocol = AppDatabase.shared) {
         self.imageEncoder = imageEncoder
@@ -79,12 +81,14 @@ class IndexingService: ObservableObject {
 
     func startIndexing() {
         guard !progress.isRunning else { return }
+        progress.isRunning = true
         SurpriseQueries.clearValidated()
         indexingTask = Task { await performIndexing() }
     }
 
     func indexNewPhotosOnly() {
         guard !progress.isRunning else { return }
+        progress.isRunning = true
         newPhotosAvailable = false
         indexingTask = Task { await performIndexing() }
     }
@@ -94,6 +98,8 @@ class IndexingService: ObservableObject {
         indexingTask = nil
         surpriseValidationTask?.cancel()
         surpriseValidationTask = nil
+        geocodingTask?.cancel()
+        geocodingTask = nil
         progress.isRunning = false
     }
 
@@ -112,6 +118,7 @@ class IndexingService: ObservableObject {
     }
 
     private func checkForNewPhotos() {
+        guard !progress.isRunning else { return }
         let db = database
         let engine = searchEngine
         Task.detached {
@@ -250,24 +257,48 @@ class IndexingService: ObservableObject {
                     embeddings = [try imageEncoder.encode(image: images[0])]
                 }
 
-                // Phase 3: Post-process each result (OCR, sharpness, face detection, DB insert)
+                // Phase 3: Post-process each result (OCR, sharpness, face detection)
                 for (i, (asset, image)) in loadedImages.enumerated() {
                     guard i < embeddings.count else { break }
 
                     var ocrText: String?
+                    // Tier 1: Fast OCR on 224x224 thumbnail (catches large text: signs, menus, whiteboards)
+                    let quickOcr = await Task.detached {
+                        OCRService.extractTextFast(from: image)
+                    }.value
+
                     if OCRService.isLikelyScreenshot(width: asset.pixelWidth, height: asset.pixelHeight) {
+                        // Tier 2: Full-res OCR for screenshots (catches small UI text, capped at 2048px)
+                        let ocrWidth = min(asset.pixelWidth, 2048)
+                        let ocrHeight = min(asset.pixelHeight, 2048)
                         if let fullImage = await PhotoLibrary.loadImage(
                             for: asset,
-                            targetSize: CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
+                            targetSize: CGSize(width: CGFloat(ocrWidth), height: CGFloat(ocrHeight))
                         ) {
                             ocrText = await Task.detached { OCRService.extractText(from: fullImage) }.value
                         }
+                    }
+
+                    // Use full-res result if available, otherwise use quick result
+                    if ocrText == nil || (ocrText?.isEmpty ?? true) {
+                        ocrText = quickOcr
+                    }
+
+                    // Filter out very short OCR results (likely noise from photo artifacts)
+                    if let text = ocrText, text.count < 3 {
+                        ocrText = nil
                     }
 
                     // Compute sharpness score (runs on the already-loaded image)
                     let sharpness = await Task.detached {
                         BlurDetector.sharpnessScore(for: image)
                     }.value
+
+                    // Scene classification (runs on Neural Engine, ~5-15ms)
+                    let sceneLabels = await Task.detached {
+                        SceneClassifier.classify(image: image)
+                    }.value
+                    let sceneLabelsString = SceneClassifier.labelsToString(sceneLabels)
 
                     batch.append(IndexedPhoto(
                         id: UUID().uuidString,
@@ -280,16 +311,11 @@ class IndexingService: ObservableObject {
                         embedding: embeddings[i].toFloat16Data(),
                         indexedAt: Date(),
                         ocrText: ocrText,
-                        sharpnessScore: sharpness
+                        sharpnessScore: sharpness,
+                        sceneLabels: sceneLabelsString
                     ))
 
                     newlyIndexed += 1
-                }
-
-                // Flush DB batches
-                if batch.count >= batchSize {
-                    try database.insertPhotos(batch)
-                    batch.removeAll(keepingCapacity: true)
                 }
             } catch {
                 logger.error("Batch encoding failed: \(error.localizedDescription)")
@@ -297,6 +323,39 @@ class IndexingService: ObservableObject {
                 for (asset, image) in loadedImages {
                     do {
                         let embedding = try imageEncoder.encode(image: image)
+
+                        // Fast OCR on 224x224 thumbnail
+                        var fallbackOcr: String?
+                        let quickOcrFallback = await Task.detached {
+                            OCRService.extractTextFast(from: image)
+                        }.value
+
+                        if OCRService.isLikelyScreenshot(width: asset.pixelWidth, height: asset.pixelHeight) {
+                            let ocrWidth = min(asset.pixelWidth, 2048)
+                            let ocrHeight = min(asset.pixelHeight, 2048)
+                            if let fullImage = await PhotoLibrary.loadImage(
+                                for: asset,
+                                targetSize: CGSize(width: CGFloat(ocrWidth), height: CGFloat(ocrHeight))
+                            ) {
+                                fallbackOcr = await Task.detached { OCRService.extractText(from: fullImage) }.value
+                            }
+                        }
+                        if fallbackOcr == nil || (fallbackOcr?.isEmpty ?? true) {
+                            fallbackOcr = quickOcrFallback
+                        }
+                        if let text = fallbackOcr, text.count < 3 {
+                            fallbackOcr = nil
+                        }
+
+                        let fallbackSharpness = await Task.detached {
+                            BlurDetector.sharpnessScore(for: image)
+                        }.value
+
+                        let fallbackLabels = await Task.detached {
+                            SceneClassifier.classify(image: image)
+                        }.value
+                        let fallbackLabelsString = SceneClassifier.labelsToString(fallbackLabels)
+
                         batch.append(IndexedPhoto(
                             id: UUID().uuidString,
                             localIdentifier: asset.localIdentifier,
@@ -306,21 +365,26 @@ class IndexingService: ObservableObject {
                             pixelWidth: asset.pixelWidth,
                             pixelHeight: asset.pixelHeight,
                             embedding: embedding.toFloat16Data(),
-                            indexedAt: Date()
+                            indexedAt: Date(),
+                            ocrText: fallbackOcr,
+                            sharpnessScore: fallbackSharpness,
+                            sceneLabels: fallbackLabelsString
                         ))
                         newlyIndexed += 1
                     } catch {
                         logger.error("Single encode fallback failed for \(asset.localIdentifier): \(error.localizedDescription)")
                     }
                 }
-                if batch.count >= batchSize {
-                    do {
-                        try database.insertPhotos(batch)
-                    } catch {
-                        logger.error("Failed to insert fallback photo batch: \(error.localizedDescription)")
-                    }
-                    batch.removeAll(keepingCapacity: true)
+            }
+
+            // Flush DB batches (outside encoding try block)
+            if batch.count >= batchSize {
+                do {
+                    try database.insertPhotos(batch)
+                } catch {
+                    logger.error("Failed to insert photo batch: \(error.localizedDescription)")
                 }
+                batch.removeAll(keepingCapacity: true)
             }
 
             indexed += batchAssets.count
@@ -377,6 +441,11 @@ class IndexingService: ObservableObject {
         #if DEBUG
         logger.info("[IndexingService] Indexing complete in \(String(format: "%.1f", CFAbsoluteTimeGetCurrent() - indexingStart))s")
         #endif
+
+        // Geocode location strings in background (doesn't block search)
+        if !Task.isCancelled {
+            launchGeocoding()
+        }
     }
 
     private func performFolderIndexing(url: URL, name: String) async {
@@ -507,13 +576,20 @@ class IndexingService: ObservableObject {
         let totalIndexed = indexedPhotoCount + indexedVideoCount
         let unindexedCount = totalInLibrary - totalIndexed
 
-        guard unindexedCount > 0 else { return }
+        if unindexedCount <= 0 {
+            // Everything indexed — launch geocoding directly
+            launchGeocoding()
+            return
+        }
 
         #if DEBUG
         logger.info("[IndexingService] Incomplete index detected: \(totalIndexed)/\(totalInLibrary) indexed, \(unindexedCount) remaining. Auto-resuming.")
         #endif
 
         // Auto-resume indexing for the remaining items
+        // performIndexing will launch geocoding when it finishes
+        guard !progress.isRunning else { return }
+        progress.isRunning = true
         newPhotosAvailable = false
         indexingTask = Task { await performIndexing() }
     }
@@ -585,6 +661,94 @@ class IndexingService: ObservableObject {
         }
     }
 
+    // MARK: - Background Location Geocoding
+
+    private func launchGeocoding() {
+        guard geocodingTask == nil else { return }
+        geocodingTask = Task.detached(priority: .utility) { [weak self] in
+            await self?.geocodeIndexedMedia()
+            await MainActor.run { self?.geocodingTask = nil }
+        }
+    }
+
+    /// Reverse-geocodes indexed photos and videos that have GPS but no location strings yet.
+    /// Runs in the background after indexing completes without blocking search.
+    private func geocodeIndexedMedia() async {
+        var totalGeocoded = 0
+
+        #if DEBUG
+        let photosToGeocode = (try? database.photosNeedingLocationBackfill(limit: 10000).count) ?? 0
+        let videosToGeocode = (try? database.videosNeedingLocationBackfill(limit: 10000).count) ?? 0
+        let totalPhotos = (try? database.indexedCount()) ?? 0
+        let totalVideos = (try? database.videoIndexedCount()) ?? 0
+        logger.info("[Geocoder] Starting: \(photosToGeocode)/\(totalPhotos) photos need geocoding, \(videosToGeocode)/\(totalVideos) videos need geocoding")
+        #endif
+
+        // Track failures in-memory to avoid infinite retries within this session.
+        // Failed coordinates are retried on next app launch.
+        var failedIds = Set<String>()
+
+        // Photos
+        while true {
+            guard let batch = try? database.photosNeedingLocationBackfill(limit: 500),
+                  !batch.isEmpty else { break }
+            let actionable = batch.filter { !failedIds.contains($0.localIdentifier) }
+            guard !actionable.isEmpty else { break }
+            for (i, (localId, lat, lon)) in actionable.enumerated() {
+                if Task.isCancelled { return }
+                if let loc = await reverseGeocoder.reverseGeocode(latitude: lat, longitude: lon) {
+                    try? database.updatePhotoLocationStrings(
+                        localIdentifier: localId,
+                        city: loc.city, state: loc.state,
+                        country: loc.country, name: loc.name
+                    )
+                    totalGeocoded += 1
+                    #if DEBUG
+                    if totalGeocoded <= 5 || totalGeocoded % 50 == 0 {
+                        logger.info("[Geocoder] #\(totalGeocoded): \(loc.city ?? "?") (\(lat), \(lon))")
+                    }
+                    #endif
+                } else {
+                    failedIds.insert(localId)
+                    #if DEBUG
+                    logger.info("[Geocoder] Failed: \(localId) (\(lat), \(lon))")
+                    #endif
+                }
+            }
+            #if DEBUG
+            logger.info("[Geocoder] Photos progress: \(totalGeocoded) geocoded, \(failedIds.count) failed")
+            #endif
+        }
+
+        // Videos
+        while true {
+            guard let batch = try? database.videosNeedingLocationBackfill(limit: 500),
+                  !batch.isEmpty else { break }
+            let actionable = batch.filter { !failedIds.contains($0.localIdentifier) }
+            guard !actionable.isEmpty else { break }
+            for (localId, lat, lon) in actionable {
+                if Task.isCancelled { return }
+                if let loc = await reverseGeocoder.reverseGeocode(latitude: lat, longitude: lon) {
+                    try? database.updateVideoLocationStrings(
+                        localIdentifier: localId,
+                        city: loc.city, state: loc.state,
+                        country: loc.country, name: loc.name
+                    )
+                    totalGeocoded += 1
+                } else {
+                    failedIds.insert(localId)
+                }
+            }
+        }
+
+        #if DEBUG
+        logger.info("[Geocoder] Completed: \(totalGeocoded) media items geocoded")
+        #endif
+        if totalGeocoded > 0 {
+            try? searchEngine.loadIndex()
+        }
+    }
+
     // MARK: - Video Indexing
 
     private func indexVideo(asset: PHAsset) async {
@@ -602,6 +766,7 @@ class IndexingService: ObservableObject {
         let frames = await VideoFrameExtractor.extractFrames(from: avAsset, positions: positions)
         guard !frames.isEmpty else { return }
 
+        // Reverse geocode video location
         let videoId = UUID().uuidString
         let video = IndexedVideo(
             id: videoId,

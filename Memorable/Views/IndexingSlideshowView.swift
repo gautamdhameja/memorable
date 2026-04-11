@@ -19,9 +19,6 @@ struct IndexingSlideshowView: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .opacity(isVisible ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.8), value: isVisible)
                     .overlay(alignment: .bottom) {
                         VStack(spacing: 6) {
                             if let caption = currentCaption {
@@ -49,15 +46,11 @@ struct IndexingSlideshowView: View {
                                 endPoint: .bottom
                             )
                         )
-                        .clipShape(
-                            UnevenRoundedRectangle(
-                                bottomLeadingRadius: 16,
-                                bottomTrailingRadius: 16
-                            )
-                        )
                         .opacity(captionVisible ? 1 : 0)
                         .animation(.easeInOut(duration: 0.6), value: captionVisible)
                     }
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .frame(maxWidth: .infinity, maxHeight: 400)
             } else {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(Celestial.Colors.surfaceContainer)

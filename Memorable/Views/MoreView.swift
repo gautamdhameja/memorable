@@ -266,6 +266,8 @@ struct MoreView: View {
             }
             .alert("Re-index Library", isPresented: $showReindexConfirm) {
                 Button("Re-index", role: .destructive) {
+                    // Stop any active indexing/geocoding before clearing data
+                    indexingService.stopIndexing()
                     do {
                         try database.deleteAll()
                         searchEngine.dropIndex()

@@ -28,8 +28,8 @@ class ProManager: ObservableObject {
 
     private init() {
         transactionListener = listenForTransactions()
-        Task { await loadProduct() }
-        Task { await verifyEntitlement() }
+        Task { await self.loadProduct() }
+        Task { await self.verifyEntitlement() }
     }
 
     // MARK: - Product
@@ -38,6 +38,9 @@ class ProManager: ObservableObject {
         do {
             let products = try await Product.products(for: [Self.productId])
             product = products.first
+            #if DEBUG
+            logger.info("[ProManager] Loaded \(products.count) products, match: \(products.first?.displayName ?? "nil")")
+            #endif
         } catch {
             logger.error("Failed to load products: \(error.localizedDescription)")
         }

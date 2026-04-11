@@ -34,7 +34,9 @@ class ImageEncoder {
         do {
             output = try model.prediction(from: inputFeatures)
         } catch {
+            #if DEBUG
             logger.warning("[ImageEncoder] Prediction failed, reloading model: \(error.localizedDescription)")
+            #endif
             try reloadModel()
             output = try model.prediction(from: inputFeatures)
         }
@@ -128,7 +130,9 @@ class ImageEncoder {
         do {
             batchResults = try model.predictions(from: batchProvider, options: MLPredictionOptions())
         } catch {
+            #if DEBUG
             logger.warning("[ImageEncoder] Batch prediction failed, reloading model: \(error.localizedDescription)")
+            #endif
             try reloadModel()
             batchResults = try model.predictions(from: batchProvider, options: MLPredictionOptions())
         }

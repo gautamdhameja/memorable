@@ -74,7 +74,16 @@ enum QueryParserFallback {
             }
         }
 
-        let cleanedText = text.trimmingCharacters(in: .whitespaces)
+        var cleanedText = text.trimmingCharacters(in: .whitespaces)
+
+        // If location extraction consumed the entire query, the place name itself
+        // is a visual concept (e.g. "Hoover Dam", "Eiffel Tower", "Berlin").
+        // Use it as both location filter AND visual query so CLIP can match by
+        // appearance, not just GPS coordinates.
+        if cleanedText.isEmpty && locationHint != nil {
+            cleanedText = locationHint!.lowercased()
+        }
+
         let hasVisual = !cleanedText.isEmpty
 
         #if DEBUG
@@ -92,26 +101,23 @@ enum QueryParserFallback {
     }
 
     private static func extractLocation(from original: String, text: inout String, locationHint: inout String?) {
+        var landmarkGuardTriggered = false
+
         // Strategy 1: NLTagger on original text (works when user types proper case)
         if let place = extractPlaceViaTagger(original) {
-            locationHint = place
-            text = text.replacingOccurrences(of: place.lowercased(), with: "")
+            let remaining = text.replacingOccurrences(of: place.lowercased(), with: "")
                 .trimmingCharacters(in: .whitespaces)
-            return
-        }
 
-        // Strategy 1b: NLTagger with constructed context
-        // NLTagger often fails on bare place names ("San Diego") but succeeds
-        // when given context ("photos from San Diego"). Try wrapping.
-        let contextual = "photos from \(original)"
-        if let place = extractPlaceViaTagger(contextual) {
-            // Verify the detected place actually came from the original text,
-            // not from the word "photos"
-            if original.localizedCaseInsensitiveContains(place) {
+            // Guard: if removing the "place" leaves behind just 1 short word,
+            // NLTagger probably split a compound proper noun like "Hoover Dam"
+            // or "Eiffel Tower". The whole query is likely a landmark name,
+            // not a location + visual descriptor.
+            if !isLikelyLandmarkFragment(remaining: remaining, original: original) {
                 locationHint = place
-                text = text.replacingOccurrences(of: place.lowercased(), with: "")
-                    .trimmingCharacters(in: .whitespaces)
+                text = remaining
                 return
+            } else {
+                landmarkGuardTriggered = true
             }
         }
 
@@ -125,8 +131,14 @@ enum QueryParserFallback {
                                        "summer", "winter", "spring", "fall", "autumn"])
 
         for prep in locationPreps {
+            // Match preposition at word boundary only (avoid "berl*in* sunset")
             guard let prepRange = lowered.range(of: prep) else { continue }
             guard prepRange.upperBound < lowered.endIndex else { continue }
+            // Ensure the preposition starts at a word boundary
+            if prepRange.lowerBound != lowered.startIndex {
+                let charBefore = lowered[lowered.index(before: prepRange.lowerBound)]
+                if charBefore.isLetter { continue }
+            }
 
             let afterPrep = String(lowered[prepRange.upperBound...]).trimmingCharacters(in: .whitespaces)
             guard !afterPrep.isEmpty else { continue }
@@ -159,34 +171,70 @@ enum QueryParserFallback {
         // visual content words, treat it as a potential location.
         // The geocoder in SearchEngine will validate. If it fails to geocode,
         // the search proceeds as normal CLIP search.
-        let remainingWords = text.split(separator: " ").map(String.init)
-        if remainingWords.count >= 1 && remainingWords.count <= 4 && locationHint == nil {
-            let originalWords = original.trimmingCharacters(in: .whitespaces)
-                .split(separator: " ").map(String.init)
-            // Filter out words consumed by temporal parser
-            let nonTemporalOriginalWords = originalWords.filter { word in
-                text.localizedCaseInsensitiveContains(word)
-            }
-            let allCapitalized = nonTemporalOriginalWords.allSatisfy { word in
-                guard let first = word.first else { return false }
-                return first.isUppercase
-            }
-
-            if allCapitalized && !nonTemporalOriginalWords.isEmpty {
-                let visualWords: Set<String> = ["sunset", "sunrise", "beach", "mountain",
-                    "food", "dog", "cat", "car", "tree", "flower", "snow",
-                    "rain", "night", "morning", "selfie", "people", "baby",
-                    "wedding", "birthday", "christmas", "halloween"]
-                let isLikelyVisual = nonTemporalOriginalWords.allSatisfy {
-                    visualWords.contains($0.lowercased())
+        // Skip if Strategy 1's landmark guard triggered — the query is a landmark
+        // name (e.g. "Hoover Dam"), not a city.
+        if !landmarkGuardTriggered {
+            let remainingWords = text.split(separator: " ").map(String.init)
+            if remainingWords.count >= 1 && remainingWords.count <= 4 && locationHint == nil {
+                let originalWords = original.trimmingCharacters(in: .whitespaces)
+                    .split(separator: " ").map(String.init)
+                // Filter out words consumed by temporal parser
+                let nonTemporalOriginalWords = originalWords.filter { word in
+                    text.localizedCaseInsensitiveContains(word)
+                }
+                let allCapitalized = nonTemporalOriginalWords.allSatisfy { word in
+                    guard let first = word.first else { return false }
+                    return first.isUppercase
                 }
 
-                if !isLikelyVisual {
-                    locationHint = nonTemporalOriginalWords.joined(separator: " ")
-                    text = ""
+                if allCapitalized && !nonTemporalOriginalWords.isEmpty {
+                    let visualWords: Set<String> = ["sunset", "sunrise", "beach", "mountain",
+                        "food", "dog", "cat", "car", "tree", "flower", "snow",
+                        "rain", "night", "morning", "selfie", "people", "baby",
+                        "wedding", "birthday", "christmas", "halloween"]
+                    let isLikelyVisual = nonTemporalOriginalWords.allSatisfy {
+                        visualWords.contains($0.lowercased())
+                    }
+
+                    // Landmark indicator words — if any word in the query is a
+                    // landmark noun, treat the whole thing as visual, not location.
+                    // "Hoover Dam", "Eiffel Tower", "Golden Gate Bridge", "Niagara Falls"
+                    let landmarkWords: Set<String> = ["dam", "tower", "bridge", "falls",
+                        "monument", "palace", "castle", "gate", "wall", "square",
+                        "plaza", "temple", "cathedral", "pyramid", "statue",
+                        "lighthouse", "canyon", "reef", "volcano", "glacier",
+                        "arch", "museum", "fountain", "church", "dome",
+                        "fort", "ruins", "peak", "bay", "harbor"]
+                    let hasLandmarkWord = nonTemporalOriginalWords.contains {
+                        landmarkWords.contains($0.lowercased())
+                    }
+
+                    if !isLikelyVisual && !hasLandmarkWord {
+                        locationHint = nonTemporalOriginalWords.joined(separator: " ")
+                        text = ""
+                    }
                 }
             }
         }
+    }
+
+    /// Returns true if the remaining text after place extraction looks like a
+    /// landmark fragment (e.g. "dam", "tower", "bridge") rather than a
+    /// standalone visual query (e.g. "sunset", "food", "dog").
+    private static func isLikelyLandmarkFragment(remaining: String, original: String) -> Bool {
+        let remainingWords = remaining.split(separator: " ")
+        let originalWords = original.trimmingCharacters(in: .whitespaces)
+            .split(separator: " ")
+        guard remainingWords.count == 1, originalWords.count <= 3 else { return false }
+
+        let commonVisualWords: Set<String> = ["sunset", "sunrise", "beach",
+            "mountain", "food", "dog", "cat", "car", "tree", "flower",
+            "snow", "rain", "night", "morning", "selfie", "people",
+            "lunch", "dinner", "breakfast", "wedding", "birthday",
+            "park", "lake", "river", "ocean", "sea", "forest",
+            "street", "market", "garden", "pool", "sky", "clouds"]
+        let word = String(remainingWords[0]).lowercased()
+        return !commonVisualWords.contains(word)
     }
 
     private static func extractPlaceViaTagger(_ input: String) -> String? {

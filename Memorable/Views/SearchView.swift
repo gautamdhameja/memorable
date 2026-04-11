@@ -26,6 +26,11 @@ struct SearchView: View {
     @State private var placeholderIndex: Int = 0
     @State private var placeholderTimer: Task<Void, Never>?
 
+    // Post-search upgrade flow (free tier)
+    @State private var hasCompletedFirstSearch = false
+    @State private var searchesSinceDismiss = 0
+    @State private var upgradeBannerDismissed = false
+
     private static let placeholders = [
         "Search for your moment...",
         "Describe your memory...",
@@ -86,13 +91,6 @@ struct SearchView: View {
                         // Indexing banners
                         if indexingService.progress.isRunning {
                             IndexingBannerView(indexingService: indexingService)
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 12)
-                        }
-
-                        // Free tier limit — show if not Pro and library has unindexed items
-                        if !proManager.isPro && totalLibraryCount > searchEngine.totalSize {
-                            freeLimitBanner
                                 .padding(.horizontal, 16)
                                 .padding(.bottom, 12)
                         }
@@ -208,10 +206,17 @@ struct SearchView: View {
                         totalLibraryCount = count
                     }
                 }
-                startPlaceholderRotation()
+                if indexingService.isReady {
+                    startPlaceholderRotation()
+                }
             }
             .onDisappear {
                 placeholderTimer?.cancel()
+            }
+            .onChange(of: indexingService.isReady) {
+                if indexingService.isReady {
+                    startPlaceholderRotation()
+                }
             }
             .onChange(of: indexingService.indexVersion) {
                 // Index changed (e.g., photos deleted) — clear stale results
@@ -257,7 +262,7 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
                 .accessibilityHidden(true)
-            TextField(Self.placeholders[placeholderIndex], text: $searchText)
+            TextField(indexingService.isReady ? Self.placeholders[placeholderIndex] : "Indexing your photos...", text: $searchText)
                 .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurface)
                 .onChange(of: searchText) { _, newValue in
@@ -293,35 +298,40 @@ struct SearchView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .modifier(GlassSearchBarModifier())
+        .opacity(indexingService.isReady ? 1.0 : 0.5)
     }
 
     // MARK: - Banners
 
-    private var freeLimitBanner: some View {
-        HStack(spacing: 10) {
+    private var upgradeBanner: some View {
+        HStack(spacing: 8) {
             Image(systemName: "sparkles")
-                .foregroundStyle(Celestial.Colors.primaryDim)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Free limit reached")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(Celestial.Colors.onSurface)
-                Text("\(searchEngine.totalSize) of \(totalLibraryCount) items indexed")
-                    .font(.footnote)
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-            }
+                .font(.footnote)
+                .foregroundStyle(Celestial.Colors.amber)
+            Text("Searching \(searchEngine.totalSize) of \(totalLibraryCount) photos")
+                .font(.footnote)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             Spacer()
-            Button("Upgrade") {
+            Button("Unlock full library") {
                 showUpgrade = true
             }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(Celestial.Colors.onPrimaryContainer)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(Celestial.Colors.primaryContainer)
-            .clipShape(Capsule())
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(Celestial.Colors.primary)
+            Button {
+                upgradeBannerDismissed = true
+                searchesSinceDismiss = 0
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption2)
+                    .foregroundStyle(Celestial.Colors.outline)
+            }
         }
-        .padding(16)
-        .modifier(GlassPanelModifier(cornerRadius: 16))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Celestial.Colors.surfaceVariant.opacity(0.5))
+        .cornerRadius(8)
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
     }
 
     // MARK: - Home (Albums + History)
@@ -334,7 +344,13 @@ struct SearchView: View {
             if !searchHistory.isEmpty {
                 searchHistoryView
             }
-            if searchEngine.totalSize > 0 {
+            if indexingService.hitFreeLimit && totalLibraryCount > searchEngine.totalSize {
+                Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos")
+                    .font(.footnote)
+                    .foregroundStyle(Celestial.Colors.outline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 24)
+            } else if searchEngine.totalSize > 0 {
                 Text("Search your \(searchEngine.totalSize) photos & videos")
                     .font(.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
@@ -619,9 +635,15 @@ struct SearchView: View {
                 .foregroundStyle(Celestial.Colors.outlineVariant)
                 .accessibilityHidden(true)
             if indexingService.isReady && searchEngine.totalSize > 0 {
-                Text("Search your \(searchEngine.totalSize) photos & videos")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                if indexingService.hitFreeLimit && totalLibraryCount > searchEngine.totalSize {
+                    Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                } else {
+                    Text("Search your \(searchEngine.totalSize) photos & videos")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                }
                 Text("Describe what you're looking for")
                     .font(.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
@@ -679,6 +701,11 @@ struct SearchView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
                 .padding(.bottom, 4)
+            }
+
+            // Upgrade banner for free tier (after first successful search)
+            if !proManager.isPro && indexingService.hitFreeLimit && hasCompletedFirstSearch && !upgradeBannerDismissed {
+                upgradeBanner
             }
 
             // Result summary
@@ -805,6 +832,18 @@ struct SearchView: View {
                     }
                     lastQuery = query
                     lastResults = response.results
+
+                    // Track searches for free tier upgrade banner
+                    if !hasCompletedFirstSearch {
+                        hasCompletedFirstSearch = true
+                    }
+                    if upgradeBannerDismissed {
+                        searchesSinceDismiss += 1
+                        if searchesSinceDismiss >= 5 {
+                            upgradeBannerDismissed = false
+                            searchesSinceDismiss = 0
+                        }
+                    }
                 }
             } catch {
                 logger.error("Search failed: \(error.localizedDescription)")

@@ -32,6 +32,37 @@ class OCRService {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    static func extractTextFast(from image: UIImage) -> String? {
+        guard let cgImage = image.cgImage else { return nil }
+
+        var recognizedText = ""
+
+        let request = VNRecognizeTextRequest { request, error in
+            guard let observations = request.results as? [VNRecognizedTextObservation] else { return }
+            for observation in observations {
+                if let topCandidate = observation.topCandidates(1).first {
+                    recognizedText += topCandidate.string + " "
+                }
+            }
+        }
+
+        request.recognitionLevel = .fast
+        request.usesLanguageCorrection = false
+
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            #if DEBUG
+            logger.error("OCR (fast) failed: \(error.localizedDescription)")
+            #endif
+            return nil
+        }
+
+        let trimmed = recognizedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     static func isLikelyScreenshot(width: Int, height: Int) -> Bool {
         let screenSizes: Set<String> = [
             "1170x2532", "2532x1170",

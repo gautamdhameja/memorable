@@ -10,10 +10,15 @@ struct EmbeddingIndex {
     var latitudes: [Double?]
     var longitudes: [Double?]
     var ocrTexts: [String?]
+    var locationCities: [String?]
+    var locationStates: [String?]
+    var locationCountries: [String?]
+    var locationNames: [String?]
+    var sceneLabels: [String?]
     var embeddings: [Float16]
 }
 
-typealias VideoEmbeddingIndex = (videoIds: [String], localIdentifiers: [String], dates: [Date?], latitudes: [Double?], longitudes: [Double?], framePositions: [Double], embeddings: [Float16])
+typealias VideoEmbeddingIndex = (videoIds: [String], localIdentifiers: [String], dates: [Date?], latitudes: [Double?], longitudes: [Double?], framePositions: [Double], locationCities: [String?], locationStates: [String?], locationCountries: [String?], locationNames: [String?], embeddings: [Float16])
 
 // MARK: - Database Protocol
 
@@ -39,6 +44,12 @@ protocol DatabaseProtocol {
     func loadAllVideoEmbeddings() throws -> VideoEmbeddingIndex
     func deleteOrphanedVideos(localIdentifiers: Set<String>) throws
     func trimToLimit(_ limit: Int) throws
+
+    // Location backfill
+    func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
+    func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
+    func updatePhotoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws
+    func updateVideoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws
 
     // Sources
     func insertSource(_ source: PhotoSource) throws
@@ -126,10 +137,17 @@ class AppDatabase: DatabaseProtocol {
                 t.column("pixelHeight", .integer).notNull()
                 t.column("embedding", .blob).notNull()
                 t.column("indexedAt", .datetime).notNull()
+                t.column("ocrText", .text)
+                t.column("sharpnessScore", .double)
+                t.column("sourceId", .text).notNull().defaults(to: "photokit")
+                t.column("filePath", .text)
+                t.column("locationCity", .text)
+                t.column("locationState", .text)
+                t.column("locationCountry", .text)
+                t.column("locationName", .text)
+                t.column("sceneLabels", .text)
             }
-        }
 
-        migrator.registerMigration("v2") { db in
             try db.create(table: "photo_sources") { t in
                 t.column("id", .text).primaryKey()
                 t.column("type", .text).notNull()
@@ -139,19 +157,7 @@ class AppDatabase: DatabaseProtocol {
                 t.column("lastIndexedAt", .datetime)
                 t.column("photoCount", .integer).notNull().defaults(to: 0)
             }
-            try db.alter(table: "indexed_photos") { t in
-                t.add(column: "sourceId", .text).defaults(to: "photokit")
-                t.add(column: "filePath", .text)
-            }
-        }
 
-        migrator.registerMigration("v3_ocr") { db in
-            try db.alter(table: "indexed_photos") { t in
-                t.add(column: "ocrText", .text)
-            }
-        }
-
-        migrator.registerMigration("v4_video") { db in
             try db.create(table: "indexed_videos") { t in
                 t.column("id", .text).primaryKey()
                 t.column("localIdentifier", .text).notNull().unique()
@@ -164,6 +170,10 @@ class AppDatabase: DatabaseProtocol {
                 t.column("frameCount", .integer).notNull()
                 t.column("indexedAt", .datetime).notNull()
                 t.column("sourceId", .text).notNull().defaults(to: "photokit")
+                t.column("locationCity", .text)
+                t.column("locationState", .text)
+                t.column("locationCountry", .text)
+                t.column("locationName", .text)
             }
 
             try db.create(table: "indexed_video_frames") { t in
@@ -173,47 +183,9 @@ class AppDatabase: DatabaseProtocol {
                 t.column("embedding", .blob).notNull()
                 t.column("indexedAt", .datetime).notNull()
             }
+            try db.create(index: "idx_video_frames_videoId", on: "indexed_video_frames",
+                           columns: ["videoId"])
 
-            try db.create(index: "idx_video_frames_videoId", on: "indexed_video_frames", columns: ["videoId"])
-        }
-
-        // LEGACY: Face detection was removed. These migrations must remain for users
-        // who had the old schema — the tables exist but are empty and unused.
-        migrator.registerMigration("v5_faces") { db in
-            try db.create(table: "face_clusters") { t in
-                t.column("id", .text).primaryKey()
-                t.column("name", .text)
-                t.column("representativeFaceData", .blob)
-                t.column("photoCount", .integer).notNull().defaults(to: 0)
-                t.column("createdAt", .datetime).notNull()
-            }
-
-            try db.create(table: "detected_faces") { t in
-                t.column("id", .text).primaryKey()
-                t.column("photoLocalIdentifier", .text).notNull()
-                t.column("faceEmbedding", .blob).notNull()
-                t.column("boundingBoxJSON", .text).notNull()
-                t.column("clusterId", .text).references("face_clusters", onDelete: .setNull)
-                t.column("indexedAt", .datetime).notNull()
-            }
-
-            try db.create(index: "idx_faces_photo", on: "detected_faces", columns: ["photoLocalIdentifier"])
-            try db.create(index: "idx_faces_cluster", on: "detected_faces", columns: ["clusterId"])
-        }
-
-        // LEGACY: Cleared face data when embedding format changed. Tables remain empty.
-        migrator.registerMigration("v6_clip_faces") { db in
-            try db.execute(sql: "DELETE FROM detected_faces")
-            try db.execute(sql: "DELETE FROM face_clusters")
-        }
-
-        migrator.registerMigration("v7_sharpness") { db in
-            try db.alter(table: "indexed_photos") { t in
-                t.add(column: "sharpnessScore", .double)
-            }
-        }
-
-        migrator.registerMigration("v8_search_history") { db in
             try db.create(table: "search_history") { t in
                 t.column("id", .integer).primaryKey(autoincrement: true)
                 t.column("query", .text).notNull()
@@ -226,6 +198,9 @@ class AppDatabase: DatabaseProtocol {
                 t.column("query", .text).notNull()
                 t.column("createdAt", .datetime).notNull()
             }
+
+            try db.create(index: "idx_photos_city", on: "indexed_photos",
+                           columns: ["locationCity"])
         }
 
         return migrator
@@ -242,7 +217,7 @@ class AppDatabase: DatabaseProtocol {
     func insertPhotos(_ photos: [IndexedPhoto]) throws {
         try dbQueue.write { db in
             for photo in photos {
-                try photo.insert(db)
+                try photo.insert(db, onConflict: .ignore)
             }
         }
     }
@@ -284,6 +259,11 @@ class AppDatabase: DatabaseProtocol {
             var allLats: [Double?] = []
             var allLons: [Double?] = []
             var allOcrTexts: [String?] = []
+            var allCities: [String?] = []
+            var allStates: [String?] = []
+            var allCountries: [String?] = []
+            var allLocNames: [String?] = []
+            var allSceneLabels: [String?] = []
             var allEmbeddings: [Float16] = []
             allEmbeddings.reserveCapacity(photos.count * EmbeddingConfig.dimensions)
 
@@ -296,6 +276,11 @@ class AppDatabase: DatabaseProtocol {
                 allLats.append(photo.latitude)
                 allLons.append(photo.longitude)
                 allOcrTexts.append(photo.ocrText)
+                allCities.append(photo.locationCity)
+                allStates.append(photo.locationState)
+                allCountries.append(photo.locationCountry)
+                allLocNames.append(photo.locationName)
+                allSceneLabels.append(photo.sceneLabels)
 
                 photo.embedding.withUnsafeBytes { rawBuffer in
                     let ptr = rawBuffer.bindMemory(to: Float16.self)
@@ -306,6 +291,9 @@ class AppDatabase: DatabaseProtocol {
             return EmbeddingIndex(
                 ids: allIds, localIdentifiers: allLocalIds, dates: allDates,
                 latitudes: allLats, longitudes: allLons, ocrTexts: allOcrTexts,
+                locationCities: allCities, locationStates: allStates,
+                locationCountries: allCountries, locationNames: allLocNames,
+                sceneLabels: allSceneLabels,
                 embeddings: allEmbeddings
             )
         }
@@ -380,7 +368,9 @@ class AppDatabase: DatabaseProtocol {
     func loadAllVideoEmbeddings() throws -> VideoEmbeddingIndex {
         try dbQueue.read { db in
             let sql = """
-                SELECT v.id, v.localIdentifier, v.creationDate, v.latitude, v.longitude, f.framePosition, f.embedding
+                SELECT v.id, v.localIdentifier, v.creationDate, v.latitude, v.longitude,
+                       v.locationCity, v.locationState, v.locationCountry, v.locationName,
+                       f.framePosition, f.embedding
                 FROM indexed_video_frames f
                 JOIN indexed_videos v ON f.videoId = v.id
                 ORDER BY v.creationDate DESC, f.framePosition ASC
@@ -393,6 +383,10 @@ class AppDatabase: DatabaseProtocol {
             var allLats: [Double?] = []
             var allLons: [Double?] = []
             var allPositions: [Double] = []
+            var allCities: [String?] = []
+            var allStates: [String?] = []
+            var allCountries: [String?] = []
+            var allLocNames: [String?] = []
             var allEmbeddings: [Float16] = []
 
             for row in rows {
@@ -405,6 +399,10 @@ class AppDatabase: DatabaseProtocol {
                 allLats.append(row["latitude"] as Double?)
                 allLons.append(row["longitude"] as Double?)
                 allPositions.append(row["framePosition"] as Double)
+                allCities.append(row["locationCity"] as String?)
+                allStates.append(row["locationState"] as String?)
+                allCountries.append(row["locationCountry"] as String?)
+                allLocNames.append(row["locationName"] as String?)
 
                 embeddingData.withUnsafeBytes { rawBuffer in
                     let ptr = rawBuffer.bindMemory(to: Float16.self)
@@ -412,7 +410,8 @@ class AppDatabase: DatabaseProtocol {
                 }
             }
 
-            return (allVideoIds, allLocalIds, allDates, allLats, allLons, allPositions, allEmbeddings)
+            return (allVideoIds, allLocalIds, allDates, allLats, allLons, allPositions,
+                    allCities, allStates, allCountries, allLocNames, allEmbeddings)
         }
     }
 
@@ -487,6 +486,66 @@ class AppDatabase: DatabaseProtocol {
                     )
                 """, arguments: [videoLimit])
             }
+        }
+    }
+
+    func photosNeedingLocationBackfill(limit: Int = 500) throws -> [(localIdentifier: String, lat: Double, lon: Double)] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT localIdentifier, latitude, longitude FROM indexed_photos
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                AND (locationCity IS NULL OR locationCity = '')
+                LIMIT ?
+            """, arguments: [limit])
+            return rows.map { (
+                $0["localIdentifier"] as String,
+                $0["latitude"] as Double,
+                $0["longitude"] as Double
+            ) }
+        }
+    }
+
+    func videosNeedingLocationBackfill(limit: Int = 500) throws -> [(localIdentifier: String, lat: Double, lon: Double)] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT localIdentifier, latitude, longitude FROM indexed_videos
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                AND (locationCity IS NULL OR locationCity = '')
+                LIMIT ?
+            """, arguments: [limit])
+            return rows.map { (
+                $0["localIdentifier"] as String,
+                $0["latitude"] as Double,
+                $0["longitude"] as Double
+            ) }
+        }
+    }
+
+    func updatePhotoLocationStrings(localIdentifier: String, city: String?, state: String?,
+                                    country: String?, name: String?) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE indexed_photos
+                    SET locationCity = ?, locationState = ?, locationCountry = ?, locationName = ?
+                    WHERE localIdentifier = ?
+                """,
+                arguments: [city, state, country, name, localIdentifier]
+            )
+        }
+    }
+
+    func updateVideoLocationStrings(localIdentifier: String, city: String?, state: String?,
+                                    country: String?, name: String?) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE indexed_videos
+                    SET locationCity = ?, locationState = ?, locationCountry = ?, locationName = ?
+                    WHERE localIdentifier = ?
+                """,
+                arguments: [city, state, country, name, localIdentifier]
+            )
         }
     }
 
