@@ -12,7 +12,7 @@ enum PhotoSourceType: String {
 enum AppCopy {
     /// User-facing disclaimer shown wherever search results are displayed.
     /// Keep in sync across SearchView and MoreView.
-    static let aiDisclaimer = "Memorable uses on-device AI — results may miss photos or include unrelated ones."
+    static let aiDisclaimer = "Memorable's search uses on-device AI and can make mistakes."
 }
 
 // MARK: - UserDefaults Keys

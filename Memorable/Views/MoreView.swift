@@ -216,7 +216,7 @@ struct MoreView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "lock.shield")
                                 .foregroundStyle(Celestial.Colors.outlineVariant)
-                            Text("All processing happens on your device")
+                            Text("Private, on-device processing")
                                 .font(.footnote)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
@@ -236,6 +236,15 @@ struct MoreView: View {
                             Image(systemName: "info.circle")
                                 .foregroundStyle(Celestial.Colors.outlineVariant)
                             Text("Memorable v1.0")
+                                .font(.footnote)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        }
+                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+
+                        HStack(spacing: 12) {
+                            Image(systemName: "building.2")
+                                .foregroundStyle(Celestial.Colors.outlineVariant)
+                            Text("Built by BlockDeep Labs")
                                 .font(.footnote)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
