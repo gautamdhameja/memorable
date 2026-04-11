@@ -2,6 +2,11 @@ import SwiftUI
 import Photos
 import AVKit
 
+private enum SortMode: String {
+    case relevance
+    case recent
+}
+
 struct SearchView: View {
     @ObservedObject var indexingService: IndexingService
     let searchEngine: SearchEngine
@@ -25,6 +30,18 @@ struct SearchView: View {
     @State private var filterSummary: FilterSummary?
     @State private var placeholderIndex: Int = 0
     @State private var placeholderTimer: Task<Void, Never>?
+
+    // Persisted sort mode. Stored as rawValue because @AppStorage doesn't
+    // support RawRepresentable enums directly.
+    @AppStorage("searchSortMode") private var sortModeRaw: String = SortMode.relevance.rawValue
+    private var sortMode: SortMode {
+        SortMode(rawValue: sortModeRaw) ?? .relevance
+    }
+
+    // Progressive reveal: engine returns every matching result, UI windows to
+    // `initialVisibleCount` until the user taps "Show all N matching results".
+    private let initialVisibleCount = 50
+    @State private var visibleCount: Int = 50
 
     // Post-search upgrade flow (free tier)
     @State private var hasCompletedFirstSearch = false
@@ -686,9 +703,12 @@ struct SearchView: View {
     // MARK: - Results Grid (Masonry Layout)
 
     private func resultsGrid(results: [SearchResult]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let sorted = applySort(results, mode: sortMode)
+        let visible = Array(sorted.prefix(visibleCount))
+        let hasMore = results.count > visible.count
+        return VStack(alignment: .leading, spacing: 0) {
             // Location fallback banner
-            if let summary = filterSummary, !results.isEmpty {
+            if let summary = filterSummary, !sorted.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "mappin.circle.fill")
                         .font(.footnote)
@@ -708,7 +728,7 @@ struct SearchView: View {
                 upgradeBanner
             }
 
-            // Result summary
+            // Result summary + sort toggle
             HStack {
                 Text("\(results.count) \(results.count == 1 ? "result" : "results")")
                     .font(.footnote.weight(.medium))
@@ -719,29 +739,68 @@ struct SearchView: View {
                         .foregroundStyle(Celestial.Colors.outline)
                 }
                 Spacer()
+                Picker("Sort", selection: Binding(
+                    get: { sortMode },
+                    set: { sortModeRaw = $0.rawValue }
+                )) {
+                    Text("Relevance").tag(SortMode.relevance)
+                    Text("Recent").tag(SortMode.recent)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 180)
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
             .padding(.bottom, 8)
 
-            let groups = ResultGrouper.groupByMonth(results: results)
-            ForEach(groups) { group in
-                HStack {
-                    Text(group.label.uppercased())
-                        .font(.caption.weight(.medium))
-                        .tracking(1.5)
-                        .foregroundStyle(Celestial.Colors.amber)
-                    Spacer()
-                    Text("\(group.results.count) \(group.results.count == 1 ? "result" : "results")")
-                        .font(.footnote)
-                        .foregroundStyle(Celestial.Colors.outline)
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 20)
-                .padding(.bottom, 10)
+            if sortMode == .recent {
+                let groups = ResultGrouper.groupByMonth(results: visible)
+                ForEach(groups) { group in
+                    HStack {
+                        Text(group.label.uppercased())
+                            .font(.caption.weight(.medium))
+                            .tracking(1.5)
+                            .foregroundStyle(Celestial.Colors.amber)
+                        Spacer()
+                        Text("\(group.results.count) \(group.results.count == 1 ? "result" : "results")")
+                            .font(.footnote)
+                            .foregroundStyle(Celestial.Colors.outline)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 20)
+                    .padding(.bottom, 10)
 
-                masonryGrid(results: group.results)
+                    masonryGrid(results: group.results)
+                        .padding(.horizontal, 12)
+                }
+            } else {
+                masonryGrid(results: visible)
                     .padding(.horizontal, 12)
+                    .padding(.top, 10)
+            }
+
+            if hasMore {
+                Button {
+                    Haptics.light()
+                    visibleCount = results.count
+                } label: {
+                    Text("Show all \(results.count) matching results")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Celestial.Colors.primary)
+                }
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private func applySort(_ input: [SearchResult], mode: SortMode) -> [SearchResult] {
+        switch mode {
+        case .relevance:
+            return input
+        case .recent:
+            return input.sorted {
+                ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast)
             }
         }
     }
@@ -810,12 +869,13 @@ struct SearchView: View {
         Haptics.light()
         isSearching = true
         searchError = nil
+        visibleCount = initialVisibleCount
         let query = searchText
         let startTime = CFAbsoluteTimeGetCurrent()
 
         Task {
             do {
-                let response = try await searchEngine.search(query: query, topK: 50)
+                let response = try await searchEngine.search(query: query)
                 results = response.results
                 fallbackResults = response.fallbackResults
                 filterSummary = response.filtersApplied

@@ -79,7 +79,7 @@ class SurpriseQueries {
 
         for query in candidates {
             do {
-                let response = try await searchEngine.search(query: query, topK: 3)
+                let response = try await searchEngine.search(query: query)
                 if !response.results.isEmpty {
                     valid.append(query)
                 }

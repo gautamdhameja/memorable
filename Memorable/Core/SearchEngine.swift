@@ -191,14 +191,14 @@ class SearchEngine {
 
     // MARK: - Search
 
-    func search(query: String, topK: Int = 50) async throws -> SearchResponse {
+    func search(query: String) async throws -> SearchResponse {
         if !isIndexLoaded {
             try loadIndex()
         }
 
         #if DEBUG
         let searchStart = CFAbsoluteTimeGetCurrent()
-        logger.info("[SearchEngine] Search query: '\(query)', topK: \(topK)")
+        logger.info("[SearchEngine] Search query: '\(query)'")
         #endif
 
         var hints = await QueryParser.parse(query: query)
@@ -218,7 +218,7 @@ class SearchEngine {
             }
         }
 
-        let response = try hybridSearch(hints: hints, topK: topK)
+        let response = try hybridSearch(hints: hints)
 
         #if DEBUG
         logger.info("[SearchEngine] Search completed in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - searchStart))s, \(response.results.count) results")
@@ -227,8 +227,21 @@ class SearchEngine {
         return response
     }
 
+    /// A "pure location" query is one whose entire meaning is the place name:
+    /// either the parser explicitly flagged it non-visual, or the parser's
+    /// fallback auto-filled the visual query from the location name (so
+    /// `textQuery == locationHint.lowercased()`). In either case we skip CLIP
+    /// ranking entirely and return every matching photo sorted by date, which
+    /// is what the user actually wants for "San Diego", "California", etc.
+    private func isPureLocationQuery(_ hints: QueryHints) -> Bool {
+        if !hints.hasVisualQuery { return true }
+        if let loc = hints.locationHint?.lowercased(), hints.textQuery == loc {
+            return true
+        }
+        return false
+    }
 
-    func hybridSearch(hints: QueryHints, topK: Int = 50) throws -> SearchResponse {
+    func hybridSearch(hints: QueryHints) throws -> SearchResponse {
         let (ids, localIds, photoDates, photoLats, photoLons, photoOcrTexts,
              pCities, pStates, pCountries, pLocNames, photoLabels, matrix, count,
              vIds, vLocalIds, vDates, vLats, vLons, vPositions,
@@ -339,8 +352,10 @@ class SearchEngine {
             return SearchResponse(results: [], fallbackResults: fallbackResults, filtersApplied: summary)
         }
 
-        // No visual content → return all candidates sorted by date
-        if !hints.hasVisualQuery {
+        // Pure-location query (explicit or auto-filled): skip CLIP ranking and
+        // return every matching photo sorted by date — the user wants all of
+        // them, not a CLIP-ranked top-K against a meaningless city-name embedding.
+        if isPureLocationQuery(hints) {
             return locationOnlyResults(
                 candidateMask: candidateMask, ids: ids, localIds: localIds,
                 dates: photoDates, count: count,
@@ -553,7 +568,9 @@ class SearchEngine {
         // =====================================================================
 
         let sorted = scores.enumerated().sorted { $0.element > $1.element }
-        let photoResults = sorted.prefix(topK).filter { $0.element >= minimumScoreThreshold }.map { (index, score) in
+        // No topK cap here — return every above-threshold candidate. The UI
+        // layer windows to an initial visible count and lets the user expand.
+        let photoResults = sorted.filter { $0.element >= minimumScoreThreshold }.map { (index, score) in
             SearchResult(id: ids[index], score: score, localIdentifier: localIds[index], creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
         }
 
@@ -570,7 +587,7 @@ class SearchEngine {
             }
             return a.score > b.score
         }
-        let finalResults = Array(allResults.prefix(topK))
+        let finalResults = allResults
 
         #if DEBUG
         let dateFormatter = DateFormatter()
@@ -706,12 +723,10 @@ class SearchEngine {
         results.sort { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
 
         #if DEBUG
-        logger.info("[SearchEngine] locationOnlyResults: \(results.count) total before cap, returning \(min(results.count, SearchConfig.locationResultsCap))")
+        logger.info("[SearchEngine] locationOnlyResults: returning \(results.count) results")
         #endif
 
-        let capped = Array(results.prefix(SearchConfig.locationResultsCap))
-
-        return SearchResponse(results: capped, fallbackResults: [], filtersApplied: nil)
+        return SearchResponse(results: results, fallbackResults: [], filtersApplied: nil)
     }
 
     private func computeFallbackResults(
