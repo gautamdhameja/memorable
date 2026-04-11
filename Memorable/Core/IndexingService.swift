@@ -665,9 +665,16 @@ class IndexingService: ObservableObject {
 
     private func launchGeocoding() {
         guard geocodingTask == nil else { return }
-        geocodingTask = Task.detached(priority: .utility) { [weak self] in
-            await self?.geocodeIndexedMedia()
-            await MainActor.run { self?.geocodingTask = nil }
+        // Strong [self] capture is safe here because IndexingService is
+        // @MainActor-isolated (implicitly Sendable), and the retain cycle
+        // (self → task → self) is broken at the end when we nil the task.
+        // Strong capture also avoids Swift 6's ban on capturing a mutable
+        // `weak var self` across a @Sendable concurrency boundary.
+        geocodingTask = Task.detached(priority: .utility) { [self] in
+            await geocodeIndexedMedia()
+            await MainActor.run {
+                self.geocodingTask = nil
+            }
         }
     }
 
@@ -694,7 +701,7 @@ class IndexingService: ObservableObject {
                   !batch.isEmpty else { break }
             let actionable = batch.filter { !failedIds.contains($0.localIdentifier) }
             guard !actionable.isEmpty else { break }
-            for (i, (localId, lat, lon)) in actionable.enumerated() {
+            for (localId, lat, lon) in actionable {
                 if Task.isCancelled { return }
                 if let loc = await reverseGeocoder.reverseGeocode(latitude: lat, longitude: lon) {
                     try? database.updatePhotoLocationStrings(

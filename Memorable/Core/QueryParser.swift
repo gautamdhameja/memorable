@@ -7,6 +7,13 @@ struct QueryHints {
     var locationHint: String?
     var locationCoordinate: (lat: Double, lon: Double)?
     var locationRadiusKm: Double?
+    // Canonical placemark fields from forward-geocoding `locationHint`.
+    // Populated by SearchEngine after parsing, nil until then. Used by
+    // LocationMatcher to canonicalise matches (e.g. "california" → "CA").
+    var locationLocality: String?
+    var locationSubAdmin: String?
+    var locationAdminArea: String?
+    var locationCountryName: String?
     var seasonHint: Season?
     var negativeTerms: [String] = []
     var timeOfDayHours: (start: Int, end: Int)?

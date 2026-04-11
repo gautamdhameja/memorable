@@ -208,8 +208,12 @@ class SearchEngine {
             if let geo = await geocodeLocation(locationName) {
                 hints.locationCoordinate = (geo.lat, geo.lon)
                 hints.locationRadiusKm = geo.radiusKm
+                hints.locationLocality = geo.locality
+                hints.locationSubAdmin = geo.subAdmin
+                hints.locationAdminArea = geo.adminArea
+                hints.locationCountryName = geo.country
                 #if DEBUG
-                logger.info("[SearchEngine] Geocoded '\(locationName)' → \(geo.lat), \(geo.lon), radius: \(geo.radiusKm)km")
+                logger.info("[SearchEngine] Geocoded '\(locationName)' → \(geo.lat), \(geo.lon), radius: \(geo.radiusKm)km, locality=\(geo.locality ?? "nil"), admin=\(geo.adminArea ?? "nil"), country=\(geo.country ?? "nil")")
                 #endif
             }
         }
@@ -267,25 +271,27 @@ class SearchEngine {
         // Tier 1: String matching on reverse-geocoded location strings (preferred).
         // Tier 2: GPS distance fallback for photos not yet reverse-geocoded.
         var targetLoc: CLLocation?
-        if let locationQuery = hints.locationHint {
-            let queryLower = locationQuery.lowercased()
-
-            // Prepare GPS fallback coordinates
-            if let coord = hints.locationCoordinate, let radiusKm = hints.locationRadiusKm {
+        let locationMatcher: LocationMatcher.Matcher? = hints.locationHint.map { locationQuery in
+            LocationMatcher.makeMatcher(
+                queryLower: locationQuery.lowercased(),
+                locality: hints.locationLocality,
+                adminArea: hints.locationAdminArea,
+                country: hints.locationCountryName
+            )
+        }
+        if hints.locationHint != nil {
+            // Prepare GPS fallback coordinates (only meaningful if we also
+            // have a radius; the Tier 2 branch re-checks radius per photo).
+            if let coord = hints.locationCoordinate, hints.locationRadiusKm != nil {
                 targetLoc = CLLocation(latitude: coord.lat, longitude: coord.lon)
             }
 
             for i in 0..<count {
                 guard candidateMask[i] else { continue }
 
-                // Tier 1: String matching on reverse-geocoded location strings
+                // Tier 1: canonical/substring match on reverse-geocoded strings
                 if let city = pCities[i], !city.isEmpty {
-                    let matched =
-                        city.lowercased().contains(queryLower) ||
-                        (pStates[i]?.lowercased().contains(queryLower) ?? false) ||
-                        (pCountries[i]?.lowercased().contains(queryLower) ?? false) ||
-                        (pLocNames[i]?.lowercased().contains(queryLower) ?? false)
-                    if !matched {
+                    if let match = locationMatcher, !match(pCities[i], pStates[i], pCountries[i], pLocNames[i]) {
                         candidateMask[i] = false
                     }
                     continue
@@ -310,7 +316,6 @@ class SearchEngine {
         logger.info("[SearchEngine] Filter: \(candidateCount)/\(count) photos passed hard filters")
         if hints.locationCoordinate != nil {
             let withGPS = (0..<count).filter { photoLats[$0] != nil && photoLons[$0] != nil }.count
-            let passedDate = hints.dateRange == nil ? count : (0..<count).filter { candidateMask[$0] || photoLats[$0] == nil }.count
             logger.info("[SearchEngine] GPS stats: \(withGPS)/\(count) photos have GPS, \(candidateCount) passed all filters")
         }
         #endif
@@ -501,15 +506,11 @@ class SearchEngine {
                 if let dateRange = hints.dateRange {
                     guard let videoDate = vDates[i], videoDate >= dateRange.start && videoDate <= dateRange.end else { continue }
                 }
-                if let locationQuery = hints.locationHint {
-                    let queryLower = locationQuery.lowercased()
+                if hints.locationHint != nil {
                     if let city = vCities[i], !city.isEmpty {
-                        let matched =
-                            city.lowercased().contains(queryLower) ||
-                            (vStates[i]?.lowercased().contains(queryLower) ?? false) ||
-                            (vCountries[i]?.lowercased().contains(queryLower) ?? false) ||
-                            (vLocNames[i]?.lowercased().contains(queryLower) ?? false)
-                        if !matched { continue }
+                        if let match = locationMatcher, !match(vCities[i], vStates[i], vCountries[i], vLocNames[i]) {
+                            continue
+                        }
                     } else if let target = targetLoc, let radiusKm = hints.locationRadiusKm,
                               let lat = vLats[i], let lon = vLons[i] {
                         let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
@@ -666,20 +667,25 @@ class SearchEngine {
             ))
         }
 
+        let locationMatcher: LocationMatcher.Matcher? = hints.locationHint.map { locationQuery in
+            LocationMatcher.makeMatcher(
+                queryLower: locationQuery.lowercased(),
+                locality: hints.locationLocality,
+                adminArea: hints.locationAdminArea,
+                country: hints.locationCountryName
+            )
+        }
+
         var seenVideoIds = Set<String>()
         for i in 0..<vCount {
             if let dateRange = hints.dateRange {
                 guard let videoDate = vDates[i], videoDate >= dateRange.start && videoDate <= dateRange.end else { continue }
             }
-            if let locationQuery = hints.locationHint {
-                let queryLower = locationQuery.lowercased()
-                if let city = vCities[i] {
-                    let matched =
-                        city.lowercased().contains(queryLower) ||
-                        (vStates[i]?.lowercased().contains(queryLower) ?? false) ||
-                        (vCountries[i]?.lowercased().contains(queryLower) ?? false) ||
-                        (vLocNames[i]?.lowercased().contains(queryLower) ?? false)
-                    if !matched { continue }
+            if hints.locationHint != nil {
+                if vCities[i] != nil {
+                    if let match = locationMatcher, !match(vCities[i], vStates[i], vCountries[i], vLocNames[i]) {
+                        continue
+                    }
                 } else if let target = targetLoc, let radiusKm = hints.locationRadiusKm,
                           let lat = vLats[i], let lon = vLons[i] {
                     let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
@@ -788,7 +794,17 @@ class SearchEngine {
         }
     }
 
-    private func geocodeLocation(_ name: String) async -> (lat: Double, lon: Double, radiusKm: Double)? {
+    private struct GeocodedLocation {
+        let lat: Double
+        let lon: Double
+        let radiusKm: Double
+        let locality: String?
+        let subAdmin: String?
+        let adminArea: String?
+        let country: String?
+    }
+
+    private func geocodeLocation(_ name: String) async -> GeocodedLocation? {
         await withCheckedContinuation { continuation in
             geocoder.geocodeAddressString(name) { placemarks, error in
                 guard let placemark = placemarks?.first, let location = placemark.location else {
@@ -820,7 +836,15 @@ class SearchEngine {
                     radiusKm = hierarchyRadiusKm
                 }
 
-                continuation.resume(returning: (location.coordinate.latitude, location.coordinate.longitude, radiusKm))
+                continuation.resume(returning: GeocodedLocation(
+                    lat: location.coordinate.latitude,
+                    lon: location.coordinate.longitude,
+                    radiusKm: radiusKm,
+                    locality: placemark.locality,
+                    subAdmin: placemark.subAdministrativeArea,
+                    adminArea: placemark.administrativeArea,
+                    country: placemark.country
+                ))
             }
         }
     }
