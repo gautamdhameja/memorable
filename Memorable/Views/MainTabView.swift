@@ -7,6 +7,13 @@ struct MainTabView: View {
 
     @State private var selectedTab = 0
 
+    init(indexingService: IndexingService, searchEngine: SearchEngine, captionService: PhotoCaptionService) {
+        self.indexingService = indexingService
+        self.searchEngine = searchEngine
+        self.captionService = captionService
+        UITabBarItem.appearance().badgeColor = UIColor(Celestial.Colors.emerald)
+    }
+
     var body: some View {
         TabView(selection: $selectedTab) {
             SearchView(indexingService: indexingService, searchEngine: searchEngine, captionService: captionService)

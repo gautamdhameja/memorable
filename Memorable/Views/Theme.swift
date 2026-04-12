@@ -54,6 +54,9 @@ enum Celestial {
         // Warm accent (amber)
         static let amber = Color(red: 1.0, green: 0.718, blue: 0.302)           // #FFB74D
         static let amberDim = Color(red: 0.90, green: 0.62, blue: 0.20)          // dimmer for subtle use
+
+        // Success / positive indicator
+        static let emerald = Color(red: 0.204, green: 0.827, blue: 0.600)       // #34D399
     }
 
     // MARK: - Gradients
