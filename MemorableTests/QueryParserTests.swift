@@ -25,7 +25,8 @@ final class QueryParserTests: XCTestCase {
 
     func testFoodOnAPlate() {
         let hints = QueryParserFallback.parse(query: "food on a plate")
-        XCTAssertTrue(hints.textQuery.contains("food"))
+        XCTAssertTrue(hints.textQuery.contains("food"), "textQuery should contain 'food', got: \(hints.textQuery)")
+        XCTAssertTrue(hints.textQuery.contains("plate"), "textQuery should contain 'plate', got: \(hints.textQuery)")
         XCTAssertNil(hints.locationHint)
         XCTAssertTrue(hints.hasVisualQuery)
     }

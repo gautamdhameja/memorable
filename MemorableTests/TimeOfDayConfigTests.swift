@@ -14,6 +14,7 @@ final class TimeOfDayConfigTests: XCTestCase {
         let result = TimeOfDayConfig.detect(in: "morning coffee")
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.start, 5)
+        XCTAssertEqual(result?.end, 10)
     }
 
     func testLunch() {
@@ -34,6 +35,7 @@ final class TimeOfDayConfigTests: XCTestCase {
         let result = TimeOfDayConfig.detect(in: "sunset over ocean")
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.start, 18)
+        XCTAssertEqual(result?.end, 22)
     }
 
     func testNight() {
@@ -47,12 +49,14 @@ final class TimeOfDayConfigTests: XCTestCase {
         let result = TimeOfDayConfig.detect(in: "late night snack")
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.start, 20)
+        XCTAssertEqual(result?.end, 4)
     }
 
     func testSunrise() {
         let result = TimeOfDayConfig.detect(in: "sunrise hike")
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.start, 5)
+        XCTAssertEqual(result?.end, 10)
     }
 
     func testBrunch() {

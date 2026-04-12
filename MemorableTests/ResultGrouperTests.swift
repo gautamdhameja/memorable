@@ -114,8 +114,10 @@ final class ResultGrouperTests: XCTestCase {
             makeResult(id: "2", date: jan),
         ]
         let groups = ResultGrouper.groupByMonth(results: results)
-        // February appears first in input, so it should be the first group
-        XCTAssertTrue(groups[0].label.contains("February"))
+        // February appears first in input, so it should be the first group.
+        // Verify via result IDs to avoid locale-sensitive label checks.
+        XCTAssertEqual(groups[0].results.first?.id, "1")
+        XCTAssertEqual(groups[1].results.first?.id, "2")
     }
 
     // MARK: - Label Format

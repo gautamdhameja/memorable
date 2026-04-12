@@ -70,8 +70,10 @@ final class TemporalParserTests: XCTestCase {
         let hints = QueryParserFallback.parse(query: "beach recently")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertEqual(hints.textQuery, "beach")
+        // Source defines "recently" as daysAgo(14). The diff includes the
+        // current time-of-day offset (0 to <1 day), so expect 14.0 to 15.0.
         let daysDiff = Date().timeIntervalSince(hints.dateRange!.start) / 86400
-        XCTAssertTrue(daysDiff >= 13 && daysDiff <= 15)
+        XCTAssertEqual(daysDiff, 14.0, accuracy: 1.0)
     }
 
     func testPastFewDays() {

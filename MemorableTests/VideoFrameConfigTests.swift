@@ -15,8 +15,13 @@ final class VideoFrameConfigTests: XCTestCase {
         XCTAssertEqual(VideoFrameConfig.frameCount(forDuration: 120.0), 5)
     }
 
+    func testJustUnder10Seconds() {
+        // < 10 returns 2 (short)
+        XCTAssertEqual(VideoFrameConfig.frameCount(forDuration: 9.99), 2)
+    }
+
     func testBoundary10Seconds() {
-        // Exactly 10 seconds should be medium
+        // Exactly 10 seconds: >= 10 (not < 10), falls to <= 60 branch (medium)
         XCTAssertEqual(VideoFrameConfig.frameCount(forDuration: 10.0), 3)
     }
 
