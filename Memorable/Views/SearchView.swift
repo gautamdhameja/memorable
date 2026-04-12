@@ -986,14 +986,14 @@ struct SearchView: View {
                 // Detect screenshots in background for the media filter
                 let photoResults = response.results.filter { !$0.isVideo }
                 Task.detached {
-                    var ssIds = Set<String>()
-                    for r in photoResults {
-                        if let asset = PhotoLibrary.getAsset(by: r.localIdentifier),
-                           asset.mediaSubtypes.contains(.photoScreenshot) {
-                            ssIds.insert(r.id)
+                    let detected = Set(
+                        photoResults.compactMap { r -> String? in
+                            guard let asset = PhotoLibrary.getAsset(by: r.localIdentifier),
+                                  asset.mediaSubtypes.contains(.photoScreenshot) else { return nil }
+                            return r.id
                         }
-                    }
-                    await MainActor.run { screenshotIds = ssIds }
+                    )
+                    await MainActor.run { screenshotIds = detected }
                 }
 
                 #if DEBUG
