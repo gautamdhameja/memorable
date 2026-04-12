@@ -365,26 +365,27 @@ struct SearchView: View {
     // MARK: - Banners
 
     private var upgradeBanner: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: "sparkles")
-                .font(.footnote)
+                .font(.subheadline)
                 .foregroundStyle(Celestial.Colors.amber)
             Text("Searching \(searchEngine.totalSize) of \(totalLibraryCount) photos")
-                .font(.footnote)
+                .font(.subheadline)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             Spacer()
             Button("Unlock full library") {
                 showUpgrade = true
             }
-            .font(.footnote.weight(.medium))
+            .font(.subheadline.weight(.medium))
             .foregroundStyle(Celestial.Colors.primary)
             Button {
                 upgradeBannerDismissed = true
                 searchesSinceDismiss = 0
             } label: {
                 Image(systemName: "xmark")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(Celestial.Colors.outline)
+                    .padding(6)
             }
         }
         .padding(.horizontal, 16)
@@ -764,74 +765,80 @@ struct SearchView: View {
         let visible = Array(filtered.prefix(visibleCount))
         let hasMore = filtered.count > visible.count
         return VStack(alignment: .leading, spacing: 0) {
-            // Location fallback banner
-            if let summary = filterSummary, !filtered.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(Celestial.Colors.amber)
-                    let location = summary.locationDescription ?? ""
-                    Text("Showing all photos\(location.isEmpty ? "" : " near \(location)")")
-                        .font(.footnote)
+            // Controls panel (visually distinct from the results grid)
+            VStack(spacing: 0) {
+                // Location fallback banner
+                if let summary = filterSummary, !filtered.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(Celestial.Colors.amber)
+                        let location = summary.locationDescription ?? ""
+                        Text("Showing all photos\(location.isEmpty ? "" : " near \(location)")")
+                            .font(.footnote)
+                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                }
+
+                // Upgrade banner for free tier (after first successful search)
+                if !proManager.isPro && indexingService.hitFreeLimit && hasCompletedFirstSearch && !upgradeBannerDismissed {
+                    upgradeBanner
+                        .padding(.bottom, 10)
+                }
+
+                // Result summary + sort toggle
+                HStack {
+                    Text("\(filtered.count) \(filtered.count == 1 ? "result" : "results")")
+                        .font(.footnote.weight(.medium))
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    if searchTimeMs > 0 {
+                        Text("in \(searchTimeMs)ms")
+                            .font(.caption)
+                            .foregroundStyle(Celestial.Colors.outline)
+                    }
+                    Spacer()
+                    Picker("Sort", selection: Binding(
+                        get: { sortMode },
+                        set: { sortModeRaw = $0.rawValue }
+                    )) {
+                        Text("Relevance").tag(SortMode.relevance)
+                        Text("Recent").tag(SortMode.recent)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 180)
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 14)
-            }
+                .padding(.bottom, 12)
 
-            // Upgrade banner for free tier (after first successful search)
-            if !proManager.isPro && indexingService.hitFreeLimit && hasCompletedFirstSearch && !upgradeBannerDismissed {
-                upgradeBanner
-                    .padding(.bottom, 10)
-            }
-
-            // Result summary + sort toggle
-            HStack {
-                Text("\(filtered.count) \(filtered.count == 1 ? "result" : "results")")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                if searchTimeMs > 0 {
-                    Text("in \(searchTimeMs)ms")
-                        .font(.caption)
-                        .foregroundStyle(Celestial.Colors.outline)
-                }
-                Spacer()
-                Picker("Sort", selection: Binding(
-                    get: { sortMode },
-                    set: { sortModeRaw = $0.rawValue }
-                )) {
-                    Text("Relevance").tag(SortMode.relevance)
-                    Text("Recent").tag(SortMode.recent)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 180)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 14)
-
-            // Media filter chips
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(MediaFilter.allCases, id: \.self) { filter in
-                        let isActive = mediaFilter == filter
-                        Button {
-                            Haptics.selection()
-                            mediaFilter = filter
-                            visibleCount = initialVisibleCount
-                        } label: {
-                            Text(filter.label)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(isActive ? Celestial.Colors.onPrimaryContainer : Celestial.Colors.onSurfaceVariant)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 7)
-                                .background(isActive ? Celestial.Colors.primaryContainer : Celestial.Colors.surfaceContainerHigh)
-                                .clipShape(Capsule())
+                // Media filter chips
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(MediaFilter.allCases, id: \.self) { filter in
+                            let isActive = mediaFilter == filter
+                            Button {
+                                Haptics.selection()
+                                mediaFilter = filter
+                                visibleCount = initialVisibleCount
+                            } label: {
+                                Text(filter.label)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(isActive ? Celestial.Colors.onPrimaryContainer : Celestial.Colors.onSurfaceVariant)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 7)
+                                    .background(isActive ? Celestial.Colors.primaryContainer : Celestial.Colors.surfaceContainerHigh)
+                                    .clipShape(Capsule())
+                            }
                         }
                     }
+                    .padding(.horizontal, 16)
                 }
-                .padding(.horizontal, 16)
             }
-            .padding(.bottom, 14)
+            .padding(.vertical, 12)
+            .background(Celestial.Colors.surfaceContainerLow.opacity(0.8))
+            .background(.ultraThinMaterial)
+            .padding(.bottom, 10)
 
             if sortMode == .recent {
                 let groups = ResultGrouper.groupByMonth(results: visible)
