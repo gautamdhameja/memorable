@@ -9,14 +9,17 @@ class ModelDownloader: ObservableObject {
     private var observation: NSKeyValueObservation?
 
     func checkAndDownloadModels() {
-        #if DEBUG
-        isDownloaded = true
-        #else
+        // Fast path: if models are already in the app bundle (non-ODR build
+        // or previously cached ODR resources still present), skip the request.
         if Bundle.main.url(forResource: "MobileCLIP2_S4_ImageEncoder", withExtension: "mlmodelc") != nil {
             isDownloaded = true
             return
         }
 
+        // Request via On-Demand Resources. In debug builds Xcode serves the
+        // asset pack from a local server; in production App Store Connect
+        // hosts it. beginAccessingResources is instant when the resources
+        // are already cached, so there is no visible delay on repeat launches.
         let request = NSBundleResourceRequest(tags: ["ml-models"])
         self.resourceRequest = request
         request.loadingPriority = NSBundleResourceRequestLoadingPriorityUrgent
@@ -36,6 +39,5 @@ class ModelDownloader: ObservableObject {
                 }
             }
         }
-        #endif
     }
 }
