@@ -3,14 +3,16 @@ import XCTest
 
 final class TemporalParserTests: XCTestCase {
 
+    private let cal = Calendar.current
+    private var currentYear: Int { cal.component(.year, from: Date()) }
+    private var currentMonth: Int { cal.component(.month, from: Date()) }
+
     // MARK: - Relative Days
 
     func testYesterday() {
         let hints = QueryParserFallback.parse(query: "dog yesterday")
-        XCTAssertNotNil(hints.dateRange, "Should extract date range for 'yesterday'")
+        XCTAssertNotNil(hints.dateRange)
         XCTAssertEqual(hints.textQuery, "dog")
-
-        let cal = Calendar.current
         let yesterday = cal.startOfDay(for: cal.date(byAdding: .day, value: -1, to: Date())!)
         XCTAssertEqual(cal.startOfDay(for: hints.dateRange!.start), yesterday)
     }
@@ -19,25 +21,30 @@ final class TemporalParserTests: XCTestCase {
         let hints = QueryParserFallback.parse(query: "coffee today")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertEqual(hints.textQuery, "coffee")
-
-        let today = Calendar.current.startOfDay(for: Date())
-        XCTAssertEqual(Calendar.current.startOfDay(for: hints.dateRange!.start), today)
+        let today = cal.startOfDay(for: Date())
+        XCTAssertEqual(cal.startOfDay(for: hints.dateRange!.start), today)
     }
 
     func testDayBeforeYesterday() {
         let hints = QueryParserFallback.parse(query: "lunch day before yesterday")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertTrue(hints.textQuery.contains("lunch"))
+        let twoDaysAgo = cal.startOfDay(for: cal.date(byAdding: .day, value: -2, to: Date())!)
+        XCTAssertEqual(cal.startOfDay(for: hints.dateRange!.start), twoDaysAgo)
+    }
+
+    func testTheOtherDay() {
+        let hints = QueryParserFallback.parse(query: "coffee the other day")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertTrue(hints.dateRange!.start < Date())
     }
 
     // MARK: - Relative Weeks
 
     func testLastWeek() {
         let hints = QueryParserFallback.parse(query: "dinner last week")
-        XCTAssertNotNil(hints.dateRange, "Should extract date range for 'last week'")
+        XCTAssertNotNil(hints.dateRange)
         XCTAssertEqual(hints.textQuery, "dinner")
-
-        // Last week should be in the past
         XCTAssertTrue(hints.dateRange!.end < Date())
     }
 
@@ -47,14 +54,29 @@ final class TemporalParserTests: XCTestCase {
         XCTAssertEqual(hints.textQuery, "meeting")
     }
 
+    func testLastWeekend() {
+        let hints = QueryParserFallback.parse(query: "brunch last weekend")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertTrue(hints.textQuery.contains("brunch"))
+        XCTAssertTrue(hints.dateRange!.start < Date())
+    }
+
+    func testTwoWeeksAgo() {
+        let hints = QueryParserFallback.parse(query: "photos two weeks ago")
+        XCTAssertNotNil(hints.dateRange)
+    }
+
     func testRecently() {
         let hints = QueryParserFallback.parse(query: "beach recently")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertEqual(hints.textQuery, "beach")
-
-        // Recently should cover roughly last 14 days
         let daysDiff = Date().timeIntervalSince(hints.dateRange!.start) / 86400
         XCTAssertTrue(daysDiff >= 13 && daysDiff <= 15)
+    }
+
+    func testPastFewDays() {
+        let hints = QueryParserFallback.parse(query: "food past few days")
+        XCTAssertNotNil(hints.dateRange)
     }
 
     // MARK: - Relative Months
@@ -70,14 +92,28 @@ final class TemporalParserTests: XCTestCase {
         let hints = QueryParserFallback.parse(query: "selfie this month")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertEqual(hints.textQuery, "selfie")
-
-        let cal = Calendar.current
         let firstOfMonth = cal.date(from: DateComponents(
-            year: cal.component(.year, from: Date()),
-            month: cal.component(.month, from: Date()),
-            day: 1
+            year: currentYear, month: currentMonth, day: 1
         ))!
         XCTAssertEqual(cal.startOfDay(for: hints.dateRange!.start), firstOfMonth)
+    }
+
+    func testTwoMonthsAgo() {
+        let hints = QueryParserFallback.parse(query: "trip two months ago")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertTrue(hints.textQuery.contains("trip"))
+    }
+
+    func testCoupleMonthsAgo() {
+        let hints = QueryParserFallback.parse(query: "food couple months ago")
+        XCTAssertNotNil(hints.dateRange)
+    }
+
+    func testEarlierThisYear() {
+        let hints = QueryParserFallback.parse(query: "earlier this year")
+        XCTAssertNotNil(hints.dateRange)
+        let startYear = cal.component(.year, from: hints.dateRange!.start)
+        XCTAssertEqual(startYear, currentYear)
     }
 
     // MARK: - Relative Years
@@ -86,52 +122,91 @@ final class TemporalParserTests: XCTestCase {
         let hints = QueryParserFallback.parse(query: "vacation last year")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertEqual(hints.textQuery, "vacation")
-
-        let lastYear = Calendar.current.component(.year, from: Date()) - 1
-        let startYear = Calendar.current.component(.year, from: hints.dateRange!.start)
-        XCTAssertEqual(startYear, lastYear)
+        let startYear = cal.component(.year, from: hints.dateRange!.start)
+        XCTAssertEqual(startYear, currentYear - 1)
     }
 
     func testThisYear() {
         let hints = QueryParserFallback.parse(query: "photos this year")
         XCTAssertNotNil(hints.dateRange)
+        let startYear = cal.component(.year, from: hints.dateRange!.start)
+        XCTAssertEqual(startYear, currentYear)
+    }
 
-        let thisYear = Calendar.current.component(.year, from: Date())
-        let startYear = Calendar.current.component(.year, from: hints.dateRange!.start)
-        XCTAssertEqual(startYear, thisYear)
+    func testTwoYearsAgo() {
+        let hints = QueryParserFallback.parse(query: "wedding two years ago")
+        XCTAssertNotNil(hints.dateRange)
+        let startYear = cal.component(.year, from: hints.dateRange!.start)
+        XCTAssertEqual(startYear, currentYear - 2)
+    }
+
+    func testFewYearsAgo() {
+        let hints = QueryParserFallback.parse(query: "trip a few years ago")
+        XCTAssertNotNil(hints.dateRange)
+        let startYear = cal.component(.year, from: hints.dateRange!.start)
+        XCTAssertTrue(startYear <= currentYear - 2)
     }
 
     // MARK: - Seasons
 
     func testLastSummer() {
         let hints = QueryParserFallback.parse(query: "beach last summer")
-        XCTAssertNotNil(hints.dateRange, "Should extract date range for 'last summer'")
+        XCTAssertNotNil(hints.dateRange)
         XCTAssertEqual(hints.textQuery, "beach")
-
-        let lastYear = Calendar.current.component(.year, from: Date()) - 1
-        let startMonth = Calendar.current.component(.month, from: hints.dateRange!.start)
-        let startYear = Calendar.current.component(.year, from: hints.dateRange!.start)
-        XCTAssertEqual(startMonth, 6, "Last summer should start in June")
-        XCTAssertEqual(startYear, lastYear)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 6)
+        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), currentYear - 1)
     }
 
-    func testThisWinter() {
+    func testThisWinterCrossesYearBoundary() {
         let hints = QueryParserFallback.parse(query: "snow this winter")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertEqual(hints.textQuery, "snow")
-        // Winter spans Dec-Feb across year boundary
-        XCTAssertEqual(Calendar.current.component(.month, from: hints.dateRange!.start), 12)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 12)
+    }
+
+    func testLastFall() {
+        let hints = QueryParserFallback.parse(query: "leaves last fall")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 9)
+    }
+
+    func testLastAutumnSameAsFall() {
+        let hints = QueryParserFallback.parse(query: "leaves last autumn")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 9)
+    }
+
+    func testLastSpring() {
+        let hints = QueryParserFallback.parse(query: "flowers last spring")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 3)
     }
 
     func testSeasonWithYear() {
         let hints = QueryParserFallback.parse(query: "flowers spring 2023")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertTrue(hints.textQuery.contains("flowers"))
+        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), 2023)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 3)
+    }
 
-        let startYear = Calendar.current.component(.year, from: hints.dateRange!.start)
-        let startMonth = Calendar.current.component(.month, from: hints.dateRange!.start)
-        XCTAssertEqual(startYear, 2023)
-        XCTAssertEqual(startMonth, 3, "Spring should start in March")
+    func testSummer2024() {
+        let hints = QueryParserFallback.parse(query: "beach summer 2024")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), 2024)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 6)
+        let endMonth = cal.component(.month, from: hints.dateRange!.end)
+        XCTAssertTrue(endMonth == 8 || endMonth == 9, "Summer should end in Aug/Sep")
+    }
+
+    func testWinter2023CrossesYearBoundary() {
+        let hints = QueryParserFallback.parse(query: "snow winter 2023")
+        XCTAssertNotNil(hints.dateRange)
+        // Winter 2023: Dec 2022 to Feb 2023
+        let startYear = cal.component(.year, from: hints.dateRange!.start)
+        let startMonth = cal.component(.month, from: hints.dateRange!.start)
+        XCTAssertEqual(startMonth, 12)
+        XCTAssertEqual(startYear, 2022)
     }
 
     // MARK: - Holidays
@@ -140,23 +215,69 @@ final class TemporalParserTests: XCTestCase {
         let hints = QueryParserFallback.parse(query: "christmas dinner")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertTrue(hints.textQuery.contains("dinner"))
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 12)
+    }
 
-        let month = Calendar.current.component(.month, from: hints.dateRange!.start)
-        XCTAssertEqual(month, 12, "Christmas should be in December")
+    func testLastChristmas() {
+        let hints = QueryParserFallback.parse(query: "presents last christmas")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 12)
+    }
+
+    func testXmasAlias() {
+        let hints = QueryParserFallback.parse(query: "tree xmas")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 12)
+    }
+
+    func testChristmasEve() {
+        let hints = QueryParserFallback.parse(query: "gifts christmas eve")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 12)
     }
 
     func testHalloween() {
         let hints = QueryParserFallback.parse(query: "costume halloween")
         XCTAssertNotNil(hints.dateRange)
-
-        let month = Calendar.current.component(.month, from: hints.dateRange!.start)
-        XCTAssertTrue(month == 10 || month == 11, "Halloween should be late October/early November")
+        let month = cal.component(.month, from: hints.dateRange!.start)
+        XCTAssertTrue(month == 10 || month == 11)
     }
 
-    func testNewYears() {
+    func testNewYearsEve() {
         let hints = QueryParserFallback.parse(query: "fireworks new years eve")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertTrue(hints.textQuery.contains("fireworks"))
+    }
+
+    func testNewYear() {
+        let hints = QueryParserFallback.parse(query: "party new year")
+        XCTAssertNotNil(hints.dateRange)
+    }
+
+    func testThanksgiving() {
+        let hints = QueryParserFallback.parse(query: "food thanksgiving")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 11)
+    }
+
+    func testValentinesDay() {
+        let hints = QueryParserFallback.parse(query: "flowers valentines day")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 2)
+    }
+
+    func testEasterApproximateRange() {
+        let hints = QueryParserFallback.parse(query: "eggs easter")
+        XCTAssertNotNil(hints.dateRange)
+        let month = cal.component(.month, from: hints.dateRange!.start)
+        XCTAssertTrue(month >= 3 && month <= 4, "Easter should be in March or April range")
+    }
+
+    func testChristmasWithYear() {
+        let hints = QueryParserFallback.parse(query: "gifts christmas 2023")
+        XCTAssertNotNil(hints.dateRange)
+        let year = cal.component(.year, from: hints.dateRange!.start)
+        XCTAssertEqual(year, 2023)
     }
 
     // MARK: - Named Months
@@ -164,18 +285,31 @@ final class TemporalParserTests: XCTestCase {
     func testNamedMonth() {
         let hints = QueryParserFallback.parse(query: "trip in march")
         XCTAssertNotNil(hints.dateRange)
-        let startMonth = Calendar.current.component(.month, from: hints.dateRange!.start)
-        XCTAssertEqual(startMonth, 3)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 3)
     }
 
     func testNamedMonthWithYear() {
         let hints = QueryParserFallback.parse(query: "wedding june 2024")
         XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 6)
+        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), 2024)
+    }
 
-        let startMonth = Calendar.current.component(.month, from: hints.dateRange!.start)
-        let startYear = Calendar.current.component(.year, from: hints.dateRange!.start)
-        XCTAssertEqual(startMonth, 6)
-        XCTAssertEqual(startYear, 2024)
+    func testAbbreviatedMonth() {
+        let hints = QueryParserFallback.parse(query: "trip jan 2024")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 1)
+        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), 2024)
+    }
+
+    func testBareMonthSelectsMostRecentPast() {
+        let hints = QueryParserFallback.parse(query: "party january")
+        XCTAssertNotNil(hints.dateRange)
+        let startMonth = cal.component(.month, from: hints.dateRange!.start)
+        XCTAssertEqual(startMonth, 1)
+        // If we're past January, it should be this year's Jan; if in Jan, last year's
+        let expectedYear = currentMonth > 1 ? currentYear : currentYear - 1
+        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), expectedYear)
     }
 
     // MARK: - Bare Year
@@ -184,34 +318,70 @@ final class TemporalParserTests: XCTestCase {
         let hints = QueryParserFallback.parse(query: "vacation 2023")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertTrue(hints.textQuery.contains("vacation"))
+        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), 2023)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 1)
+        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.end), 2023)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.end), 12)
+    }
 
-        let startYear = Calendar.current.component(.year, from: hints.dateRange!.start)
-        XCTAssertEqual(startYear, 2023)
+    func testBareYear2024() {
+        let hints = QueryParserFallback.parse(query: "photos 2024")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), 2024)
+    }
+
+    func testYearBelowRangeNotMatched() {
+        let hints = QueryParserFallback.parse(query: "photos 1999")
+        // "1999" doesn't match the /\b(20\d{2})\b/ pattern
+        XCTAssertNil(hints.dateRange)
+    }
+
+    // MARK: - Longest Match Priority
+
+    func testLongestMatchFirst() {
+        // "last christmas" (14 chars) should match before "last" alone or "christmas" alone
+        let hints = QueryParserFallback.parse(query: "gifts last christmas")
+        XCTAssertNotNil(hints.dateRange)
+        let month = cal.component(.month, from: hints.dateRange!.start)
+        XCTAssertEqual(month, 12, "Should match 'last christmas', not 'last' alone")
+    }
+
+    func testChristmasDayVsChristmas() {
+        // "christmas day" (13 chars) is longer than "christmas" (9 chars)
+        let hints = QueryParserFallback.parse(query: "dinner christmas day")
+        XCTAssertNotNil(hints.dateRange)
+        let day = cal.component(.day, from: hints.dateRange!.start)
+        XCTAssertEqual(day, 25)
     }
 
     // MARK: - No Temporal Match
 
     func testNoTemporalMatch() {
         let hints = QueryParserFallback.parse(query: "dog playing in park")
-        XCTAssertNil(hints.dateRange, "Should not extract date for non-temporal query")
+        XCTAssertNil(hints.dateRange)
     }
 
     // MARK: - Should NOT Match Partial Words
 
     func testSunsetDoesNotMatchSun() {
-        // "sun" is not a temporal pattern; ensure "sunset" doesn't trigger anything
         let hints = QueryParserFallback.parse(query: "sunset at beach")
         XCTAssertNil(hints.dateRange)
     }
 
     func testSanDiegoDoesNotTriggerTemporal() {
         let hints = QueryParserFallback.parse(query: "sunset in san diego")
-        XCTAssertNil(hints.dateRange, "'in san diego' should not match 'in summer' or any temporal pattern")
+        XCTAssertNil(hints.dateRange)
     }
 
     func testFoodInItalyDoesNotTriggerTemporal() {
         let hints = QueryParserFallback.parse(query: "food in italy")
-        XCTAssertNil(hints.dateRange, "'in italy' should not match 'in' temporal patterns")
+        XCTAssertNil(hints.dateRange)
+    }
+
+    func testWeekdayInWeekly() {
+        // "week" in "weekly" should not match due to word boundary
+        let hints = QueryParserFallback.parse(query: "weekly meeting notes")
+        XCTAssertNil(hints.dateRange, "Partial word 'week' in 'weekly' should not match")
     }
 
     // MARK: - Combined Temporal + Visual
@@ -219,7 +389,19 @@ final class TemporalParserTests: XCTestCase {
     func testTemporalStrippedFromQuery() {
         let hints = QueryParserFallback.parse(query: "beach photos from last summer")
         XCTAssertNotNil(hints.dateRange)
-        XCTAssertFalse(hints.textQuery.contains("last summer"), "Temporal phrase should be stripped from textQuery")
+        XCTAssertFalse(hints.textQuery.contains("last summer"))
         XCTAssertTrue(hints.textQuery.contains("beach"))
+    }
+
+    func testTemporalStrippedLeavesCleanText() {
+        let hints = QueryParserFallback.parse(query: "sunset yesterday")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(hints.textQuery, "sunset")
+    }
+
+    func testApostropheSStripped() {
+        // TemporalParser strips "'s" before matching
+        let hints = QueryParserFallback.parse(query: "new year's eve")
+        XCTAssertNotNil(hints.dateRange)
     }
 }
