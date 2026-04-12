@@ -7,6 +7,22 @@ private enum SortMode: String {
     case recent
 }
 
+private enum MediaFilter: String, CaseIterable {
+    case all
+    case photos
+    case videos
+    case screenshots
+
+    var label: String {
+        switch self {
+        case .all: return "All"
+        case .photos: return "Photos"
+        case .videos: return "Videos"
+        case .screenshots: return "Screenshots"
+        }
+    }
+}
+
 struct SearchView: View {
     @ObservedObject var indexingService: IndexingService
     let searchEngine: SearchEngine
@@ -46,6 +62,10 @@ struct SearchView: View {
     // Tracks the in-flight search so we can cancel it when a new search
     // starts or when the index is rebuilt under us.
     @State private var searchTask: Task<Void, Never>?
+
+    // Media type filter (All / Photos / Videos / Screenshots)
+    @State private var mediaFilter: MediaFilter = .all
+    @State private var screenshotIds: Set<String> = []
 
     // Post-search upgrade flow (free tier)
     @State private var hasCompletedFirstSearch = false
@@ -726,13 +746,27 @@ struct SearchView: View {
 
     // MARK: - Results Grid (Masonry Layout)
 
+    private func applyMediaFilter(_ input: [SearchResult]) -> [SearchResult] {
+        switch mediaFilter {
+        case .all:
+            return input
+        case .photos:
+            return input.filter { !$0.isVideo && !screenshotIds.contains($0.id) }
+        case .videos:
+            return input.filter { $0.isVideo }
+        case .screenshots:
+            return input.filter { screenshotIds.contains($0.id) }
+        }
+    }
+
     private func resultsGrid(results: [SearchResult]) -> some View {
         let sorted = applySort(results, mode: sortMode)
-        let visible = Array(sorted.prefix(visibleCount))
-        let hasMore = results.count > visible.count
+        let filtered = applyMediaFilter(sorted)
+        let visible = Array(filtered.prefix(visibleCount))
+        let hasMore = filtered.count > visible.count
         return VStack(alignment: .leading, spacing: 0) {
             // Location fallback banner
-            if let summary = filterSummary, !sorted.isEmpty {
+            if let summary = filterSummary, !filtered.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "mappin.circle.fill")
                         .font(.footnote)
@@ -754,7 +788,7 @@ struct SearchView: View {
 
             // Result summary + sort toggle
             HStack {
-                Text("\(results.count) \(results.count == 1 ? "result" : "results")")
+                Text("\(filtered.count) \(filtered.count == 1 ? "result" : "results")")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 if searchTimeMs > 0 {
@@ -775,6 +809,30 @@ struct SearchView: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
+            .padding(.bottom, 4)
+
+            // Media filter chips
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(MediaFilter.allCases, id: \.self) { filter in
+                        let isActive = mediaFilter == filter
+                        Button {
+                            Haptics.selection()
+                            mediaFilter = filter
+                            visibleCount = initialVisibleCount
+                        } label: {
+                            Text(filter.label)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(isActive ? Celestial.Colors.onPrimaryContainer : Celestial.Colors.onSurfaceVariant)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 7)
+                                .background(isActive ? Celestial.Colors.primaryContainer : Celestial.Colors.surfaceContainerHigh)
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
             .padding(.bottom, 8)
 
             if sortMode == .recent {
@@ -806,9 +864,9 @@ struct SearchView: View {
             if hasMore {
                 Button {
                     Haptics.light()
-                    visibleCount = results.count
+                    visibleCount = filtered.count
                 } label: {
-                    Text("Show all \(results.count) matching results")
+                    Text("Show all \(filtered.count) matching results")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Celestial.Colors.primary)
                 }
@@ -917,7 +975,21 @@ struct SearchView: View {
                 results = response.results
                 fallbackResults = response.fallbackResults
                 filterSummary = response.filtersApplied
+                mediaFilter = .all
                 searchTimeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+
+                // Detect screenshots in background for the media filter
+                let photoResults = response.results.filter { !$0.isVideo }
+                Task.detached {
+                    var ssIds = Set<String>()
+                    for r in photoResults {
+                        if let asset = PhotoLibrary.getAsset(by: r.localIdentifier),
+                           asset.mediaSubtypes.contains(.photoScreenshot) {
+                            ssIds.insert(r.id)
+                        }
+                    }
+                    await MainActor.run { screenshotIds = ssIds }
+                }
 
                 #if DEBUG
                 logger.info("[SearchView] '\(query)': \(response.results.count) results in \(searchTimeMs)ms")
