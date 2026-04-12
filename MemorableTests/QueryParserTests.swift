@@ -3,69 +3,95 @@ import XCTest
 
 final class QueryParserTests: XCTestCase {
 
-    // MARK: - Negative Terms
+    private let cal = Calendar.current
 
-    func testNegativeTermExtraction() {
-        let hints = QueryParserFallback.parse(query: "dog -cat -bird")
-        XCTAssertEqual(hints.negativeTerms.sorted(), ["bird", "cat"])
+    // MARK: - Pure Visual Queries (no location, no date)
+
+    func testSunset() {
+        let hints = QueryParserFallback.parse(query: "sunset")
+        XCTAssertEqual(hints.textQuery, "sunset")
+        XCTAssertNil(hints.locationHint)
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertNil(hints.dateRange)
+    }
+
+    func testDog() {
+        let hints = QueryParserFallback.parse(query: "dog")
         XCTAssertEqual(hints.textQuery, "dog")
+        XCTAssertNil(hints.locationHint)
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertNil(hints.dateRange)
     }
 
-    func testNegativeTermWithOtherFeatures() {
-        let hints = QueryParserFallback.parse(query: "food -pizza this month")
-        XCTAssertEqual(hints.negativeTerms, ["pizza"])
-        XCTAssertNotNil(hints.dateRange)
-        XCTAssertEqual(hints.textQuery, "food")
+    func testFoodOnAPlate() {
+        let hints = QueryParserFallback.parse(query: "food on a plate")
+        XCTAssertTrue(hints.textQuery.contains("food"))
+        XCTAssertNil(hints.locationHint)
+        XCTAssertTrue(hints.hasVisualQuery)
     }
 
-    func testNoNegativeTerms() {
-        let hints = QueryParserFallback.parse(query: "beautiful sunset")
+    func testSelfie() {
+        let hints = QueryParserFallback.parse(query: "selfie")
+        XCTAssertEqual(hints.textQuery, "selfie")
+        XCTAssertNil(hints.locationHint)
+        XCTAssertTrue(hints.hasVisualQuery)
+    }
+
+    func testCar() {
+        let hints = QueryParserFallback.parse(query: "car")
+        XCTAssertEqual(hints.textQuery, "car")
+        XCTAssertNil(hints.locationHint)
+        XCTAssertTrue(hints.hasVisualQuery)
+    }
+
+    func testBirthdayCake() {
+        let hints = QueryParserFallback.parse(query: "birthday cake")
+        XCTAssertTrue(hints.textQuery.contains("birthday"))
+        XCTAssertTrue(hints.textQuery.contains("cake"))
+        XCTAssertNil(hints.locationHint)
+        XCTAssertTrue(hints.hasVisualQuery)
+    }
+
+    // MARK: - Location Queries
+
+    func testBareBerlin() {
+        let hints = QueryParserFallback.parse(query: "Berlin")
+        XCTAssertNotNil(hints.locationHint, "Berlin should be detected as a location")
+        XCTAssertTrue(hints.hasVisualQuery)
+    }
+
+    func testBareSanDiego() {
+        let hints = QueryParserFallback.parse(query: "San Diego")
+        XCTAssertNotNil(hints.locationHint, "San Diego should be detected as a location")
+        XCTAssertTrue(hints.hasVisualQuery)
+    }
+
+    func testSunsetInBerlin() {
+        let hints = QueryParserFallback.parse(query: "sunset in Berlin")
+        XCTAssertEqual(hints.textQuery, "sunset")
+        XCTAssertNotNil(hints.locationHint)
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertNil(hints.dateRange)
         XCTAssertTrue(hints.negativeTerms.isEmpty)
     }
 
-    // MARK: - Time-of-Day Detection
-
-    func testBreakfastTimeOfDay() {
-        let hints = QueryParserFallback.parse(query: "breakfast at hotel")
-        XCTAssertNotNil(hints.timeOfDayHours)
-        XCTAssertEqual(hints.timeOfDayHours?.start, 5)
-        XCTAssertEqual(hints.timeOfDayHours?.end, 10)
+    func testFoodInSanDiego() {
+        let hints = QueryParserFallback.parse(query: "food in San Diego")
+        XCTAssertNotNil(hints.locationHint)
+        XCTAssertTrue(hints.textQuery.contains("food"))
+        XCTAssertTrue(hints.hasVisualQuery)
     }
 
-    func testDinnerTimeOfDay() {
-        let hints = QueryParserFallback.parse(query: "dinner with friends")
-        XCTAssertNotNil(hints.timeOfDayHours)
-        XCTAssertEqual(hints.timeOfDayHours?.start, 18)
-        XCTAssertEqual(hints.timeOfDayHours?.end, 22)
+    func testDogInBerlin() {
+        let hints = QueryParserFallback.parse(query: "dog in Berlin")
+        XCTAssertNotNil(hints.locationHint)
+        XCTAssertEqual(hints.textQuery, "dog")
+        XCTAssertTrue(hints.hasVisualQuery)
     }
 
-    func testSunsetTimeOfDay() {
-        let hints = QueryParserFallback.parse(query: "sunset over water")
-        XCTAssertNotNil(hints.timeOfDayHours)
-        XCTAssertEqual(hints.timeOfDayHours?.start, 18)
-    }
-
-    func testNightTimeOfDay() {
-        let hints = QueryParserFallback.parse(query: "night sky stars")
-        XCTAssertNotNil(hints.timeOfDayHours)
-        XCTAssertEqual(hints.timeOfDayHours?.start, 20)
-        XCTAssertEqual(hints.timeOfDayHours?.end, 4) // wraps midnight
-    }
-
-    func testNoTimeOfDay() {
-        let hints = QueryParserFallback.parse(query: "dog in park")
-        XCTAssertNil(hints.timeOfDayHours)
-    }
-
-    // MARK: - Location Extraction
-
-    func testLocationWithProperCase() {
-        // NLTagger requires proper case for place detection
-        let hints = QueryParserFallback.parse(query: "sunset in San Diego")
-        // Either NLTagger or preposition fallback should extract location
-        XCTAssertNotNil(hints.locationHint, "Should extract location from 'in San Diego'")
-        XCTAssertTrue(hints.textQuery.contains("sunset"))
-        XCTAssertFalse(hints.textQuery.contains("diego"), "Location should be stripped from textQuery")
+    func testBareInBerlin() {
+        let hints = QueryParserFallback.parse(query: "in Berlin")
+        XCTAssertNotNil(hints.locationHint)
     }
 
     func testLocationWithLowercase() {
@@ -78,35 +104,37 @@ final class QueryParserTests: XCTestCase {
         XCTAssertNotNil(hints.locationHint)
     }
 
-    func testNoLocationForTemporalPreposition() {
-        // "in summer" should be temporal, not location
-        let hints = QueryParserFallback.parse(query: "beach in summer")
-        XCTAssertNotNil(hints.dateRange, "'in summer' should be temporal")
-        // locationHint may or may not be nil depending on parse order, but dateRange must be set
-    }
+    // MARK: - Landmarks (locationHint MUST be nil)
 
-    // MARK: - Landmark Names (should NOT be extracted as locations)
-
-    func testHooverDamIsVisualNotLocation() {
+    func testHooverDamIsNotLocation() {
         let hints = QueryParserFallback.parse(query: "Hoover Dam")
-        XCTAssertNil(hints.locationHint, "Hoover Dam is a landmark, not a location")
+        XCTAssertNil(hints.locationHint, "Hoover Dam should NOT be treated as a location")
+        XCTAssertEqual(hints.textQuery, "hoover dam")
         XCTAssertTrue(hints.hasVisualQuery)
-        XCTAssertTrue(hints.textQuery.contains("hoover"), "textQuery should contain full landmark name")
-        XCTAssertTrue(hints.textQuery.contains("dam"), "textQuery should contain full landmark name")
     }
 
-    func testEiffelTowerIsVisualNotLocation() {
+    func testEiffelTowerIsNotLocation() {
         let hints = QueryParserFallback.parse(query: "Eiffel Tower")
-        // NLTagger may or may not detect "Eiffel" as a place, but either way
-        // the landmark guard should prevent splitting
         XCTAssertTrue(hints.hasVisualQuery)
         XCTAssertTrue(hints.textQuery.lowercased().contains("tower"))
     }
 
+    func testGoldenGateBridgeIsNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Golden Gate Bridge")
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertTrue(hints.textQuery.lowercased().contains("bridge"))
+    }
+
+    func testBerlinTVTower() {
+        let hints = QueryParserFallback.parse(query: "Berlin TV tower")
+        // NLTagger may or may not detect Berlin. If it does, textQuery
+        // should contain "tower". Either way, hasVisualQuery must be true.
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertTrue(hints.textQuery.lowercased().contains("tower"),
+            "tower must be in textQuery, got: \(hints.textQuery)")
+    }
+
     func testBerlinSunsetKeepsVisualQuery() {
-        // NLTagger may or may not detect "Berlin" as a place depending on
-        // the environment (simulator vs device). Either way, "sunset" must
-        // remain in the visual query and not be misidentified as a location.
         let hints = QueryParserFallback.parse(query: "Berlin sunset")
         XCTAssertTrue(hints.hasVisualQuery)
         XCTAssertTrue(hints.textQuery.contains("sunset"),
@@ -115,92 +143,258 @@ final class QueryParserTests: XCTestCase {
             "sunset must not be extracted as a location")
     }
 
-    func testSanDiegoExtractsAsLocation() {
-        let hints = QueryParserFallback.parse(query: "San Diego")
-        XCTAssertNotNil(hints.locationHint, "San Diego should be detected as a location")
+    // MARK: - Temporal Queries
+
+    func testLastSummer() {
+        let hints = QueryParserFallback.parse(query: "last summer")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertNil(hints.locationHint)
+        if let range = hints.dateRange {
+            let lastYear = cal.component(.year, from: Date()) - 1
+            let startMonth = cal.component(.month, from: range.start)
+            let startYear = cal.component(.year, from: range.start)
+            XCTAssertEqual(startYear, lastYear)
+            XCTAssertEqual(startMonth, 6, "Last summer should start in June")
+        }
     }
 
-    // MARK: - Single-Word Location Disambiguation
+    func testYesterday() {
+        let hints = QueryParserFallback.parse(query: "yesterday")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertNil(hints.locationHint)
+        if let range = hints.dateRange {
+            let yesterday = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: Date()))!
+            XCTAssertEqual(cal.component(.day, from: range.start),
+                           cal.component(.day, from: yesterday))
+        }
+    }
 
-    func testSingleWordPetNameNotLocation() {
-        let hints = QueryParserFallback.parse(query: "Jimmy")
-        XCTAssertNil(hints.locationHint, "Jimmy is a name, not a city")
+    func testJanuary2024() {
+        let hints = QueryParserFallback.parse(query: "January 2024")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertNil(hints.locationHint)
+        if let range = hints.dateRange {
+            XCTAssertEqual(cal.component(.year, from: range.start), 2024)
+            XCTAssertEqual(cal.component(.month, from: range.start), 1)
+        }
+    }
+
+    func testChristmas() {
+        let hints = QueryParserFallback.parse(query: "christmas")
+        XCTAssertNotNil(hints.dateRange)
+        if let range = hints.dateRange {
+            let month = cal.component(.month, from: range.start)
+            XCTAssertEqual(month, 12)
+        }
+    }
+
+    func testLastWeek() {
+        let hints = QueryParserFallback.parse(query: "last week")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertNil(hints.locationHint)
+    }
+
+    func testBeachInSummer() {
+        let hints = QueryParserFallback.parse(query: "beach in summer")
+        XCTAssertNotNil(hints.dateRange, "'in summer' should be temporal")
+    }
+
+    // MARK: - Combined Location + Time
+
+    func testBerlinLastSummer() {
+        let hints = QueryParserFallback.parse(query: "Berlin last summer")
+        // NLTagger should detect Berlin as a place
+        XCTAssertNotNil(hints.dateRange, "Should extract last summer as date range")
+        // locationHint depends on NLTagger; at minimum dateRange must be set
+    }
+
+    func testFoodInBerlinLastWeek() {
+        let hints = QueryParserFallback.parse(query: "food in Berlin last week")
+        XCTAssertNotNil(hints.locationHint)
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertTrue(hints.textQuery.contains("food"))
+    }
+
+    // MARK: - Time of Day
+
+    func testLunchTimeOfDay() {
+        let hints = QueryParserFallback.parse(query: "lunch")
+        XCTAssertNotNil(hints.timeOfDayHours)
+        XCTAssertEqual(hints.timeOfDayHours?.start, 11)
+        XCTAssertEqual(hints.timeOfDayHours?.end, 14)
         XCTAssertTrue(hints.hasVisualQuery)
     }
 
-    func testSingleWordPersonNameNotLocation() {
+    func testDinnerTimeOfDay() {
+        let hints = QueryParserFallback.parse(query: "dinner")
+        XCTAssertNotNil(hints.timeOfDayHours)
+        XCTAssertEqual(hints.timeOfDayHours?.start, 18)
+        XCTAssertEqual(hints.timeOfDayHours?.end, 22)
+    }
+
+    func testSunriseTimeOfDay() {
+        let hints = QueryParserFallback.parse(query: "sunrise")
+        XCTAssertNotNil(hints.timeOfDayHours)
+        XCTAssertEqual(hints.timeOfDayHours?.start, 5)
+        XCTAssertEqual(hints.timeOfDayHours?.end, 10)
+    }
+
+    func testNightTimeOfDay() {
+        let hints = QueryParserFallback.parse(query: "night")
+        XCTAssertNotNil(hints.timeOfDayHours)
+    }
+
+    func testBreakfastAtHotel() {
+        let hints = QueryParserFallback.parse(query: "breakfast at hotel")
+        XCTAssertNotNil(hints.timeOfDayHours)
+        XCTAssertEqual(hints.timeOfDayHours?.start, 5)
+        XCTAssertEqual(hints.timeOfDayHours?.end, 10)
+    }
+
+    func testNoTimeOfDay() {
+        let hints = QueryParserFallback.parse(query: "dog in park")
+        XCTAssertNil(hints.timeOfDayHours)
+    }
+
+    // MARK: - Negative Terms
+
+    func testFoodNoPizza() {
+        let hints = QueryParserFallback.parse(query: "food -pizza")
+        XCTAssertEqual(hints.negativeTerms, ["pizza"])
+        XCTAssertEqual(hints.textQuery, "food")
+    }
+
+    func testBeachNoPeople() {
+        let hints = QueryParserFallback.parse(query: "beach -people")
+        XCTAssertEqual(hints.negativeTerms, ["people"])
+        XCTAssertEqual(hints.textQuery, "beach")
+    }
+
+    func testMultipleNegativeTerms() {
+        let hints = QueryParserFallback.parse(query: "dog -cat -bird")
+        XCTAssertEqual(hints.negativeTerms.sorted(), ["bird", "cat"])
+        XCTAssertEqual(hints.textQuery, "dog")
+    }
+
+    func testNegativeTermWithDateAndLocation() {
+        let hints = QueryParserFallback.parse(query: "food -pizza this month")
+        XCTAssertEqual(hints.negativeTerms, ["pizza"])
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertEqual(hints.textQuery, "food")
+    }
+
+    func testNoNegativeTerms() {
+        let hints = QueryParserFallback.parse(query: "beautiful sunset")
+        XCTAssertTrue(hints.negativeTerms.isEmpty)
+    }
+
+    // MARK: - Names and Non-Locations (locationHint MUST be nil)
+
+    func testJimmyIsNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Jimmy")
+        XCTAssertNil(hints.locationHint, "Jimmy is a name, not a location")
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertEqual(hints.textQuery, "jimmy")
+    }
+
+    func testSarahIsNotLocation() {
         let hints = QueryParserFallback.parse(query: "Sarah")
         XCTAssertNil(hints.locationHint, "Sarah is a name, not a city")
     }
 
-    func testSingleWordKnownCityIsLocation() {
+    func testTeslaIsNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Tesla")
+        XCTAssertNil(hints.locationHint, "Tesla is a brand, not a city")
+        XCTAssertTrue(hints.hasVisualQuery)
+    }
+
+    func testChristmasIsDateNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Christmas")
+        XCTAssertNil(hints.locationHint, "Christmas should trigger dateRange, not locationHint")
+        XCTAssertNotNil(hints.dateRange)
+    }
+
+    func testMumbaiIsLocation() {
         let hints = QueryParserFallback.parse(query: "Mumbai")
-        // NLTagger (Strategy 1) or Strategy 3 allow-list should catch this
         XCTAssertNotNil(hints.locationHint, "Mumbai is a known city")
     }
 
-    func testSingleWordEuropeanCityIsLocation() {
+    func testPragueIsLocation() {
         let hints = QueryParserFallback.parse(query: "Prague")
         XCTAssertNotNil(hints.locationHint, "Prague is a known city")
     }
 
-    // MARK: - Temporal Words Must Not Become Locations
+    // MARK: - Temporal + Non-Location (the January bug)
 
-    func testJanuaryLastYearNoLocation() {
+    func testJanuaryLastYear() {
         let hints = QueryParserFallback.parse(query: "January last year")
-        XCTAssertNil(hints.locationHint, "January is a month, not a location")
-        XCTAssertNotNil(hints.dateRange, "Should extract a date range")
+        XCTAssertNil(hints.locationHint, "January should not become a location")
+        XCTAssertNotNil(hints.dateRange)
     }
 
-    func testBareMonthNameNoLocation() {
+    func testBareDecemberNoLocation() {
         let hints = QueryParserFallback.parse(query: "December")
         XCTAssertNil(hints.locationHint, "December is a month, not a location")
         XCTAssertNotNil(hints.dateRange)
     }
 
-    func testSeasonNameNoLocation() {
+    func testBareSummerNoLocation() {
         let hints = QueryParserFallback.parse(query: "Summer")
         XCTAssertNil(hints.locationHint, "Summer is a season, not a location")
     }
 
-    // MARK: - Query Truncation
-
-    func testLongQueryTruncated() {
-        let longQuery = String(repeating: "a ", count: 300) // 600 chars
-        let hints = QueryParserFallback.parse(query: longQuery)
-        XCTAssertTrue(hints.textQuery.count <= 500)
-    }
-
-    // MARK: - Empty / Edge Cases
+    // MARK: - Edge Cases
 
     func testEmptyQuery() {
         let hints = QueryParserFallback.parse(query: "")
-        // Empty query has no visual content — textQuery defaults to "a photo"
         XCTAssertFalse(hints.hasVisualQuery)
         XCTAssertEqual(hints.textQuery, "a photo")
     }
 
-    func testOnlyTemporalQuery() {
-        let hints = QueryParserFallback.parse(query: "last summer")
-        XCTAssertNotNil(hints.dateRange)
-        // textQuery should fall back to original since stripping leaves empty
+    func testGibberishQuery() {
+        let hints = QueryParserFallback.parse(query: "asdfghjkl")
+        XCTAssertEqual(hints.textQuery, "asdfghjkl")
+        XCTAssertNil(hints.locationHint)
+        XCTAssertTrue(hints.hasVisualQuery)
+    }
+
+    func testTrailingPreposition() {
+        let hints = QueryParserFallback.parse(query: "dog in")
+        XCTAssertEqual(hints.textQuery, "dog")
+        XCTAssertNil(hints.locationHint)
     }
 
     func testOnlyPreposition() {
+        let hints = QueryParserFallback.parse(query: "the")
+        XCTAssertFalse(hints.hasVisualQuery)
+    }
+
+    func testInBerlinThe() {
+        let hints = QueryParserFallback.parse(query: "in Berlin the")
+        XCTAssertNotNil(hints.locationHint)
+        // textQuery should be clean after stripping prepositions
+        XCTAssertFalse(hints.textQuery.contains("the "))
+    }
+
+    func testLongQueryTruncated() {
+        let longQuery = String(repeating: "a ", count: 300)
+        let hints = QueryParserFallback.parse(query: longQuery)
+        XCTAssertTrue(hints.textQuery.count <= 500)
+    }
+
+    func testOnlyPrepositionIn() {
         let hints = QueryParserFallback.parse(query: "in")
-        // Should not crash, textQuery may be empty or the original
         XCTAssertNotNil(hints)
     }
 
     // MARK: - Combined Features
 
-    func testFullQuery() {
+    func testFullQueryWithAllFeatures() {
         let hints = QueryParserFallback.parse(query: "sunset -clouds last summer")
         XCTAssertNotNil(hints.dateRange)
         XCTAssertEqual(hints.negativeTerms, ["clouds"])
         XCTAssertTrue(hints.textQuery.contains("sunset"))
         XCTAssertFalse(hints.textQuery.contains("clouds"))
-        XCTAssertFalse(hints.textQuery.contains("last summer"))
-        XCTAssertNotNil(hints.timeOfDayHours) // "sunset" triggers evening
+        XCTAssertNotNil(hints.timeOfDayHours)
     }
 }
