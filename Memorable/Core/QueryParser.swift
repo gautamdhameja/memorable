@@ -187,6 +187,13 @@ enum QueryParserFallback {
             }
             guard !locationWords.isEmpty else { continue }
 
+            // Single visual words after a preposition are descriptors, not
+            // locations. "dog in park" means a visual scene, not the city
+            // of Park. Multi-word locations ("in San Diego") are unambiguous.
+            if locationWords.count == 1 && visualWords.contains(locationWords[0].lowercased()) {
+                continue
+            }
+
             locationHint = locationWords.joined(separator: " ")
             // Remove "prep + location" from text, keep the rest
             let locationPhrase = prep + locationWords.joined(separator: " ")

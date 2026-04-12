@@ -318,6 +318,20 @@ final class QueryParserTests: XCTestCase {
         XCTAssertNil(hints.dateRange)
     }
 
+    func testDogInParkNoLocation() {
+        let hints = QueryParserFallback.parse(query: "dog in park")
+        XCTAssertNil(hints.locationHint, "park is a visual word, not a location")
+        XCTAssertTrue(hints.textQuery.contains("dog"))
+        XCTAssertTrue(hints.textQuery.contains("park"))
+    }
+
+    func testFoodAtMarketNoLocation() {
+        let hints = QueryParserFallback.parse(query: "food at market")
+        XCTAssertNil(hints.locationHint, "market is a visual word, not a location")
+        XCTAssertTrue(hints.textQuery.contains("food"))
+        XCTAssertTrue(hints.textQuery.contains("market"))
+    }
+
     func testBeachIsVisualNotLocation() {
         let hints = QueryParserFallback.parse(query: "Beach")
         XCTAssertNil(hints.locationHint, "Beach is a visual concept, not a location")
