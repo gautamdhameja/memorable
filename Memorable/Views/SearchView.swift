@@ -105,7 +105,7 @@ struct SearchView: View {
                     searchBar
                         .padding(.horizontal, 16)
                         .padding(.top, 8)
-                        .padding(.bottom, 12)
+                        .padding(.bottom, 14)
 
                     // Database warning
                     if AppDatabase.isInMemoryFallback {
@@ -388,11 +388,10 @@ struct SearchView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
         .background(Celestial.Colors.surfaceVariant.opacity(0.5))
-        .cornerRadius(8)
+        .cornerRadius(10)
         .padding(.horizontal, 16)
-        .padding(.top, 4)
     }
 
     // MARK: - Home (Albums + History)
@@ -777,13 +776,13 @@ struct SearchView: View {
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, 4)
+                .padding(.bottom, 14)
             }
 
             // Upgrade banner for free tier (after first successful search)
             if !proManager.isPro && indexingService.hitFreeLimit && hasCompletedFirstSearch && !upgradeBannerDismissed {
                 upgradeBanner
+                    .padding(.bottom, 10)
             }
 
             // Result summary + sort toggle
@@ -808,8 +807,7 @@ struct SearchView: View {
                 .frame(maxWidth: 180)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 4)
-            .padding(.bottom, 4)
+            .padding(.bottom, 14)
 
             // Media filter chips
             ScrollView(.horizontal, showsIndicators: false) {
@@ -833,7 +831,7 @@ struct SearchView: View {
                 }
                 .padding(.horizontal, 16)
             }
-            .padding(.bottom, 8)
+            .padding(.bottom, 14)
 
             if sortMode == .recent {
                 let groups = ResultGrouper.groupByMonth(results: visible)
