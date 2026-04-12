@@ -836,14 +836,7 @@ struct SearchView: View {
             }
         }
         .padding(.vertical, 14)
-        .background(Celestial.Colors.primary.opacity(0.08))
-        .background(Celestial.Colors.surfaceContainer.opacity(0.85))
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: Celestial.sharedCornerRadius))
-        .overlay(
-            RoundedRectangle(cornerRadius: Celestial.sharedCornerRadius)
-                .stroke(Celestial.Colors.outlineVariant.opacity(0.25), lineWidth: 1)
-        )
+        .modifier(GlassPanelModifier(cornerRadius: Celestial.sharedCornerRadius))
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
     }
