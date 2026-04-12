@@ -19,9 +19,11 @@ targets:
       - path: Memorable/Models/MobileCLIP2_S4_ImageEncoder.mlmodelc
         type: folder
         buildPhase: resources
+        resourceTags: [ml-models]
       - path: Memorable/Models/MobileCLIP2_S4_TextEncoder.mlmodelc
         type: folder
         buildPhase: resources
+        resourceTags: [ml-models]
     resources:
       - path: Memorable/Resources
     dependencies:
