@@ -836,6 +836,7 @@ struct SearchView: View {
             }
         }
         .padding(.vertical, 14)
+        .background(Celestial.Colors.primary.opacity(0.08))
         .background(Celestial.Colors.surfaceContainer.opacity(0.85))
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: Celestial.sharedCornerRadius))
