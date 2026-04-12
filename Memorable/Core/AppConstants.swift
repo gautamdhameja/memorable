@@ -65,6 +65,10 @@ enum SearchConfig {
 
     // Scene label boost per matching label (additive on top of CLIP)
     static let sceneLabelBoostPerMatch: Float = 0.08
+
+    // Relevance badge color tiers (applied in PhotoThumbnailView)
+    static let strongMatchThreshold: Float = 0.32
+    static let marginalMatchThreshold: Float = 0.22
 }
 
 // MARK: - Scene Label Synonyms

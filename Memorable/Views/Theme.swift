@@ -57,6 +57,9 @@ enum Celestial {
 
         // Success / positive indicator
         static let emerald = Color(red: 0.204, green: 0.827, blue: 0.600)       // #34D399
+
+        // Low-confidence indicator
+        static let orange = Color(red: 1.0, green: 0.584, blue: 0.224)          // #FF9539
     }
 
     // MARK: - Gradients

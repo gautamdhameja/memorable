@@ -15,6 +15,16 @@ struct PhotoThumbnailView: View {
         return "\(type), \(score)"
     }
 
+    private var relevanceBadgeColor: Color {
+        if result.score >= SearchConfig.strongMatchThreshold {
+            return Celestial.Colors.emerald
+        } else if result.score >= SearchConfig.marginalMatchThreshold {
+            return Celestial.Colors.amber
+        } else {
+            return Celestial.Colors.orange
+        }
+    }
+
     private var aspectRatio: CGFloat {
         guard let thumb = thumbnail else { return 4.0/3.0 }
         guard thumb.size.height > 0 else { return 4.0/3.0 }
@@ -44,7 +54,7 @@ struct PhotoThumbnailView: View {
                         if result.score < 1.0 {
                             Text("\(Int(result.score * 100))%")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(Celestial.Colors.amber)
+                                .foregroundStyle(relevanceBadgeColor)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 4)
                                 .modifier(GlassBadgeModifier())
