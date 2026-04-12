@@ -219,17 +219,22 @@ struct SearchView: View {
                 Text("This album will auto-update when new matching photos are indexed.")
             }
             .onAppear {
-                searchHistory = SearchHistory.load()
-                smartAlbums = SmartAlbumStore.load()
-                Task.detached {
-                    let count = PhotoLibrary.fetchAllMedia().count
-                    await MainActor.run {
-                        totalLibraryCount = count
-                    }
-                }
                 if indexingService.isReady {
                     startPlaceholderRotation()
                 }
+            }
+            .task {
+                // Load DB-backed data off the main thread's critical path so
+                // the search bar is tappable immediately on appear.
+                let history = SearchHistory.load()
+                let albums = SmartAlbumStore.load()
+                searchHistory = history
+                smartAlbums = albums
+
+                let count = await Task.detached {
+                    PhotoLibrary.fetchAllMedia().count
+                }.value
+                totalLibraryCount = count
             }
             .onDisappear {
                 placeholderTimer?.cancel()
@@ -265,12 +270,25 @@ struct SearchView: View {
                         }
                     }
 
-                    // Remove any results pointing to deleted assets
+                    // Remove any results pointing to deleted assets.
+                    // Run off the main thread because each getAsset call is a
+                    // synchronous PHFetchRequest. With 50+ results this blocks
+                    // the UI for hundreds of milliseconds.
                     if !results.isEmpty {
-                        let cleaned = results.filter { PhotoLibrary.getAsset(by: $0.localIdentifier) != nil }
-                        if cleaned.count != results.count {
-                            results = cleaned
-                            lastResults = cleaned
+                        let currentResults = results
+                        let currentLast = lastResults
+                        Task.detached {
+                            let validIds = Set(
+                                currentResults
+                                    .filter { PhotoLibrary.getAsset(by: $0.localIdentifier) != nil }
+                                    .map(\.id)
+                            )
+                            await MainActor.run { [self] in
+                                if validIds.count != currentResults.count {
+                                    results = currentResults.filter { validIds.contains($0.id) }
+                                    lastResults = currentLast.filter { validIds.contains($0.id) }
+                                }
+                            }
                         }
                     }
                 }
