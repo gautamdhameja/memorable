@@ -79,59 +79,19 @@ enum SearchConfig {
 /// ("San Diego", "New York") don't need this list because they're far
 /// less ambiguous. NLTagger (Strategy 1) catches most well-known cities,
 /// so this is the fallback for cases it misses.
+///
+/// Loaded from Resources/known_cities.json (9,695 single-word cities with
+/// population >= 50,000, sourced from dr5hn/countries-states-cities-database).
 enum KnownCities {
-    static let singleWord: Set<String> = [
-        // Europe
-        "amsterdam", "antwerp", "athens", "barcelona", "bergen", "berlin",
-        "bordeaux", "bratislava", "bruges", "brussels", "bucharest", "budapest",
-        "cologne", "copenhagen", "cork", "dresden", "dublin", "dubrovnik",
-        "edinburgh", "florence", "frankfurt", "gdansk", "geneva", "gothenburg",
-        "granada", "hamburg", "helsinki", "innsbruck", "istanbul", "krakow",
-        "leipzig", "lisbon", "ljubljana", "london", "lyon", "madrid", "malmo",
-        "marseille", "milan", "moscow", "munich", "naples", "nice", "oslo",
-        "paris", "porto", "prague", "reykjavik", "riga", "rome", "rotterdam",
-        "salzburg", "seville", "split", "stockholm", "stuttgart", "tallinn",
-        "turku", "valencia", "venice", "vienna", "vilnius", "warsaw", "zurich",
-
-        // Americas
-        "albuquerque", "anchorage", "atlanta", "austin", "baltimore", "bogota",
-        "boston", "brooklyn", "calgary", "cancun", "cartagena", "charlotte",
-        "chicago", "cleveland", "columbus", "dallas", "denver", "detroit",
-        "edmonton", "guadalajara", "halifax", "havana", "honolulu", "houston",
-        "indianapolis", "lima", "manhattan", "medellin", "memphis", "miami",
-        "milwaukee", "minneapolis", "montreal", "montevideo", "nashville",
-        "orlando", "ottawa", "philadelphia", "phoenix", "pittsburgh", "portland",
-        "quito", "sacramento", "santiago", "seattle", "toronto", "tucson",
-        "vancouver", "winnipeg",
-
-        // India
-        "agra", "ahmedabad", "amritsar", "bangalore", "bengaluru", "bhopal",
-        "chandigarh", "chennai", "coimbatore", "darjeeling", "dehradun", "delhi",
-        "gangtok", "goa", "gurgaon", "guwahati", "hyderabad", "indore",
-        "jaipur", "jaisalmer", "jodhpur", "kanpur", "kochi", "kolkata",
-        "lucknow", "manali", "mangalore", "mumbai", "mussoorie", "mysore",
-        "nagpur", "noida", "ooty", "patna", "pondicherry", "pune", "ranchi",
-        "rishikesh", "shimla", "srinagar", "surat", "thiruvananthapuram",
-        "udaipur", "vadodara", "varanasi", "vizag",
-
-        // East and Southeast Asia
-        "bali", "bangkok", "beijing", "busan", "chengdu", "fukuoka", "guangzhou",
-        "hanoi", "jakarta", "kyoto", "macau", "manila", "nagoya", "osaka",
-        "phuket", "sapporo", "seoul", "shanghai", "shenzhen", "singapore",
-        "taipei", "tokyo", "xiamen", "yokohama",
-
-        // Middle East
-        "amman", "beirut", "doha", "dubai", "jerusalem", "muscat", "petra",
-        "riyadh",
-
-        // Australia and Oceania
-        "adelaide", "auckland", "brisbane", "cairns", "christchurch", "darwin",
-        "fiji", "hobart", "melbourne", "perth", "sydney", "wellington",
-
-        // Africa
-        "accra", "cairo", "casablanca", "dakar", "durban", "johannesburg",
-        "lagos", "luxor", "marrakech", "nairobi", "tunis", "zanzibar",
-    ]
+    static let singleWord: Set<String> = {
+        guard let url = Bundle.main.url(forResource: "known_cities", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let names = try? JSONDecoder().decode([String].self, from: data) else {
+            logger.error("Failed to load known_cities.json")
+            return []
+        }
+        return Set(names)
+    }()
 }
 
 // MARK: - Scene Label Synonyms
