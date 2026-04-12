@@ -62,6 +62,10 @@ enum Celestial {
         static let orange = Color(red: 1.0, green: 0.584, blue: 0.224)          // #FF9539
     }
 
+    // MARK: - Shared Geometry
+
+    static let sharedCornerRadius: CGFloat = 16
+
     // MARK: - Gradients
 
     static let celestialBackground = LinearGradient(

@@ -103,7 +103,7 @@ struct SearchView: View {
                 VStack(spacing: 0) {
                     // Search bar pinned at top
                     searchBar
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, 12)
                         .padding(.top, 8)
                         .padding(.bottom, 14)
 
@@ -835,9 +835,15 @@ struct SearchView: View {
                     .padding(.horizontal, 16)
                 }
             }
-            .padding(.vertical, 12)
-            .background(Celestial.Colors.surfaceContainerLow.opacity(0.8))
+            .padding(.vertical, 14)
+            .background(Celestial.Colors.surfaceContainer.opacity(0.85))
             .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: Celestial.sharedCornerRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: Celestial.sharedCornerRadius)
+                    .stroke(Celestial.Colors.outlineVariant.opacity(0.25), lineWidth: 1)
+            )
+            .padding(.horizontal, 12)
             .padding(.bottom, 10)
 
             if sortMode == .recent {

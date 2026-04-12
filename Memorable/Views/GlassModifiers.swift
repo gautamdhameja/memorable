@@ -1,19 +1,21 @@
 import SwiftUI
 
 struct GlassSearchBarModifier: ViewModifier {
+    var cornerRadius: CGFloat = Celestial.sharedCornerRadius
+
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content
-                .glassEffect(.regular, in: .capsule)
+                .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
         } else {
             content
                 .background(
                     Celestial.glassBackground
                         .background(.ultraThinMaterial)
                 )
-                .clipShape(Capsule())
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                 .overlay(
-                    Capsule()
+                    RoundedRectangle(cornerRadius: cornerRadius)
                         .stroke(Celestial.Colors.outlineVariant.opacity(0.2), lineWidth: 1)
                 )
         }
