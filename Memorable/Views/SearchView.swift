@@ -127,6 +127,12 @@ struct SearchView: View {
                         .padding(.bottom, 8)
                     }
 
+                    // Sticky controls panel (above scroll)
+                    if !searchText.isEmpty && !results.isEmpty && !isSearching {
+                        let filtered = applyMediaFilter(applySort(results, mode: sortMode))
+                        controlsPanel(filteredCount: filtered.count)
+                    }
+
                     ScrollView {
                     VStack(spacing: 0) {
                         // Indexing banners
@@ -759,93 +765,94 @@ struct SearchView: View {
         }
     }
 
+    private func controlsPanel(filteredCount: Int) -> some View {
+        VStack(spacing: 0) {
+            // Location fallback banner
+            if let summary = filterSummary {
+                HStack(spacing: 6) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(Celestial.Colors.amber)
+                    let location = summary.locationDescription ?? ""
+                    Text("Showing all photos\(location.isEmpty ? "" : " near \(location)")")
+                        .font(.footnote)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+            }
+
+            // Upgrade banner for free tier (after first successful search)
+            if !proManager.isPro && indexingService.hitFreeLimit && hasCompletedFirstSearch && !upgradeBannerDismissed {
+                upgradeBanner
+                    .padding(.bottom, 10)
+            }
+
+            // Result summary + sort toggle
+            HStack {
+                Text("\(filteredCount) \(filteredCount == 1 ? "result" : "results")")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                if searchTimeMs > 0 {
+                    Text("in \(searchTimeMs)ms")
+                        .font(.caption)
+                        .foregroundStyle(Celestial.Colors.outline)
+                }
+                Spacer()
+                Picker("Sort", selection: Binding(
+                    get: { sortMode },
+                    set: { sortModeRaw = $0.rawValue }
+                )) {
+                    Text("Relevance").tag(SortMode.relevance)
+                    Text("Recent").tag(SortMode.recent)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 180)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+
+            // Media filter chips
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(MediaFilter.allCases, id: \.self) { filter in
+                        let isActive = mediaFilter == filter
+                        Button {
+                            Haptics.selection()
+                            mediaFilter = filter
+                            visibleCount = initialVisibleCount
+                        } label: {
+                            Text(filter.label)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(isActive ? Celestial.Colors.onPrimaryContainer : Celestial.Colors.onSurfaceVariant)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 7)
+                                .background(isActive ? Celestial.Colors.primaryContainer : Celestial.Colors.surfaceContainerHigh)
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+        .padding(.vertical, 14)
+        .background(Celestial.Colors.surfaceContainer.opacity(0.85))
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: Celestial.sharedCornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: Celestial.sharedCornerRadius)
+                .stroke(Celestial.Colors.outlineVariant.opacity(0.25), lineWidth: 1)
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
+    }
+
     private func resultsGrid(results: [SearchResult]) -> some View {
         let sorted = applySort(results, mode: sortMode)
         let filtered = applyMediaFilter(sorted)
         let visible = Array(filtered.prefix(visibleCount))
         let hasMore = filtered.count > visible.count
         return VStack(alignment: .leading, spacing: 0) {
-            // Controls panel (visually distinct from the results grid)
-            VStack(spacing: 0) {
-                // Location fallback banner
-                if let summary = filterSummary, !filtered.isEmpty {
-                    HStack(spacing: 6) {
-                        Image(systemName: "mappin.circle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(Celestial.Colors.amber)
-                        let location = summary.locationDescription ?? ""
-                        Text("Showing all photos\(location.isEmpty ? "" : " near \(location)")")
-                            .font(.footnote)
-                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
-                }
-
-                // Upgrade banner for free tier (after first successful search)
-                if !proManager.isPro && indexingService.hitFreeLimit && hasCompletedFirstSearch && !upgradeBannerDismissed {
-                    upgradeBanner
-                        .padding(.bottom, 10)
-                }
-
-                // Result summary + sort toggle
-                HStack {
-                    Text("\(filtered.count) \(filtered.count == 1 ? "result" : "results")")
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                    if searchTimeMs > 0 {
-                        Text("in \(searchTimeMs)ms")
-                            .font(.caption)
-                            .foregroundStyle(Celestial.Colors.outline)
-                    }
-                    Spacer()
-                    Picker("Sort", selection: Binding(
-                        get: { sortMode },
-                        set: { sortModeRaw = $0.rawValue }
-                    )) {
-                        Text("Relevance").tag(SortMode.relevance)
-                        Text("Recent").tag(SortMode.recent)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 180)
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-
-                // Media filter chips
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(MediaFilter.allCases, id: \.self) { filter in
-                            let isActive = mediaFilter == filter
-                            Button {
-                                Haptics.selection()
-                                mediaFilter = filter
-                                visibleCount = initialVisibleCount
-                            } label: {
-                                Text(filter.label)
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(isActive ? Celestial.Colors.onPrimaryContainer : Celestial.Colors.onSurfaceVariant)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 7)
-                                    .background(isActive ? Celestial.Colors.primaryContainer : Celestial.Colors.surfaceContainerHigh)
-                                    .clipShape(Capsule())
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-            }
-            .padding(.vertical, 14)
-            .background(Celestial.Colors.surfaceContainer.opacity(0.85))
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: Celestial.sharedCornerRadius))
-            .overlay(
-                RoundedRectangle(cornerRadius: Celestial.sharedCornerRadius)
-                    .stroke(Celestial.Colors.outlineVariant.opacity(0.25), lineWidth: 1)
-            )
-            .padding(.horizontal, 12)
-            .padding(.bottom, 10)
-
             if sortMode == .recent {
                 let groups = ResultGrouper.groupByMonth(results: visible)
                 ForEach(groups) { group in
