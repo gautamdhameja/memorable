@@ -107,6 +107,15 @@ enum QueryParserFallback {
         )
     }
 
+    private static let visualWords: Set<String> = [
+        "sunset", "sunrise", "beach", "mountain", "food", "dog", "cat",
+        "car", "tree", "flower", "snow", "rain", "night", "morning",
+        "selfie", "people", "baby", "wedding", "birthday", "christmas",
+        "halloween", "lake", "river", "ocean", "forest", "park", "garden",
+        "pool", "sky", "clouds", "street", "market", "lunch", "dinner",
+        "breakfast", "coffee",
+    ]
+
     private static let temporalWords: Set<String> = [
         "january", "february", "march", "april", "may", "june",
         "july", "august", "september", "october", "november", "december",
@@ -219,20 +228,16 @@ enum QueryParserFallback {
                 if allCapitalized && !candidates.isEmpty {
                     // Single capitalized words are too ambiguous (pet names,
                     // people names, brand names). Only treat them as locations
-                    // if they match a known city name. Multi-word inputs (2+)
-                    // are much more likely to be place names and keep the
-                    // existing heuristic.
+                    // if they match a known city name AND are not a common
+                    // visual/photographic term. "Sunrise" is a city in Florida
+                    // but users almost always mean the visual concept.
                     if candidates.count == 1 {
                         let word = candidates[0].lowercased()
-                        if KnownCities.singleWord.contains(word) {
+                        if KnownCities.singleWord.contains(word) && !visualWords.contains(word) {
                             locationHint = candidates.joined(separator: " ")
                             text = ""
                         }
                     } else {
-                        let visualWords: Set<String> = ["sunset", "sunrise", "beach", "mountain",
-                            "food", "dog", "cat", "car", "tree", "flower", "snow",
-                            "rain", "night", "morning", "selfie", "people", "baby",
-                            "wedding", "birthday", "christmas", "halloween"]
                         let isLikelyVisual = candidates.allSatisfy {
                             visualWords.contains($0.lowercased())
                         }

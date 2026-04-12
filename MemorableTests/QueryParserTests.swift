@@ -303,6 +303,19 @@ final class QueryParserTests: XCTestCase {
         XCTAssertNil(hints.locationHint, "Sarah is a name, not a city")
     }
 
+    func testSunriseIsVisualNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Sunrise")
+        XCTAssertNil(hints.locationHint, "Sunrise is a visual concept, not a location")
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertEqual(hints.textQuery, "sunrise")
+    }
+
+    func testBeachIsVisualNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Beach")
+        XCTAssertNil(hints.locationHint, "Beach is a visual concept, not a location")
+        XCTAssertTrue(hints.hasVisualQuery)
+    }
+
     func testTeslaIsNotLocation() {
         let hints = QueryParserFallback.parse(query: "Tesla")
         XCTAssertNil(hints.locationHint, "Tesla is a brand, not a city")
