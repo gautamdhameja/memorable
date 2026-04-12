@@ -108,12 +108,20 @@ enum QueryParserFallback {
     }
 
     private static let visualWords: Set<String> = [
+        // Photographic subjects and scenes
         "sunset", "sunrise", "beach", "mountain", "food", "dog", "cat",
         "car", "tree", "flower", "snow", "rain", "night", "morning",
         "selfie", "people", "baby", "wedding", "birthday", "christmas",
         "halloween", "lake", "river", "ocean", "forest", "park", "garden",
         "pool", "sky", "clouds", "street", "market", "lunch", "dinner",
         "breakfast", "coffee",
+        // Common venue/scene nouns (appear after prepositions but are not locations)
+        "home", "house", "room", "kitchen", "balcony", "rooftop", "terrace",
+        "school", "office", "work", "gym", "hospital", "studio",
+        "restaurant", "cafe", "bar", "pub", "hotel", "resort", "mall", "shop",
+        "playground", "yard", "backyard",
+        "trip", "vacation",
+        "party", "concert", "festival", "event",
     ]
 
     private static let temporalWords: Set<String> = [
@@ -134,7 +142,8 @@ enum QueryParserFallback {
 
         // Strategy 1: NLTagger on original text (works when user types proper case)
         if let place = extractPlaceViaTagger(original),
-           !temporalWords.contains(place.lowercased()) {
+           !temporalWords.contains(place.lowercased()),
+           !visualWords.contains(place.lowercased()) {
             let remaining = text.replacingOccurrences(of: place.lowercased(), with: "")
                 .trimmingCharacters(in: .whitespaces)
 
@@ -187,11 +196,14 @@ enum QueryParserFallback {
             }
             guard !locationWords.isEmpty else { continue }
 
-            // Single visual words after a preposition are descriptors, not
-            // locations. "dog in park" means a visual scene, not the city
-            // of Park. Multi-word locations ("in San Diego") are unambiguous.
-            if locationWords.count == 1 && visualWords.contains(locationWords[0].lowercased()) {
-                continue
+            // Single visual or temporal words after a preposition are not
+            // locations. "dog in park" is a scene, "photos from easter"
+            // is temporal. Multi-word locations ("in San Diego") are fine.
+            if locationWords.count == 1 {
+                let word = locationWords[0].lowercased()
+                if visualWords.contains(word) || temporalWords.contains(word) {
+                    continue
+                }
             }
 
             locationHint = locationWords.joined(separator: " ")

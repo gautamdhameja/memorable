@@ -332,6 +332,55 @@ final class QueryParserTests: XCTestCase {
         XCTAssertTrue(hints.textQuery.contains("market"))
     }
 
+    func testCatAtHomeNoLocation() {
+        let hints = QueryParserFallback.parse(query: "cat at home")
+        XCTAssertNil(hints.locationHint, "home is not a location")
+        XCTAssertTrue(hints.textQuery.contains("cat"))
+        XCTAssertTrue(hints.textQuery.contains("home"))
+    }
+
+    func testFoodAtRestaurantNoLocation() {
+        let hints = QueryParserFallback.parse(query: "food at restaurant")
+        XCTAssertNil(hints.locationHint, "restaurant is not a location")
+        XCTAssertTrue(hints.textQuery.contains("food"))
+    }
+
+    func testPhotosFromVacationNoLocation() {
+        let hints = QueryParserFallback.parse(query: "photos from vacation")
+        XCTAssertNil(hints.locationHint, "vacation is not a location")
+    }
+
+    func testPhotosFromEasterNoLocation() {
+        let hints = QueryParserFallback.parse(query: "photos from easter")
+        XCTAssertNil(hints.locationHint, "easter is temporal, not a location")
+    }
+
+    func testKidsAtPlaygroundNoLocation() {
+        let hints = QueryParserFallback.parse(query: "kids at playground")
+        XCTAssertNil(hints.locationHint, "playground is not a location")
+    }
+
+    func testPartyAtHotelNoLocation() {
+        let hints = QueryParserFallback.parse(query: "party at hotel")
+        XCTAssertNil(hints.locationHint, "hotel is not a location")
+    }
+
+    func testSunsetFromBalconyNoLocation() {
+        let hints = QueryParserFallback.parse(query: "sunset from balcony")
+        XCTAssertNil(hints.locationHint, "balcony is not a location")
+        XCTAssertTrue(hints.textQuery.contains("sunset"))
+    }
+
+    func testMeetingAtOfficeNoLocation() {
+        let hints = QueryParserFallback.parse(query: "meeting at office")
+        XCTAssertNil(hints.locationHint, "office is not a location")
+    }
+
+    func testMultiWordLocationStillWorks() {
+        let hints = QueryParserFallback.parse(query: "food in San Diego")
+        XCTAssertNotNil(hints.locationHint, "Multi-word locations after prepositions should work")
+    }
+
     func testBeachIsVisualNotLocation() {
         let hints = QueryParserFallback.parse(query: "Beach")
         XCTAssertNil(hints.locationHint, "Beach is a visual concept, not a location")
