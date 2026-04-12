@@ -310,6 +310,14 @@ final class QueryParserTests: XCTestCase {
         XCTAssertEqual(hints.textQuery, "sunrise")
     }
 
+    func testCoffeeInSpain() {
+        let hints = QueryParserFallback.parse(query: "coffee in Spain")
+        XCTAssertEqual(hints.locationHint, "spain", "Spain should be the location, not coffee")
+        XCTAssertEqual(hints.textQuery, "coffee", "coffee should be the visual query")
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertNil(hints.dateRange)
+    }
+
     func testBeachIsVisualNotLocation() {
         let hints = QueryParserFallback.parse(query: "Beach")
         XCTAssertNil(hints.locationHint, "Beach is a visual concept, not a location")

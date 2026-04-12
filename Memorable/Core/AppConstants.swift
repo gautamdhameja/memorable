@@ -66,6 +66,12 @@ enum SearchConfig {
     // Scene label boost per matching label (additive on top of CLIP)
     static let sceneLabelBoostPerMatch: Float = 0.08
 
+    // Video frames lack scene labels, OCR text, and location-name boosts
+    // that photos receive. This flat compensation partially offsets the
+    // asymmetry so that a genuinely relevant video isn't buried under
+    // photos whose scores were inflated by non-CLIP boosts.
+    static let videoRelevanceCompensation: Float = 0.08
+
     // Relevance badge color tiers (applied in PhotoThumbnailView)
     static let strongMatchThreshold: Float = 0.32
     static let marginalMatchThreshold: Float = 0.22

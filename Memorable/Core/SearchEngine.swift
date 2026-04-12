@@ -572,6 +572,12 @@ class SearchEngine {
 
                 guard frameScore >= minimumScoreThreshold else { continue }
 
+                // Videos don't get scene-label, OCR, or location-name boosts
+                // that photos receive because those features aren't indexed
+                // per video frame. Compensate so a genuinely relevant video
+                // isn't outranked by boost-inflated photos.
+                frameScore += SearchConfig.videoRelevanceCompensation
+
                 let vid = vIds[i]
                 if let existing = videoScoreMap[vid] {
                     if frameScore > existing.score {
