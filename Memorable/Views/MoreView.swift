@@ -251,7 +251,7 @@ struct MoreView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "building.2")
                                 .foregroundStyle(Celestial.Colors.outlineVariant)
-                            Text("Built by BlockDeep Labs")
+                            Text("Built by Proferent")
                                 .font(.footnote)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
