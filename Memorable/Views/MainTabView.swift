@@ -33,7 +33,7 @@ struct MainTabView: View {
                     Label("More", systemImage: "square.grid.2x2")
                 }
                 .tag(2)
-                .badge(indexingService.newPhotosAvailable ? "!" : nil)
+                .badge(indexingService.newPhotosAvailable ? "" : nil)
         }
         .tint(Celestial.Colors.primaryDim)
         .preferredColorScheme(.dark)
