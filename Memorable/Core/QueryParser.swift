@@ -107,11 +107,25 @@ enum QueryParserFallback {
         )
     }
 
+    private static let temporalWords: Set<String> = [
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+        "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+        "spring", "summer", "autumn", "fall", "winter",
+        "yesterday", "today", "tomorrow", "tonight",
+        "last", "this", "next", "recent", "recently",
+        "week", "weekend", "month", "year",
+        "christmas", "easter", "halloween", "thanksgiving",
+        "valentines", "xmas",
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    ]
+
     private static func extractLocation(from original: String, text: inout String, locationHint: inout String?) {
         var landmarkGuardTriggered = false
 
         // Strategy 1: NLTagger on original text (works when user types proper case)
-        if let place = extractPlaceViaTagger(original) {
+        if let place = extractPlaceViaTagger(original),
+           !temporalWords.contains(place.lowercased()) {
             let remaining = text.replacingOccurrences(of: place.lowercased(), with: "")
                 .trimmingCharacters(in: .whitespaces)
 
@@ -194,16 +208,24 @@ enum QueryParserFallback {
                     return first.isUppercase
                 }
 
-                if allCapitalized && !nonTemporalOriginalWords.isEmpty {
+                // Filter out any temporal words that survived into the
+                // candidate list. The temporal parser already consumed them
+                // from `text`, but `nonTemporalOriginalWords` is derived
+                // from the original input and may still contain them.
+                let candidates = nonTemporalOriginalWords.filter {
+                    !temporalWords.contains($0.lowercased())
+                }
+
+                if allCapitalized && !candidates.isEmpty {
                     // Single capitalized words are too ambiguous (pet names,
                     // people names, brand names). Only treat them as locations
                     // if they match a known city name. Multi-word inputs (2+)
                     // are much more likely to be place names and keep the
                     // existing heuristic.
-                    if nonTemporalOriginalWords.count == 1 {
-                        let word = nonTemporalOriginalWords[0].lowercased()
+                    if candidates.count == 1 {
+                        let word = candidates[0].lowercased()
                         if KnownCities.singleWord.contains(word) {
-                            locationHint = nonTemporalOriginalWords.joined(separator: " ")
+                            locationHint = candidates.joined(separator: " ")
                             text = ""
                         }
                     } else {
@@ -211,7 +233,7 @@ enum QueryParserFallback {
                             "food", "dog", "cat", "car", "tree", "flower", "snow",
                             "rain", "night", "morning", "selfie", "people", "baby",
                             "wedding", "birthday", "christmas", "halloween"]
-                        let isLikelyVisual = nonTemporalOriginalWords.allSatisfy {
+                        let isLikelyVisual = candidates.allSatisfy {
                             visualWords.contains($0.lowercased())
                         }
 
@@ -221,12 +243,12 @@ enum QueryParserFallback {
                             "lighthouse", "canyon", "reef", "volcano", "glacier",
                             "arch", "museum", "fountain", "church", "dome",
                             "fort", "ruins", "peak", "bay", "harbor"]
-                        let hasLandmarkWord = nonTemporalOriginalWords.contains {
+                        let hasLandmarkWord = candidates.contains {
                             landmarkWords.contains($0.lowercased())
                         }
 
                         if !isLikelyVisual && !hasLandmarkWord {
-                            locationHint = nonTemporalOriginalWords.joined(separator: " ")
+                            locationHint = candidates.joined(separator: " ")
                             text = ""
                         }
                     }

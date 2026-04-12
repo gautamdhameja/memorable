@@ -144,6 +144,25 @@ final class QueryParserTests: XCTestCase {
         XCTAssertNotNil(hints.locationHint, "Prague is a known city")
     }
 
+    // MARK: - Temporal Words Must Not Become Locations
+
+    func testJanuaryLastYearNoLocation() {
+        let hints = QueryParserFallback.parse(query: "January last year")
+        XCTAssertNil(hints.locationHint, "January is a month, not a location")
+        XCTAssertNotNil(hints.dateRange, "Should extract a date range")
+    }
+
+    func testBareMonthNameNoLocation() {
+        let hints = QueryParserFallback.parse(query: "December")
+        XCTAssertNil(hints.locationHint, "December is a month, not a location")
+        XCTAssertNotNil(hints.dateRange)
+    }
+
+    func testSeasonNameNoLocation() {
+        let hints = QueryParserFallback.parse(query: "Summer")
+        XCTAssertNil(hints.locationHint, "Summer is a season, not a location")
+    }
+
     // MARK: - Query Truncation
 
     func testLongQueryTruncated() {
