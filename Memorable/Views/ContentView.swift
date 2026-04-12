@@ -70,7 +70,7 @@ struct ContentView: View {
                 Text("Downloading AI Models")
                     .font(.system(.title3, design: .rounded, weight: .semibold))
                     .foregroundStyle(Celestial.Colors.onSurface)
-                Text("One-time download (~300 MB)")
+                Text("One-time download (~850 MB)")
                     .font(.subheadline)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 ProgressView(value: modelDownloader.downloadProgress)
