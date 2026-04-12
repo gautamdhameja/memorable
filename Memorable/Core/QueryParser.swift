@@ -195,30 +195,40 @@ enum QueryParserFallback {
                 }
 
                 if allCapitalized && !nonTemporalOriginalWords.isEmpty {
-                    let visualWords: Set<String> = ["sunset", "sunrise", "beach", "mountain",
-                        "food", "dog", "cat", "car", "tree", "flower", "snow",
-                        "rain", "night", "morning", "selfie", "people", "baby",
-                        "wedding", "birthday", "christmas", "halloween"]
-                    let isLikelyVisual = nonTemporalOriginalWords.allSatisfy {
-                        visualWords.contains($0.lowercased())
-                    }
+                    // Single capitalized words are too ambiguous (pet names,
+                    // people names, brand names). Only treat them as locations
+                    // if they match a known city name. Multi-word inputs (2+)
+                    // are much more likely to be place names and keep the
+                    // existing heuristic.
+                    if nonTemporalOriginalWords.count == 1 {
+                        let word = nonTemporalOriginalWords[0].lowercased()
+                        if KnownCities.singleWord.contains(word) {
+                            locationHint = nonTemporalOriginalWords.joined(separator: " ")
+                            text = ""
+                        }
+                    } else {
+                        let visualWords: Set<String> = ["sunset", "sunrise", "beach", "mountain",
+                            "food", "dog", "cat", "car", "tree", "flower", "snow",
+                            "rain", "night", "morning", "selfie", "people", "baby",
+                            "wedding", "birthday", "christmas", "halloween"]
+                        let isLikelyVisual = nonTemporalOriginalWords.allSatisfy {
+                            visualWords.contains($0.lowercased())
+                        }
 
-                    // Landmark indicator words — if any word in the query is a
-                    // landmark noun, treat the whole thing as visual, not location.
-                    // "Hoover Dam", "Eiffel Tower", "Golden Gate Bridge", "Niagara Falls"
-                    let landmarkWords: Set<String> = ["dam", "tower", "bridge", "falls",
-                        "monument", "palace", "castle", "gate", "wall", "square",
-                        "plaza", "temple", "cathedral", "pyramid", "statue",
-                        "lighthouse", "canyon", "reef", "volcano", "glacier",
-                        "arch", "museum", "fountain", "church", "dome",
-                        "fort", "ruins", "peak", "bay", "harbor"]
-                    let hasLandmarkWord = nonTemporalOriginalWords.contains {
-                        landmarkWords.contains($0.lowercased())
-                    }
+                        let landmarkWords: Set<String> = ["dam", "tower", "bridge", "falls",
+                            "monument", "palace", "castle", "gate", "wall", "square",
+                            "plaza", "temple", "cathedral", "pyramid", "statue",
+                            "lighthouse", "canyon", "reef", "volcano", "glacier",
+                            "arch", "museum", "fountain", "church", "dome",
+                            "fort", "ruins", "peak", "bay", "harbor"]
+                        let hasLandmarkWord = nonTemporalOriginalWords.contains {
+                            landmarkWords.contains($0.lowercased())
+                        }
 
-                    if !isLikelyVisual && !hasLandmarkWord {
-                        locationHint = nonTemporalOriginalWords.joined(separator: " ")
-                        text = ""
+                        if !isLikelyVisual && !hasLandmarkWord {
+                            locationHint = nonTemporalOriginalWords.joined(separator: " ")
+                            text = ""
+                        }
                     }
                 }
             }

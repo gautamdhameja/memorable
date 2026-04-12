@@ -90,14 +90,7 @@ class SmartQueryParser {
                 // Misidentified name fragments are usually single words
                 // ("Hoover", "Eiffel", "Golden").
                 if locWords == 1 {
-                    let commonCities: Set<String> = ["berlin", "paris", "london", "tokyo",
-                        "rome", "madrid", "munich", "vienna", "prague", "amsterdam",
-                        "barcelona", "istanbul", "dubai", "singapore", "sydney",
-                        "melbourne", "chicago", "boston", "seattle", "portland",
-                        "denver", "austin", "miami", "orlando", "atlanta",
-                        "dallas", "houston", "phoenix", "vegas", "sacramento",
-                        "brooklyn", "manhattan", "queens"]
-                    if !commonCities.contains(currentLoc.lowercased()) {
+                    if !KnownCities.singleWord.contains(currentLoc.lowercased()) {
                         let combined = (currentLoc + " " + visualDesc).lowercased()
                         let reversed = (visualDesc + " " + currentLoc).lowercased()
                         let queryLower = query.lowercased()

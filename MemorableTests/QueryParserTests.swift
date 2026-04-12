@@ -120,6 +120,30 @@ final class QueryParserTests: XCTestCase {
         XCTAssertNotNil(hints.locationHint, "San Diego should be detected as a location")
     }
 
+    // MARK: - Single-Word Location Disambiguation
+
+    func testSingleWordPetNameNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Jimmy")
+        XCTAssertNil(hints.locationHint, "Jimmy is a name, not a city")
+        XCTAssertTrue(hints.hasVisualQuery)
+    }
+
+    func testSingleWordPersonNameNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Sarah")
+        XCTAssertNil(hints.locationHint, "Sarah is a name, not a city")
+    }
+
+    func testSingleWordKnownCityIsLocation() {
+        let hints = QueryParserFallback.parse(query: "Mumbai")
+        // NLTagger (Strategy 1) or Strategy 3 allow-list should catch this
+        XCTAssertNotNil(hints.locationHint, "Mumbai is a known city")
+    }
+
+    func testSingleWordEuropeanCityIsLocation() {
+        let hints = QueryParserFallback.parse(query: "Prague")
+        XCTAssertNotNil(hints.locationHint, "Prague is a known city")
+    }
+
     // MARK: - Query Truncation
 
     func testLongQueryTruncated() {

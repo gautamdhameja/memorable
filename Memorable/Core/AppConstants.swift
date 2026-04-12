@@ -71,6 +71,69 @@ enum SearchConfig {
     static let marginalMatchThreshold: Float = 0.22
 }
 
+// MARK: - Known Single-Word City Names
+
+/// Used by QueryParser Strategy 3 and SmartQueryParser to distinguish
+/// genuine city names from pet names, people names, and other proper nouns
+/// when the input is a single capitalized word. Multi-word place names
+/// ("San Diego", "New York") don't need this list because they're far
+/// less ambiguous. NLTagger (Strategy 1) catches most well-known cities,
+/// so this is the fallback for cases it misses.
+enum KnownCities {
+    static let singleWord: Set<String> = [
+        // Europe
+        "amsterdam", "antwerp", "athens", "barcelona", "bergen", "berlin",
+        "bordeaux", "bratislava", "bruges", "brussels", "bucharest", "budapest",
+        "cologne", "copenhagen", "cork", "dresden", "dublin", "dubrovnik",
+        "edinburgh", "florence", "frankfurt", "gdansk", "geneva", "gothenburg",
+        "granada", "hamburg", "helsinki", "innsbruck", "istanbul", "krakow",
+        "leipzig", "lisbon", "ljubljana", "london", "lyon", "madrid", "malmo",
+        "marseille", "milan", "moscow", "munich", "naples", "nice", "oslo",
+        "paris", "porto", "prague", "reykjavik", "riga", "rome", "rotterdam",
+        "salzburg", "seville", "split", "stockholm", "stuttgart", "tallinn",
+        "turku", "valencia", "venice", "vienna", "vilnius", "warsaw", "zurich",
+
+        // Americas
+        "albuquerque", "anchorage", "atlanta", "austin", "baltimore", "bogota",
+        "boston", "brooklyn", "calgary", "cancun", "cartagena", "charlotte",
+        "chicago", "cleveland", "columbus", "dallas", "denver", "detroit",
+        "edmonton", "guadalajara", "halifax", "havana", "honolulu", "houston",
+        "indianapolis", "lima", "manhattan", "medellin", "memphis", "miami",
+        "milwaukee", "minneapolis", "montreal", "montevideo", "nashville",
+        "orlando", "ottawa", "philadelphia", "phoenix", "pittsburgh", "portland",
+        "quito", "sacramento", "santiago", "seattle", "toronto", "tucson",
+        "vancouver", "winnipeg",
+
+        // India
+        "agra", "ahmedabad", "amritsar", "bangalore", "bengaluru", "bhopal",
+        "chandigarh", "chennai", "coimbatore", "darjeeling", "dehradun", "delhi",
+        "gangtok", "goa", "gurgaon", "guwahati", "hyderabad", "indore",
+        "jaipur", "jaisalmer", "jodhpur", "kanpur", "kochi", "kolkata",
+        "lucknow", "manali", "mangalore", "mumbai", "mussoorie", "mysore",
+        "nagpur", "noida", "ooty", "patna", "pondicherry", "pune", "ranchi",
+        "rishikesh", "shimla", "srinagar", "surat", "thiruvananthapuram",
+        "udaipur", "vadodara", "varanasi", "vizag",
+
+        // East and Southeast Asia
+        "bali", "bangkok", "beijing", "busan", "chengdu", "fukuoka", "guangzhou",
+        "hanoi", "jakarta", "kyoto", "macau", "manila", "nagoya", "osaka",
+        "phuket", "sapporo", "seoul", "shanghai", "shenzhen", "singapore",
+        "taipei", "tokyo", "xiamen", "yokohama",
+
+        // Middle East
+        "amman", "beirut", "doha", "dubai", "jerusalem", "muscat", "petra",
+        "riyadh",
+
+        // Australia and Oceania
+        "adelaide", "auckland", "brisbane", "cairns", "christchurch", "darwin",
+        "fiji", "hobart", "melbourne", "perth", "sydney", "wellington",
+
+        // Africa
+        "accra", "cairo", "casablanca", "dakar", "durban", "johannesburg",
+        "lagos", "luxor", "marrakech", "nairobi", "tunis", "zanzibar",
+    ]
+}
+
 // MARK: - Scene Label Synonyms
 
 enum SceneLabelConfig {
