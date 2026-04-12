@@ -304,6 +304,47 @@ final class TemporalParserTests: XCTestCase {
         XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), 2024)
     }
 
+    func testMonthLastYear() {
+        let hints = QueryParserFallback.parse(query: "photos january last year")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertTrue(hints.textQuery.contains("photos"))
+        if let range = hints.dateRange {
+            XCTAssertEqual(cal.component(.year, from: range.start), currentYear - 1)
+            XCTAssertEqual(cal.component(.month, from: range.start), 1)
+            // dayEnd pushes end to midnight of Feb 1 (just past Jan 31)
+            let endMonth = cal.component(.month, from: range.end)
+            XCTAssertTrue(endMonth == 1 || endMonth == 2,
+                "End should be late January or midnight Feb 1, not December")
+        }
+    }
+
+    func testMonthThisYear() {
+        let hints = QueryParserFallback.parse(query: "food march this year")
+        XCTAssertNotNil(hints.dateRange)
+        if let range = hints.dateRange {
+            XCTAssertEqual(cal.component(.year, from: range.start), currentYear)
+            XCTAssertEqual(cal.component(.month, from: range.start), 3)
+        }
+    }
+
+    func testLastMarch() {
+        let hints = QueryParserFallback.parse(query: "flowers last march")
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertTrue(hints.textQuery.contains("flowers"))
+        if let range = hints.dateRange {
+            XCTAssertEqual(cal.component(.month, from: range.start), 3)
+        }
+    }
+
+    func testAbbreviatedMonthLastYear() {
+        let hints = QueryParserFallback.parse(query: "trip jan last year")
+        XCTAssertNotNil(hints.dateRange)
+        if let range = hints.dateRange {
+            XCTAssertEqual(cal.component(.year, from: range.start), currentYear - 1)
+            XCTAssertEqual(cal.component(.month, from: range.start), 1)
+        }
+    }
+
     func testBareMonthSelectsMostRecentPast() {
         let hints = QueryParserFallback.parse(query: "party january")
         XCTAssertNotNil(hints.dateRange)

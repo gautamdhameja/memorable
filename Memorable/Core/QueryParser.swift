@@ -660,6 +660,19 @@ private enum TemporalParser {
                     })
                 }
             }
+            // "january last year", "jan last year"
+            for name in [full, abbr] {
+                patterns.append(TemporalPattern(phrase: "\(name) last year") {
+                    monthRange(year: currentYear - 1, month: month)
+                })
+                patterns.append(TemporalPattern(phrase: "\(name) this year") {
+                    monthRange(year: currentYear, month: month)
+                })
+                patterns.append(TemporalPattern(phrase: "last \(name)") {
+                    let year = (currentMonth > month) ? currentYear : currentYear - 1
+                    return monthRange(year: year, month: month)
+                })
+            }
             // Bare month name: "january" -> most recent past January
             for name in [full, abbr] {
                 patterns.append(TemporalPattern(phrase: name) {

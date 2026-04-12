@@ -331,6 +331,17 @@ final class QueryParserTests: XCTestCase {
         let hints = QueryParserFallback.parse(query: "January last year")
         XCTAssertNil(hints.locationHint, "January should not become a location")
         XCTAssertNotNil(hints.dateRange)
+        if let range = hints.dateRange {
+            let cal = Calendar.current
+            let expectedYear = cal.component(.year, from: Date()) - 1
+            XCTAssertEqual(cal.component(.year, from: range.start), expectedYear)
+            XCTAssertEqual(cal.component(.month, from: range.start), 1,
+                "Should be January, not the full year")
+            // dayEnd pushes end to midnight of Feb 1 (just past Jan 31)
+            let endMonth = cal.component(.month, from: range.end)
+            XCTAssertTrue(endMonth == 1 || endMonth == 2,
+                "End should be late January or midnight Feb 1, not December")
+        }
     }
 
     func testBareDecemberNoLocation() {
