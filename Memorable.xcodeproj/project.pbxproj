@@ -36,7 +36,7 @@
 		62CE8351853236412FAF83EF /* TextEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C141E05773B14DC775D16001 /* TextEncoder.swift */; };
 		6A8A579D7A9D41CC787C1C1A /* ReverseGeocoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9AB4235487F03F53BFE2DD /* ReverseGeocoder.swift */; };
 		6DAA069F302614AB2A08ABDE /* LocationMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE8E85642B4AD5164AF0DEB2 /* LocationMatcher.swift */; };
-		71FACBB4E8DEF3D148CB6100 /* MobileCLIP2_S4_TextEncoder.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = FBF6F650CD3CD33C290B91BC /* MobileCLIP2_S4_TextEncoder.mlmodelc */; settings = {ASSET_TAGS = ("ml-models", ); }; };
+		71FACBB4E8DEF3D148CB6100 /* MobileCLIP2_S4_TextEncoder.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = FBF6F650CD3CD33C290B91BC /* MobileCLIP2_S4_TextEncoder.mlmodelc */; };
 		7B899DD797DFEA2A10F7C205 /* SearchEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F2A055CD079A0CE08308305 /* SearchEngine.swift */; };
 		81062F7BCED414F901DA160C /* GlassModifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68BFF5828079A1CBE1AD097A /* GlassModifiers.swift */; };
 		818A4AB3917F5A06DDCF42F2 /* Database.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04777888F7A65D942A97249E /* Database.swift */; };
@@ -46,7 +46,6 @@
 		8E74B4ED2E14DC3006AB344E /* IndexingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86236F2B93F728A4084689DE /* IndexingService.swift */; };
 		9BCC68972201B1B6E6183B1C /* TimeOfDayConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65A4FE16748683991AAD0D0D /* TimeOfDayConfigTests.swift */; };
 		9C66CD1F0FACE00A353694AA /* LocationMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 975DAE17DBF8435E099328EB /* LocationMatcherTests.swift */; };
-		B2C070961DA5A70EF67C7B87 /* ModelDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 029CC1DD951EEB52CA1C2270 /* ModelDownloader.swift */; };
 		B464A5FC64B14E882EF1B88C /* SceneClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 148270E6FBC86A1022242BB0 /* SceneClassifier.swift */; };
 		B8404198F891F56348737D02 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 695C53E8964D1364616174BE /* PrivacyInfo.xcprivacy */; };
 		BB41DE71DD7BDC45CCA81CFD /* MemorableApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78F330604E0E430384CA5D0C /* MemorableApp.swift */; };
@@ -62,7 +61,7 @@
 		D2BD2CD0C9ADB8A1996A5D39 /* OnThisDayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9D9715A3DFD663D63870968 /* OnThisDayView.swift */; };
 		DD214D0FDE09AD58273BA2EB /* AppConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1ECD50E6C57D89CB695A5BF /* AppConstants.swift */; };
 		DEB5B8815B1FE736E96C73BD /* SearchHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46746212124ECAE7AC5377A9 /* SearchHistory.swift */; };
-		E0B66A9AE785D6EEB2183BAD /* MobileCLIP2_S4_ImageEncoder.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = 0BDD8B04EA995A3BE94B0142 /* MobileCLIP2_S4_ImageEncoder.mlmodelc */; settings = {ASSET_TAGS = ("ml-models", ); }; };
+		E0B66A9AE785D6EEB2183BAD /* MobileCLIP2_S4_ImageEncoder.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = 0BDD8B04EA995A3BE94B0142 /* MobileCLIP2_S4_ImageEncoder.mlmodelc */; };
 		E3B845FCF170C6616763CEA7 /* DuplicateFinderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF05C18BFD80508842B02D93 /* DuplicateFinderView.swift */; };
 		E5E015B33CD249F0CB1C2D30 /* QueryParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BD3DDFF0C17CCBBF2F49794 /* QueryParserTests.swift */; };
 		EDD5206630B92538D1874E06 /* VideoFrameConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 773335085FD380E97797E67E /* VideoFrameConfigTests.swift */; };
@@ -86,7 +85,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		029CC1DD951EEB52CA1C2270 /* ModelDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloader.swift; sourceTree = "<group>"; };
 		039B56827290E98DEC248FC3 /* FolderScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderScanner.swift; sourceTree = "<group>"; };
 		04777888F7A65D942A97249E /* Database.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Database.swift; sourceTree = "<group>"; };
 		07AE5EC813032B6B86481607 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
@@ -253,7 +251,6 @@
 				765756E0EA06408766468C75 /* ImageEncoder.swift */,
 				86236F2B93F728A4084689DE /* IndexingService.swift */,
 				BE8E85642B4AD5164AF0DEB2 /* LocationMatcher.swift */,
-				029CC1DD951EEB52CA1C2270 /* ModelDownloader.swift */,
 				348DCC9FF9A2320FBC3EF1D8 /* OCRService.swift */,
 				ABF97148122688A41ADB2428 /* PhotoCaptionService.swift */,
 				CA911DEE314BF3B886667D60 /* PhotoLibrary.swift */,
@@ -349,9 +346,6 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 				};
-				knownAssetTags = (
-					"ml-models",
-				);
 			};
 			buildConfigurationList = C30144C9E3C8409649BD9D17 /* Build configuration list for PBXProject "Memorable" */;
 			developmentRegion = en;
@@ -435,7 +429,6 @@
 				EF8A1973F7D9174BAFD4DE0A /* MasonryGrid.swift in Sources */,
 				BB41DE71DD7BDC45CCA81CFD /* MemorableApp.swift in Sources */,
 				36278F4DA9B31416404CB2F9 /* MemorySlideshowView.swift in Sources */,
-				B2C070961DA5A70EF67C7B87 /* ModelDownloader.swift in Sources */,
 				FDC28DCD164F00C063C8230E /* MoreView.swift in Sources */,
 				262227106BE5ECC28ADF5FE1 /* OCRService.swift in Sources */,
 				D2BD2CD0C9ADB8A1996A5D39 /* OnThisDayView.swift in Sources */,

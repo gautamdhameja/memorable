@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
-    @StateObject private var modelDownloader = ModelDownloader()
     @AppStorage(AppKeys.onboardingComplete) private var onboardingComplete: Bool = false
 
     var body: some View {
@@ -11,8 +10,6 @@ struct ContentView: View {
 
             if !onboardingComplete {
                 OnboardingView(isComplete: $onboardingComplete)
-            } else if !modelDownloader.isDownloaded {
-                modelDownloadView
             } else if appState.authorizationStatus == .denied || appState.authorizationStatus == .restricted {
                 photoAccessDeniedView
             } else if appState.isModelLoaded, let indexingService = appState.indexingService,
@@ -25,66 +22,14 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear {
-            modelDownloader.checkAndDownloadModels()
-        }
-        .onChange(of: modelDownloader.isDownloaded) {
-            if modelDownloader.isDownloaded {
-                Task {
-                    await appState.initialize()
-                }
-            }
-        }
-        .task {
-            // If models were already downloaded, onChange won't fire — initialize directly
-            if modelDownloader.isDownloaded && !appState.isModelLoaded && appState.errorMessage == nil {
+        .task(id: onboardingComplete) {
+            if onboardingComplete && !appState.isModelLoaded && appState.errorMessage == nil {
                 await appState.initialize()
             }
         }
     }
 
     // MARK: - Subviews
-
-    private var modelDownloadView: some View {
-        VStack(spacing: 24) {
-            if let error = modelDownloader.errorMessage {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 48))
-                    .foregroundStyle(Celestial.Colors.error)
-                    .accessibilityHidden(true)
-                Text(error)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                    .padding(.horizontal)
-                Button("Retry Download") {
-                    modelDownloader.errorMessage = nil
-                    modelDownloader.checkAndDownloadModels()
-                }
-                .buttonStyle(CelestialButtonStyle())
-            } else {
-                Spacer()
-                Image(systemName: "arrow.down.circle")
-                    .font(.system(size: 56, weight: .thin))
-                    .foregroundStyle(Celestial.Colors.primaryDim)
-                    .accessibilityHidden(true)
-                Text("Downloading AI Models")
-                    .font(.system(.title3, design: .rounded, weight: .semibold))
-                    .foregroundStyle(Celestial.Colors.onSurface)
-                Text("One-time download (~850 MB)")
-                    .font(.subheadline)
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                ProgressView(value: modelDownloader.downloadProgress)
-                    .tint(Celestial.Colors.primaryFixedDim)
-                    .padding(.horizontal, 48)
-                    .padding(.top, 8)
-                Text("\(Int(modelDownloader.downloadProgress * 100))%")
-                    .font(.caption)
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                    .accessibilityLabel("Download progress: \(Int(modelDownloader.downloadProgress * 100)) percent")
-                Spacer()
-            }
-        }
-    }
 
     private var photoAccessDeniedView: some View {
         VStack(spacing: 20) {
