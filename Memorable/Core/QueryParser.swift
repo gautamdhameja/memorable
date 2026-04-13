@@ -140,11 +140,28 @@ enum QueryParserFallback {
     private static func extractLocation(from original: String, text: inout String, locationHint: inout String?) {
         var landmarkGuardTriggered = false
 
-        // Strategy 1 (highest confidence): Explicit preposition pattern —
-        // "in/at/near/from <words>". When the user writes "X in Berlin",
-        // the preposition is a strong structural signal that always wins
-        // over NLTagger's statistical guesses (which can misidentify words
-        // like "lunar" or "coral" as place names).
+        // Strategy 1: NLTagger on original text (works when user types proper case)
+        if let place = extractPlaceViaTagger(original),
+           !temporalWords.contains(place.lowercased()),
+           !visualWords.contains(place.lowercased()) {
+            let remaining = text.replacingOccurrences(of: place.lowercased(), with: "")
+                .trimmingCharacters(in: .whitespaces)
+
+            // Guard: if removing the "place" leaves behind just 1 short word,
+            // NLTagger probably split a compound proper noun like "Hoover Dam"
+            // or "Eiffel Tower". The whole query is likely a landmark name,
+            // not a location + visual descriptor.
+            if !isLikelyLandmarkFragment(remaining: remaining, original: original) {
+                locationHint = place
+                text = remaining
+                return
+            } else {
+                landmarkGuardTriggered = true
+            }
+        }
+
+        // Strategy 2: Location preposition pattern — "in/at/near/from <words>"
+        // Take words after the preposition until we hit another preposition or temporal word
         let lowered = text
         let locationPreps = ["in ", "at ", "near ", "from "]
         let stopWords = Set(["in", "at", "on", "from", "near", "during", "last", "this", "yesterday",
@@ -196,27 +213,6 @@ enum QueryParserFallback {
                 .replacingOccurrences(of: "  ", with: " ")
                 .trimmingCharacters(in: .whitespaces)
             return
-        }
-
-        // Strategy 2: NLTagger on original text (works when user types proper case).
-        // Only used when no explicit preposition pattern was found above.
-        if let place = extractPlaceViaTagger(original),
-           !temporalWords.contains(place.lowercased()),
-           !visualWords.contains(place.lowercased()) {
-            let remaining = text.replacingOccurrences(of: place.lowercased(), with: "")
-                .trimmingCharacters(in: .whitespaces)
-
-            // Guard: if removing the "place" leaves behind just 1 short word,
-            // NLTagger probably split a compound proper noun like "Hoover Dam"
-            // or "Eiffel Tower". The whole query is likely a landmark name,
-            // not a location + visual descriptor.
-            if !isLikelyLandmarkFragment(remaining: remaining, original: original) {
-                locationHint = place
-                text = remaining
-                return
-            } else {
-                landmarkGuardTriggered = true
-            }
         }
 
         // Strategy 3: Bare multi-word proper noun fallback
