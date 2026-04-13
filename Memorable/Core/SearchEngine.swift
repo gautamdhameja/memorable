@@ -391,7 +391,7 @@ class SearchEngine {
         // PHASE 3: CLIP SCORING — score all, then mask out non-candidates
         // =====================================================================
 
-        let queryEmbedding = try encodeQueryWithFusion(text: hints.textQuery)
+        let queryEmbedding = try encodeQuery(text: hints.textQuery)
 
         var scores: [Float]
         if let gpuScores = gpuSearch?.search(queryEmbedding: queryEmbedding), gpuScores.count == count {
@@ -453,7 +453,7 @@ class SearchEngine {
 
         // Negative term penalty
         for negTerm in hints.negativeTerms {
-            let negEmbedding = try textEncoder.encode(text: "a photo of " + negTerm)
+            let negEmbedding = try textEncoder.encode(text: negTerm)
             if let negScores = gpuSearch?.search(queryEmbedding: negEmbedding), negScores.count == count {
                 for i in 0..<count {
                     guard candidateMask[i] else { continue }
@@ -511,6 +511,19 @@ class SearchEngine {
             }
         }
 
+        #if DEBUG
+        // Score distribution for photos (raw CLIP scores before boosts)
+        let candidateScores = (0..<count).filter { candidateMask[$0] }.map { scores[$0] }
+        if !candidateScores.isEmpty {
+            let sortedCS = candidateScores.sorted(by: >)
+            let above020 = candidateScores.filter { $0 >= 0.20 }.count
+            let above015 = candidateScores.filter { $0 >= 0.15 }.count
+            let above010 = candidateScores.filter { $0 >= 0.10 }.count
+            let mean = candidateScores.reduce(0, +) / Float(candidateScores.count)
+            logger.info("[ScoreDist] Photos: top5=[\(sortedCS.prefix(5).map { String(format: "%.3f", $0) }.joined(separator: ", "))] mean=\(String(format: "%.4f", mean)) >=0.20:\(above020) >=0.15:\(above015) >=0.10:\(above010) total:\(candidateScores.count)")
+        }
+        #endif
+
         // =====================================================================
         // PHASE 5: VIDEO SCORING
         // =====================================================================
@@ -534,6 +547,15 @@ class SearchEngine {
                 videoScores = cpuScores
             }
 
+            #if DEBUG
+            let sortedVS = videoScores.enumerated().sorted { $0.element > $1.element }
+            let vAbove020 = videoScores.filter { $0 >= 0.20 }.count
+            let vAbove015 = videoScores.filter { $0 >= 0.15 }.count
+            let vAbove010 = videoScores.filter { $0 >= 0.10 }.count
+            let vMean = videoScores.reduce(0, +) / Float(vCount)
+            logger.info("[ScoreDist] Videos: top5=[\(sortedVS.prefix(5).map { String(format: "%.3f", $0.element) }.joined(separator: ", "))] mean=\(String(format: "%.4f", vMean)) >=0.20:\(vAbove020) >=0.15:\(vAbove015) >=0.10:\(vAbove010) total:\(vCount)")
+            #endif
+
             for i in 0..<vCount {
                 var frameScore = videoScores[i]
                 guard frameScore >= minimumScoreThreshold else { continue }
@@ -556,7 +578,7 @@ class SearchEngine {
                 }
 
                 for negTerm in hints.negativeTerms {
-                    let negEmbedding = try textEncoder.encode(text: "a photo of " + negTerm)
+                    let negEmbedding = try textEncoder.encode(text: negTerm)
                     if let negScores = gpuVideoSearch?.search(queryEmbedding: negEmbedding), negScores.count == vCount {
                         frameScore -= negScores[i] * SearchConfig.negativeTermWeight
                     }
@@ -587,6 +609,7 @@ class SearchEngine {
                     videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], vPositions[i])
                 }
             }
+
         }
 
         // =====================================================================
@@ -605,10 +628,13 @@ class SearchEngine {
         }
 
         var allResults = photoResults + videoResults
+        // Sort by score descending. For near-identical scores (within 1%),
+        // prefer more recent results. SigLIP2's sigmoid loss produces a narrow
+        // score range, so the tolerance must be tight to preserve relevance ranking.
         allResults.sort { a, b in
             let scoreDiff = abs(a.score - b.score)
             let maxScore = max(a.score, b.score)
-            if maxScore > 0 && scoreDiff / maxScore < 0.05 {
+            if maxScore > 0 && scoreDiff / maxScore < 0.01 {
                 return (a.creationDate ?? .distantPast) > (b.creationDate ?? .distantPast)
             }
             return a.score > b.score
@@ -618,18 +644,41 @@ class SearchEngine {
         #if DEBUG
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
-        for (rank, r) in finalResults.enumerated() {
+        let photoResultCount = photoResults.count
+        let videoResultCount = videoResults.count
+        let thresholdVal = self.minimumScoreThreshold
+        logger.info("[Results] \(photoResultCount) photos + \(videoResultCount) videos = \(finalResults.count) total (threshold=\(String(format: "%.2f", thresholdVal)))")
+
+        // Top 10 results with type and score
+        for (rank, r) in finalResults.prefix(10).enumerated() {
             let dateStr = r.creationDate.map { dateFormatter.string(from: $0) } ?? "no-date"
             let type = r.isVideo ? "VIDEO" : "PHOTO"
-            logger.info("[Result #\(rank + 1)] \(type) id=\(r.id) local=\(r.localIdentifier) score=\(String(format: "%.3f", r.score)) date=\(dateStr)")
+            logger.info("[Result #\(rank + 1)] \(type) score=\(String(format: "%.4f", r.score)) date=\(dateStr) id=\(r.localIdentifier.prefix(20))")
         }
-        if finalResults.isEmpty {
-            let nearMisses = sorted.prefix(5)
-            for (index, score) in nearMisses {
+
+        // Score range of returned results
+        if !finalResults.isEmpty {
+            let resultScores = finalResults.map { $0.score }
+            logger.info("[Results] Score range: \(String(format: "%.4f", resultScores.min()!)) - \(String(format: "%.4f", resultScores.max()!)) (spread=\(String(format: "%.4f", resultScores.max()! - resultScores.min()!)))")
+        }
+
+        // Near-miss diagnostics when results are empty or sparse
+        if finalResults.count < 5 {
+            let nearMissCount = min(5, sorted.count)
+            logger.info("[NearMiss] Top \(nearMissCount) photo scores (below threshold or filtered):")
+            for (index, score) in sorted.prefix(nearMissCount) {
                 let dateStr = photoDates[index].map { dateFormatter.string(from: $0) } ?? "no-date"
-                let hasGPS = photoLats[index] != nil
                 let passed = candidateMask[index]
-                logger.info("[NearMiss] id=\(ids[index]) score=\(String(format: "%.3f", score)) date=\(dateStr) gps=\(hasGPS) passedFilter=\(passed)")
+                logger.info("[NearMiss] score=\(String(format: "%.4f", score)) passedFilter=\(passed) date=\(dateStr)")
+            }
+            if vCount > 0 {
+                let topVideo = videoScoreMap.sorted { $0.value.score > $1.value.score }.prefix(3)
+                if topVideo.isEmpty {
+                    logger.info("[NearMiss] No video frames passed threshold")
+                }
+                for (vid, data) in topVideo {
+                    logger.info("[NearMiss] VIDEO score=\(String(format: "%.4f", data.score)) vid=\(vid.prefix(12)) frame=\(String(format: "%.2f", data.framePosition))")
+                }
             }
         }
         #endif
@@ -686,6 +735,25 @@ class SearchEngine {
                 visualQuery: hints.textQuery
             )
             : nil
+
+        // When no results pass the threshold, show the top near-miss results as
+        // fallback so the user sees "closest matches" instead of an empty screen.
+        if finalResults.isEmpty && hints.hasVisualQuery {
+            let nearMissResults = sorted
+                .filter { $0.element > 0 && candidateMask[$0.offset] }
+                .prefix(SearchConfig.topK)
+                .map { (index, score) in
+                    SearchResult(id: ids[index], score: score, localIdentifier: localIds[index],
+                                 creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
+                }
+            let fallbackSummary = FilterSummary(
+                dateDescription: appliedSummary?.dateDescription,
+                locationDescription: appliedSummary?.locationDescription,
+                visualQuery: hints.textQuery
+            )
+            return SearchResponse(results: [], fallbackResults: Array(nearMissResults), filtersApplied: fallbackSummary)
+        }
+
         return SearchResponse(results: finalResults, fallbackResults: [], filtersApplied: appliedSummary)
     }
 
@@ -759,7 +827,7 @@ class SearchEngine {
         text: String, ids: [String], localIds: [String],
         dates: [Date?], count: Int
     ) -> [SearchResult] {
-        guard let queryEmbedding = try? encodeQueryWithFusion(text: text) else { return [] }
+        guard let queryEmbedding = try? encodeQuery(text: text) else { return [] }
         guard let gpuScores = gpuSearch?.search(queryEmbedding: queryEmbedding), gpuScores.count == count else { return [] }
 
         let sorted = gpuScores.enumerated().sorted { $0.element > $1.element }
@@ -890,21 +958,8 @@ class SearchEngine {
         }
     }
 
-    private func encodeQueryWithFusion(text: String) throws -> [Float] {
-        let variations = [text, "a photo of " + text, "a picture of " + text]
-
-        var sum = [Float](repeating: 0, count: embeddingDim)
-        for variation in variations {
-            let emb = try textEncoder.encode(text: variation)
-            for i in 0..<embeddingDim { sum[i] += emb[i] }
-        }
-
-        var count = Float(variations.count)
-        vDSP_vsdiv(sum, 1, &count, &sum, 1, vDSP_Length(embeddingDim))
-
-        sum.l2Normalize()
-
-        return sum
+    private func encodeQuery(text: String) throws -> [Float] {
+        try textEncoder.encode(text: text)
     }
 }
 

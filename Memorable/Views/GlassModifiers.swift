@@ -22,19 +22,6 @@ struct GlassSearchBarModifier: ViewModifier {
     }
 }
 
-struct GlassBadgeModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content
-                .glassEffect(.regular, in: .capsule)
-        } else {
-            content
-                .background(.ultraThinMaterial)
-                .clipShape(Capsule())
-        }
-    }
-}
-
 struct GlassPanelModifier: ViewModifier {
     var cornerRadius: CGFloat = 20
 

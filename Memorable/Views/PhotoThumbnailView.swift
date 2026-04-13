@@ -6,23 +6,12 @@ struct PhotoThumbnailView: View {
 
     private var accessibilityDescription: String {
         let type = result.isVideo ? "Video" : "Photo"
-        let score = "\(Int(result.score * 100))% match"
         if let date = result.creationDate {
             let formatter = DateFormatter()
             formatter.dateStyle = .medium
-            return "\(type), \(score), from \(formatter.string(from: date))"
+            return "\(type), from \(formatter.string(from: date))"
         }
-        return "\(type), \(score)"
-    }
-
-    private var relevanceBadgeColor: Color {
-        if result.score >= SearchConfig.strongMatchThreshold {
-            return Celestial.Colors.emerald
-        } else if result.score >= SearchConfig.marginalMatchThreshold {
-            return Celestial.Colors.amber
-        } else {
-            return Celestial.Colors.orange
-        }
+        return type
     }
 
     private var aspectRatio: CGFloat {
@@ -47,17 +36,6 @@ struct PhotoThumbnailView: View {
                                 .padding(4)
                                 .background(.ultraThinMaterial)
                                 .clipShape(RoundedRectangle(cornerRadius: 4))
-                                .padding(5)
-                        }
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        if result.score < 1.0 {
-                            Text("\(Int(result.score * 100))%")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(relevanceBadgeColor)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .modifier(GlassBadgeModifier())
                                 .padding(5)
                         }
                     }

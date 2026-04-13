@@ -141,4 +141,80 @@ final class DataModelTests: XCTestCase {
         XCTAssertEqual(progress.phase, .idle)
         XCTAssertFalse(progress.photosComplete)
     }
+
+    // MARK: - SearchResponse
+
+    func testSearchResponseWithResults() {
+        let results = [
+            SearchResult(id: "1", score: 0.25, localIdentifier: "a", creationDate: nil, isVideo: false, bestFramePosition: nil),
+            SearchResult(id: "2", score: 0.20, localIdentifier: "b", creationDate: nil, isVideo: false, bestFramePosition: nil),
+        ]
+        let response = SearchResponse(results: results, fallbackResults: [], filtersApplied: nil)
+        XCTAssertEqual(response.results.count, 2)
+        XCTAssertTrue(response.fallbackResults.isEmpty)
+        XCTAssertNil(response.filtersApplied)
+    }
+
+    func testSearchResponseEmptyWithFallback() {
+        let fallback = [
+            SearchResult(id: "1", score: 0.11, localIdentifier: "a", creationDate: nil, isVideo: false, bestFramePosition: nil),
+        ]
+        let summary = FilterSummary(dateDescription: nil, locationDescription: nil, visualQuery: "selfie")
+        let response = SearchResponse(results: [], fallbackResults: fallback, filtersApplied: summary)
+        XCTAssertTrue(response.results.isEmpty)
+        XCTAssertEqual(response.fallbackResults.count, 1)
+        XCTAssertEqual(response.filtersApplied?.visualQuery, "selfie")
+    }
+
+    func testSearchResponseFallbackScoresBelowThreshold() {
+        // Fallback results should contain near-miss scores below the threshold
+        let threshold = SearchConfig.minimumScoreThreshold
+        let fallback = [
+            SearchResult(id: "1", score: threshold - 0.01, localIdentifier: "a", creationDate: nil, isVideo: false, bestFramePosition: nil),
+            SearchResult(id: "2", score: threshold - 0.02, localIdentifier: "b", creationDate: nil, isVideo: false, bestFramePosition: nil),
+        ]
+        let response = SearchResponse(results: [], fallbackResults: fallback, filtersApplied: nil)
+        XCTAssertTrue(response.results.isEmpty)
+        XCTAssertEqual(response.fallbackResults.count, 2)
+        for result in response.fallbackResults {
+            XCTAssertLessThan(result.score, threshold)
+        }
+    }
+
+    func testFilterSummaryWithAllFields() {
+        let summary = FilterSummary(
+            dateDescription: "Last summer",
+            locationDescription: "Berlin",
+            visualQuery: "sunset"
+        )
+        XCTAssertEqual(summary.dateDescription, "Last summer")
+        XCTAssertEqual(summary.locationDescription, "Berlin")
+        XCTAssertEqual(summary.visualQuery, "sunset")
+    }
+
+    func testFilterSummaryVisualQueryOnly() {
+        let summary = FilterSummary(
+            dateDescription: nil,
+            locationDescription: nil,
+            visualQuery: "dog eating carrot"
+        )
+        XCTAssertNil(summary.dateDescription)
+        XCTAssertNil(summary.locationDescription)
+        XCTAssertEqual(summary.visualQuery, "dog eating carrot")
+    }
+
+    func testSearchResultVideoWithFrame() {
+        let r = SearchResult(id: "v1", score: 0.15, localIdentifier: "vid", creationDate: nil, isVideo: true, bestFramePosition: 0.3)
+        XCTAssertTrue(r.isVideo)
+        XCTAssertEqual(r.bestFramePosition, 0.3)
+        XCTAssertEqual(r.score, 0.15, accuracy: 0.001)
+    }
+
+    func testSearchResultMixedTypes() {
+        let photo = SearchResult(id: "p1", score: 0.20, localIdentifier: "a", creationDate: nil, isVideo: false, bestFramePosition: nil)
+        let video = SearchResult(id: "v1", score: 0.18, localIdentifier: "b", creationDate: nil, isVideo: true, bestFramePosition: 0.5)
+        XCTAssertFalse(photo.isVideo)
+        XCTAssertTrue(video.isVideo)
+        XCTAssertGreaterThan(photo.score, video.score)
+    }
 }

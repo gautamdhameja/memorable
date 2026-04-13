@@ -39,4 +39,37 @@ final class SearchConfigTests: XCTestCase {
     func testOCRBoostPositive() {
         XCTAssertGreaterThan(SearchConfig.ocrBoostPerWord, 0)
     }
+
+    func testSceneLabelBoostPositive() {
+        XCTAssertGreaterThan(SearchConfig.sceneLabelBoostPerMatch, 0)
+    }
+
+    func testVideoCompensationPositive() {
+        XCTAssertGreaterThan(SearchConfig.videoRelevanceCompensation, 0)
+    }
+
+    // MARK: - SigLIP2 Score Range Consistency
+
+    func testThresholdInSigLIP2Range() {
+        // SigLIP2 (sigmoid loss) matching pairs typically score 0.10-0.25.
+        // Threshold must be low enough to catch valid matches.
+        XCTAssertLessThanOrEqual(SearchConfig.minimumScoreThreshold, 0.15,
+            "Threshold must accommodate SigLIP2's lower score range")
+    }
+
+    func testBoostsProportionalToThreshold() {
+        // Additive boosts should not individually exceed the minimum threshold,
+        // otherwise a single boost could push an irrelevant result over threshold.
+        let threshold = SearchConfig.minimumScoreThreshold
+        XCTAssertLessThan(SearchConfig.locationCloseBoost, threshold,
+            "Location boost should not alone push a result over threshold")
+        XCTAssertLessThan(SearchConfig.timeOfDayMatchBoost, threshold,
+            "Time-of-day boost should not alone push a result over threshold")
+        XCTAssertLessThan(SearchConfig.ocrBoostPerWord, threshold,
+            "OCR boost should not alone push a result over threshold")
+        XCTAssertLessThan(SearchConfig.sceneLabelBoostPerMatch, threshold,
+            "Scene label boost should not alone push a result over threshold")
+        XCTAssertLessThan(SearchConfig.videoRelevanceCompensation, threshold,
+            "Video compensation should not alone push a result over threshold")
+    }
 }

@@ -112,7 +112,7 @@ Core/                          Views/
 ## Critical Implementation Details
 
 ### Tokenizer -- SentencePiece BPE with Byte Fallback
-The tokenizer loads a standard SentencePiece `.model` protobuf file (Gemma tokenizer, 256k vocab). It uses BPE with byte fallback -- unknown characters are encoded as UTF-8 byte tokens (`<0x00>`-`<0xFF>`), so every input is tokenizable. Text preprocessing: lowercase, remove punctuation, collapse whitespace (matching SigLIP2's training pipeline). Context length is 64 tokens. All vocab/score/special-token data is derived from the protobuf at init, not hardcoded.
+The tokenizer loads a standard SentencePiece `.model` protobuf file (Gemma tokenizer, 256k vocab). It uses BPE with byte fallback -- unknown characters are encoded as UTF-8 byte tokens (`<0x00>`-`<0xFF>`), so every input is tokenizable. Text preprocessing: lowercase and collapse whitespace (punctuation is preserved as tokens, matching the model's training). No BOS token, EOS appended, padded with 0. First word has no `▁` prefix (`add_dummy_prefix=false`). Context length is 64 tokens. All vocab/score/special-token data is derived from the protobuf at init, not hardcoded.
 
 ### PHImageManager Fires Callbacks Twice
 `requestImage` may call its handler multiple times (first degraded, then final). All `withCheckedContinuation` wrappers use a `hasResumed` flag to resume only once on the non-degraded callback. Without this, continuations resume on the nil/degraded first call and all thumbnails return nil.
@@ -144,16 +144,16 @@ User query
   → QueryParser (Foundation Models on iOS 26+, else NSDataDetector + NLTagger)
   → Extract: visual text, date range, location name, negative terms
   → Geocode location via CLGeocoder
-  → encodeQueryWithFusion (3 variations averaged: raw, "a photo of X", "a picture of X")
+  → Direct text encoding via SigLIP2 (no prompt templates, raw query only)
   → Dot product against all photo + video embeddings (vDSP, pointer arithmetic)
-  → Date boost (±20% for in/out of range)
-  → Location boost (1.5x within 5km, 1.3x within 25km, 1.1x within 100km)
+  → Location/time-of-day/OCR/scene-label boosts (additive, tuned for SigLIP2)
   → Negative term penalty (-30% of negative similarity)
-  → OCR text boost (+15% if query words match screenshot text)
-  → Score threshold ≥ 0.18
+  → Score threshold >= 0.10
   → Video dedup (best frame per video only)
   → Merge photo + video results, sort, return top 50
 ```
+
+**Note on prompt templates:** SigLIP2 uses sigmoid loss and was trained on raw web captions. Unlike CLIP (softmax loss), "a photo of X" templates hurt retrieval quality by diluting compositional queries. The text encoder receives the raw visual query directly.
 
 ## Indexing Pipeline
 

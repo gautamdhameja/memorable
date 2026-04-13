@@ -31,10 +31,12 @@ enum AppKeys {
 // MARK: - Search Scoring
 
 enum SearchConfig {
-    /// Minimum similarity score to include a result (both raw CLIP and boosted)
-    static let minimumScoreThreshold: Float = 0.20
+    /// Minimum similarity score to include a result.
+    /// SigLIP2 (sigmoid loss) produces lower raw cosine similarities than
+    /// softmax-based CLIP models. Matching pairs typically score 0.10-0.25.
+    static let minimumScoreThreshold: Float = 0.12
 
-    /// Duplicate detection threshold
+    /// Duplicate detection threshold (cosine similarity for near-identical images)
     static let duplicateThreshold: Float = 0.95
 
     /// Max results per search
@@ -50,31 +52,29 @@ enum SearchConfig {
     static let sparseClipMaxRatio = 0.1
 
     // Location proximity boost (additive, applied within the filtered radius)
-    // These are mild — the hard filter already removed irrelevant locations
-    static let locationCloseBoost: Float = 0.05    // Within 10% of radius
-    static let locationNearBoost: Float = 0.03     // Within 30% of radius
+    // These are mild -- the hard filter already removed irrelevant locations.
+    // Scaled for SigLIP2's lower score range.
+    static let locationCloseBoost: Float = 0.025   // Within 10% of radius
+    static let locationNearBoost: Float = 0.015    // Within 30% of radius
 
-    // Time-of-day boost (boost only — no penalty for wrong time)
-    static let timeOfDayMatchBoost: Float = 0.06
+    // Time-of-day boost (boost only, no penalty for wrong time)
+    static let timeOfDayMatchBoost: Float = 0.03
 
-    // Negative term penalty weight
+    // Negative term penalty weight (multiplier on negative similarity)
     static let negativeTermWeight: Float = 0.3
 
     // OCR text boost per matching word (scaled by match ratio)
-    static let ocrBoostPerWord: Float = 0.15
+    static let ocrBoostPerWord: Float = 0.08
 
-    // Scene label boost per matching label (additive on top of CLIP)
-    static let sceneLabelBoostPerMatch: Float = 0.08
+    // Scene label boost per matching label (additive on top of similarity)
+    static let sceneLabelBoostPerMatch: Float = 0.04
 
     // Video frames lack scene labels, OCR text, and location-name boosts
     // that photos receive. This flat compensation partially offsets the
     // asymmetry so that a genuinely relevant video isn't buried under
-    // photos whose scores were inflated by non-CLIP boosts.
-    static let videoRelevanceCompensation: Float = 0.08
+    // photos whose scores were inflated by non-similarity boosts.
+    static let videoRelevanceCompensation: Float = 0.03
 
-    // Relevance badge color tiers (applied in PhotoThumbnailView)
-    static let strongMatchThreshold: Float = 0.32
-    static let marginalMatchThreshold: Float = 0.22
 }
 
 // MARK: - Known Single-Word City Names

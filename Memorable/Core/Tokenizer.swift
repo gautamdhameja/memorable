@@ -8,7 +8,6 @@ class CLIPTokenizer {
     private let vocab: [String: Int]
     private let scores: [String: Float]
     private let byteFallbackTokens: [UInt8: Int]
-    private let bosId: Int32
     private let eosId: Int32
     private let padId: Int32
     private var cache: [String: [Int]] = [:]
@@ -29,9 +28,9 @@ class CLIPTokenizer {
         let proto = try Sentencepiece_ModelProto(serializedBytes: data)
 
         let spec = proto.trainerSpec
-        self.bosId = spec.bosID
         self.eosId = spec.eosID
-        self.padId = spec.padID
+        // SentencePiece proto defaults pad_id to -1; SigLIP2/Gemma uses 0 (<pad>)
+        self.padId = spec.padID >= 0 ? spec.padID : 0
 
         var v: [String: Int] = [:]
         var s: [String: Float] = [:]
@@ -57,7 +56,7 @@ class CLIPTokenizer {
         let len = maxLength ?? contextLength
         let cleaned = preprocess(text)
 
-        var tokens: [Int32] = [bosId]
+        var tokens: [Int32] = []
         let words = splitIntoWords(cleaned)
         for word in words {
             let ids = encode(word)
@@ -77,28 +76,28 @@ class CLIPTokenizer {
 
     // MARK: - Text Preprocessing (SigLIP2 pipeline)
 
+    /// SigLIP2 preprocessing: lowercase and collapse whitespace.
+    /// Punctuation is preserved -- the tokenizer encodes it as separate tokens,
+    /// matching the model's training data.
     private func preprocess(_ text: String) -> String {
-        var result = text.lowercased()
-        result.unicodeScalars.removeAll { CharacterSet.punctuationCharacters.contains($0) }
-        result = result.components(separatedBy: .whitespaces)
+        text.lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-            .trimmingCharacters(in: .whitespaces)
-        return result
     }
 
     // MARK: - Word Splitting
 
-    /// SentencePiece treats whitespace as part of the token by prefixing words
-    /// with the Unicode block character U+2581 (lower one eighth block).
-    /// The first word in a sentence also gets this prefix (no dummy prefix = false
-    /// means we still prefix all words with the separator, we just don't add an
-    /// extra leading space to the input).
+    /// SentencePiece treats whitespace as part of the token by replacing spaces
+    /// with U+2581. With add_dummy_prefix=false (SigLIP2/Gemma), the first word
+    /// does NOT get the prefix. Only subsequent words get it.
     private func splitIntoWords(_ text: String) -> [String] {
         guard !text.isEmpty else { return [] }
         let separator = "\u{2581}"
-        return text.split(separator: " ", omittingEmptySubsequences: true)
-            .map { separator + String($0) }
+        let parts = text.split(separator: " ", omittingEmptySubsequences: true)
+        return parts.enumerated().map { (i, word) in
+            i == 0 ? String(word) : separator + String(word)
+        }
     }
 
     // MARK: - BPE Encoding

@@ -1,4 +1,5 @@
 import CoreML
+import Accelerate
 
 class TextEncoder {
     private var model: MLModel
@@ -23,8 +24,9 @@ class TextEncoder {
         let tokenIds = tokenizer.tokenize(text: text.lowercased(), maxLength: contextLength)
 
         #if DEBUG
-        let nonPadCount = tokenIds.filter { $0 != 0 }.count
-        logger.info("[TextEncoder] Encoding '\(text.prefix(50))': \(nonPadCount) tokens (incl. SOT/EOT)")
+        let nonPadTokens = tokenIds.filter { $0 != 0 }
+        let idPreview = nonPadTokens.map { String($0) }.joined(separator: ", ")
+        logger.info("[TextEncoder] '\(text.prefix(60))' -> \(nonPadTokens.count) tokens, ids=[\(idPreview)]")
         #endif
 
         let inputArray = try MLMultiArray(shape: [1, NSNumber(value: contextLength)], dataType: .int32)
@@ -52,7 +54,22 @@ class TextEncoder {
         }
 
         var embedding = embeddingArray.toFloatArray()
+
+        #if DEBUG
+        var rawNorm: Float = 0
+        vDSP_svesq(embedding, 1, &rawNorm, vDSP_Length(embedding.count))
+        rawNorm = sqrt(rawNorm)
+        #endif
+
         embedding.l2Normalize()
+
+        #if DEBUG
+        var finalNorm: Float = 0
+        vDSP_svesq(embedding, 1, &finalNorm, vDSP_Length(embedding.count))
+        finalNorm = sqrt(finalNorm)
+        logger.info("[TextEncoder] Embedding norm: raw=\(String(format: "%.4f", rawNorm)) -> normalized=\(String(format: "%.4f", finalNorm))")
+        #endif
+
         return embedding
     }
 

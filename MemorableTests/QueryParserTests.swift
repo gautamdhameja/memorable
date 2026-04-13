@@ -493,4 +493,101 @@ final class QueryParserTests: XCTestCase {
         XCTAssertFalse(hints.textQuery.contains("clouds"))
         XCTAssertNotNil(hints.timeOfDayHours)
     }
+
+    // MARK: - Compositional Visual Queries
+
+    func testDogEatingCarrot() {
+        let hints = QueryParserFallback.parse(query: "dog eating carrot")
+        XCTAssertEqual(hints.textQuery, "dog eating carrot")
+        XCTAssertNil(hints.locationHint)
+        XCTAssertNil(hints.dateRange)
+        XCTAssertTrue(hints.hasVisualQuery)
+    }
+
+    func testKidsPlayingInSnow() {
+        let hints = QueryParserFallback.parse(query: "kids playing in snow")
+        XCTAssertTrue(hints.textQuery.contains("kids"))
+        XCTAssertTrue(hints.textQuery.contains("playing"))
+        XCTAssertTrue(hints.textQuery.contains("snow"))
+        XCTAssertNil(hints.locationHint, "'snow' is visual, not a location")
+    }
+
+    func testRedCarOnHighway() {
+        let hints = QueryParserFallback.parse(query: "red car on highway")
+        XCTAssertTrue(hints.textQuery.contains("red"))
+        XCTAssertTrue(hints.textQuery.contains("car"))
+        XCTAssertTrue(hints.textQuery.contains("highway"))
+        XCTAssertNil(hints.locationHint)
+    }
+
+    func testPersonHoldingUmbrella() {
+        let hints = QueryParserFallback.parse(query: "person holding umbrella")
+        XCTAssertTrue(hints.textQuery.contains("person"))
+        XCTAssertTrue(hints.textQuery.contains("holding"))
+        XCTAssertTrue(hints.textQuery.contains("umbrella"))
+        XCTAssertNil(hints.locationHint)
+    }
+
+    func testCatSleepingOnCouch() {
+        let hints = QueryParserFallback.parse(query: "cat sleeping on couch")
+        XCTAssertTrue(hints.textQuery.contains("cat"))
+        XCTAssertTrue(hints.textQuery.contains("sleeping"))
+        XCTAssertTrue(hints.textQuery.contains("couch"))
+        XCTAssertNil(hints.locationHint)
+    }
+
+    func testCompositionalWithLocation() {
+        let hints = QueryParserFallback.parse(query: "people surfing in Hawaii")
+        XCTAssertTrue(hints.textQuery.contains("surfing"), "visual query should keep 'surfing'")
+        XCTAssertNotNil(hints.locationHint, "Hawaii should be extracted as location")
+    }
+
+    func testCompositionalWithDateAndNegative() {
+        let hints = QueryParserFallback.parse(query: "dog running on beach -people last year")
+        XCTAssertTrue(hints.textQuery.contains("dog"))
+        XCTAssertTrue(hints.textQuery.contains("running"))
+        XCTAssertTrue(hints.textQuery.contains("beach"))
+        XCTAssertEqual(hints.negativeTerms, ["people"])
+        XCTAssertNotNil(hints.dateRange)
+        XCTAssertFalse(hints.textQuery.contains("people"))
+    }
+
+    func testCompositionalWithPunctuation() {
+        // Punctuation passes through the tokenizer (no longer stripped).
+        // Test with a query that won't trigger location/preposition extraction.
+        let hints = QueryParserFallback.parse(query: "cat's toy")
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertTrue(hints.textQuery.contains("cat"))
+        XCTAssertTrue(hints.textQuery.contains("toy"))
+    }
+
+    func testHyphenatedQuery() {
+        let hints = QueryParserFallback.parse(query: "drive-in")
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertTrue(hints.textQuery.contains("drive"))
+    }
+
+    func testCompositionalLongDescriptive() {
+        let hints = QueryParserFallback.parse(query: "golden retriever swimming in a lake")
+        XCTAssertTrue(hints.textQuery.contains("golden"))
+        XCTAssertTrue(hints.textQuery.contains("retriever"))
+        XCTAssertTrue(hints.textQuery.contains("swimming"))
+        XCTAssertTrue(hints.textQuery.contains("lake"))
+        XCTAssertNil(hints.locationHint, "'lake' is visual, not a location")
+    }
+
+    func testCompositionalActionScene() {
+        let hints = QueryParserFallback.parse(query: "fireworks over city skyline")
+        XCTAssertTrue(hints.textQuery.contains("fireworks"))
+        XCTAssertTrue(hints.textQuery.contains("skyline"))
+        XCTAssertNil(hints.locationHint, "city skyline is visual, not a specific location")
+    }
+
+    func testCompositionalFoodScene() {
+        let hints = QueryParserFallback.parse(query: "pizza with mushrooms and olives")
+        XCTAssertTrue(hints.textQuery.contains("pizza"))
+        XCTAssertTrue(hints.textQuery.contains("mushrooms"))
+        XCTAssertTrue(hints.textQuery.contains("olives"))
+        XCTAssertNil(hints.locationHint)
+    }
 }

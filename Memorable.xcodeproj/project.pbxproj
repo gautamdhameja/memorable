@@ -651,6 +651,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = GHL726VCA6;
 				INFOPLIST_FILE = Memorable/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Memorable;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -671,6 +673,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = GHL726VCA6;
 				INFOPLIST_FILE = Memorable/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Memorable;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

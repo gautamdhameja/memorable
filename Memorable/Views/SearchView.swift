@@ -934,7 +934,7 @@ struct SearchView: View {
                     }
                 }
             }
-            .accessibilityLabel("Photo, \(Int(result.score * 100)) percent match")
+            .accessibilityLabel(result.isVideo ? "Video result" : "Photo result")
             .accessibilityAddTraits(.isButton)
     }
 
