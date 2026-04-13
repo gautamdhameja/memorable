@@ -18,7 +18,7 @@ ON-DEVICE PROCESSING
 All photo analysis and search functionality happens entirely on your device using Apple's Core ML framework. Your photos are processed locally to generate search embeddings (mathematical representations), which are stored only in a local database on your device.
 
 NETWORK ACCESS
-Memorable makes NO network connections during normal use. The only exception is the initial one-time download of AI model files via Apple's On-Demand Resources system, which is handled entirely by iOS and does not transmit any user data.
+Memorable makes NO network connections during normal use. The only exception is the reverse geocoding of photo GPS coordinates to resolve place names (e.g. city, country) for location-based search, which uses Apple's CLGeocoder service. No photos or search queries are transmitted.
 
 PHOTO LIBRARY ACCESS
 Memorable requests access to your Photo Library solely to read photos for local indexing and display. Photos are never copied, uploaded, or shared. You can revoke this access at any time in Settings > Privacy > Photos.

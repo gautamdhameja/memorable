@@ -55,7 +55,7 @@ When I report a bug, follow this exact sequence:
 
 ## App Overview
 
-**Memorable** -- on-device AI photo & video search for iOS. Uses SigLIP2 (Google, Apache 2.0 licensed) to encode photos/videos into CLIP embeddings, stores them in SQLite, and searches via cosine similarity. Everything runs on-device. No cloud, no analytics, no network (except CLGeocoder for place name resolution).
+**Memorable** -- on-device AI photo & video search for iOS. Uses SigLIP2 (Google, Apache 2.0 licensed) to encode photos/videos into embeddings, stores them in SQLite, and searches via cosine similarity. Everything runs on-device. No cloud, no analytics, no network (except CLGeocoder for place name resolution). AI models are bundled in-app.
 
 - Bundle ID: `com.blockdeep.memorable` (change for personal signing)
 - Minimum: iOS 17.0, A14 chip

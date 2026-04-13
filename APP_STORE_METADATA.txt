@@ -9,7 +9,7 @@ Category: Photo & Video
 
 Price: $3.99 (one-time purchase, no subscription)
 
-Keywords: photo search, AI, memory, find photos, natural language, offline, privacy, CLIP, on-device, no subscription
+Keywords: photo search, AI, memory, find photos, natural language, offline, privacy, on-device, no subscription, visual search
 
 DESCRIPTION
 -----------
@@ -42,14 +42,14 @@ KEY FEATURES
 REQUIREMENTS
 - iOS 17.0 or later
 - iPhone or iPad with A14 chip or later
-- Approximately 300MB for AI models (downloaded once)
+- Approximately 750MB of storage (AI models are bundled with the app)
 
 WHAT'S NEW (Version 1.0)
 - Initial release
 - Natural language photo search powered by SigLIP2
 - Photo Library and folder source support
 - Date-aware hybrid search
-- On-Demand Resources for efficient app download
+- AI models bundled in-app, no extra downloads needed
 
 SCREENSHOTS (capture these on device)
 1. Search screen with query "dog playing in park" showing results grid
@@ -63,6 +63,6 @@ PRIVACY POLICY URL: (host PRIVACY_POLICY.txt as a webpage)
 
 APP REVIEW NOTES
 - The app requires photo library access to function. It will request permission on first launch.
-- AI models (~250-300MB) are downloaded via On-Demand Resources on first launch.
-- No backend server is required. The app is fully self-contained after model download.
+- AI models are bundled with the app. No additional downloads are required.
+- No backend server is required. The app is fully self-contained.
 - For testing, grant photo library access and wait for indexing to complete, then try search queries like "people", "food", "outdoor", "car", etc.
