@@ -767,7 +767,7 @@ struct SearchView: View {
                         .font(.footnote)
                         .foregroundStyle(Celestial.Colors.amber)
                     let location = summary.locationDescription ?? ""
-                    Text("Showing all photos\(location.isEmpty ? "" : " near \(location)")")
+                    Text("Showing all relevant photos\(location.isEmpty ? "" : " near \(location)")")
                         .font(.footnote)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 }

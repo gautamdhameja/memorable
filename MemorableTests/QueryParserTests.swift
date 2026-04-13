@@ -624,4 +624,71 @@ final class QueryParserTests: XCTestCase {
         XCTAssertTrue(hints.textQuery.contains("olives"))
         XCTAssertNil(hints.locationHint)
     }
+
+    // MARK: - Preposition Overrides NLTagger False Positives
+
+    func testLunarEclipseInBerlinLastYear() {
+        let hints = QueryParserFallback.parse(query: "lunar eclipse in Berlin last year")
+        XCTAssertEqual(hints.locationHint?.lowercased(), "berlin",
+            "Berlin (after 'in') must be the location, not 'lunar'. Got: \(hints.locationHint ?? "nil")")
+        XCTAssertTrue(hints.textQuery.contains("lunar"),
+            "Visual query must contain 'lunar', got: \(hints.textQuery)")
+        XCTAssertTrue(hints.textQuery.contains("eclipse"),
+            "Visual query must contain 'eclipse', got: \(hints.textQuery)")
+        XCTAssertNotNil(hints.dateRange, "Should extract 'last year' as date range")
+    }
+
+    func testCoralReefInMaldives() {
+        let hints = QueryParserFallback.parse(query: "coral reef in Maldives")
+        XCTAssertEqual(hints.locationHint?.lowercased(), "maldives",
+            "Maldives (after 'in') must be the location. Got: \(hints.locationHint ?? "nil")")
+        XCTAssertTrue(hints.textQuery.contains("coral"),
+            "Visual query must contain 'coral', got: \(hints.textQuery)")
+        XCTAssertTrue(hints.textQuery.contains("reef"),
+            "Visual query must contain 'reef', got: \(hints.textQuery)")
+    }
+
+    func testNorthernLightsInNorway() {
+        let hints = QueryParserFallback.parse(query: "northern lights in Norway")
+        XCTAssertEqual(hints.locationHint?.lowercased(), "norway",
+            "Norway (after 'in') must be the location. Got: \(hints.locationHint ?? "nil")")
+        XCTAssertTrue(hints.textQuery.contains("northern"),
+            "Visual query must contain 'northern', got: \(hints.textQuery)")
+        XCTAssertTrue(hints.textQuery.contains("lights"),
+            "Visual query must contain 'lights', got: \(hints.textQuery)")
+    }
+
+    func testCherryBlossomInTokyo() {
+        let hints = QueryParserFallback.parse(query: "cherry blossom in Tokyo")
+        XCTAssertEqual(hints.locationHint?.lowercased(), "tokyo",
+            "Tokyo (after 'in') must be the location. Got: \(hints.locationHint ?? "nil")")
+        XCTAssertTrue(hints.textQuery.contains("cherry"),
+            "Visual query must contain 'cherry', got: \(hints.textQuery)")
+    }
+
+    func testStreetArtNearBrooklyn() {
+        let hints = QueryParserFallback.parse(query: "street art near Brooklyn")
+        XCTAssertEqual(hints.locationHint?.lowercased(), "brooklyn",
+            "Brooklyn (after 'near') must be the location. Got: \(hints.locationHint ?? "nil")")
+        XCTAssertTrue(hints.textQuery.contains("street"),
+            "Visual query must contain 'street', got: \(hints.textQuery)")
+        XCTAssertTrue(hints.textQuery.contains("art"),
+            "Visual query must contain 'art', got: \(hints.textQuery)")
+    }
+
+    func testAuroraBorealisFromIceland() {
+        let hints = QueryParserFallback.parse(query: "aurora borealis from Iceland")
+        XCTAssertEqual(hints.locationHint?.lowercased(), "iceland",
+            "Iceland (after 'from') must be the location. Got: \(hints.locationHint ?? "nil")")
+        XCTAssertTrue(hints.textQuery.contains("aurora"),
+            "Visual query must contain 'aurora', got: \(hints.textQuery)")
+    }
+
+    func testCarServiceInMunich() {
+        let hints = QueryParserFallback.parse(query: "car service in Munich")
+        XCTAssertEqual(hints.locationHint?.lowercased(), "munich",
+            "Munich (after 'in') must be the location. Got: \(hints.locationHint ?? "nil")")
+        XCTAssertTrue(hints.textQuery.contains("car"),
+            "Visual query must contain 'car', got: \(hints.textQuery)")
+    }
 }

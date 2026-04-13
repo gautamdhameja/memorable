@@ -415,6 +415,21 @@ class SearchEngine {
             }
         }
 
+        #if DEBUG
+        // Raw CLIP score distribution BEFORE any boosts
+        let rawCandidateScores = (0..<count).filter { candidateMask[$0] }.map { scores[$0] }
+        if !rawCandidateScores.isEmpty {
+            let sortedRaw = rawCandidateScores.sorted(by: >)
+            let rawAbove020 = rawCandidateScores.filter { $0 >= 0.20 }.count
+            let rawAbove015 = rawCandidateScores.filter { $0 >= 0.15 }.count
+            let rawAbove012 = rawCandidateScores.filter { $0 >= 0.12 }.count
+            let rawAbove010 = rawCandidateScores.filter { $0 >= 0.10 }.count
+            let rawMean = rawCandidateScores.reduce(0, +) / Float(rawCandidateScores.count)
+            logger.info("[RawCLIP] candidates=\(rawCandidateScores.count) top10=[\(sortedRaw.prefix(10).map { String(format: "%.4f", $0) }.joined(separator: ", "))] mean=\(String(format: "%.4f", rawMean)) >=0.20:\(rawAbove020) >=0.15:\(rawAbove015) >=0.12:\(rawAbove012) >=0.10:\(rawAbove010)")
+        }
+        let preBoostScores = scores
+        #endif
+
         // =====================================================================
         // PHASE 4: SOFT BOOSTS — only on candidates that passed hard filters
         // =====================================================================
@@ -512,15 +527,29 @@ class SearchEngine {
         }
 
         #if DEBUG
-        // Score distribution for photos (raw CLIP scores before boosts)
+        // Score distribution AFTER boosts
         let candidateScores = (0..<count).filter { candidateMask[$0] }.map { scores[$0] }
         if !candidateScores.isEmpty {
             let sortedCS = candidateScores.sorted(by: >)
             let above020 = candidateScores.filter { $0 >= 0.20 }.count
             let above015 = candidateScores.filter { $0 >= 0.15 }.count
+            let above012 = candidateScores.filter { $0 >= 0.12 }.count
             let above010 = candidateScores.filter { $0 >= 0.10 }.count
             let mean = candidateScores.reduce(0, +) / Float(candidateScores.count)
-            logger.info("[ScoreDist] Photos: top5=[\(sortedCS.prefix(5).map { String(format: "%.3f", $0) }.joined(separator: ", "))] mean=\(String(format: "%.4f", mean)) >=0.20:\(above020) >=0.15:\(above015) >=0.10:\(above010) total:\(candidateScores.count)")
+            logger.info("[BoostedCLIP] top10=[\(sortedCS.prefix(10).map { String(format: "%.4f", $0) }.joined(separator: ", "))] mean=\(String(format: "%.4f", mean)) >=0.20:\(above020) >=0.15:\(above015) >=0.12:\(above012) >=0.10:\(above010)")
+
+            // Show boost breakdown for top 20 candidates
+            let topIndices = (0..<count)
+                .filter { candidateMask[$0] }
+                .sorted { scores[$0] > scores[$1] }
+                .prefix(20)
+            for (rank, i) in topIndices.enumerated() {
+                let raw = preBoostScores[i]
+                let boosted = scores[i]
+                let boostTotal = boosted - raw
+                let dateStr = photoDates[i].map { ISO8601DateFormatter().string(from: $0) } ?? "no-date"
+                logger.info("[BoostDetail #\(rank+1)] raw=\(String(format: "%.4f", raw)) boosted=\(String(format: "%.4f", boosted)) boost=\(String(format: "%+.4f", boostTotal)) date=\(dateStr) id=\(localIds[i].prefix(12))")
+            }
         }
         #endif
 
@@ -685,9 +714,13 @@ class SearchEngine {
 
         // Sparse CLIP fallback: merge location results when CLIP matched very few candidates
         // Threshold: fewer than 5 results AND less than 10% of candidates matched
+        // Skip when CLIP is confident (top score well above threshold) — the small
+        // result count is genuine, not a scoring artifact.
+        let topResultScore = finalResults.first?.score ?? 0
+        let clipIsConfident = topResultScore >= minimumScoreThreshold * 1.25
         let clipMatchedTooFew = finalResults.count < SearchConfig.sparseClipMinResults && candidateCount > 0
             && Double(finalResults.count) / Double(candidateCount) < SearchConfig.sparseClipMaxRatio
-        if clipMatchedTooFew && filtersActive {
+        if clipMatchedTooFew && filtersActive && !clipIsConfident {
             // All candidates have CLIP scores from the GPU matmul.
             // Sort ALL candidates by CLIP score (not just those above threshold).
             // This way "old town" photos that scored 0.16 rank above random

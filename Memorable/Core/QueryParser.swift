@@ -139,6 +139,7 @@ enum QueryParserFallback {
 
     private static func extractLocation(from original: String, text: inout String, locationHint: inout String?) {
         var landmarkGuardTriggered = false
+        let textBeforeExtraction = text
 
         // Strategy 1: NLTagger on original text (works when user types proper case)
         if let place = extractPlaceViaTagger(original),
@@ -154,15 +155,19 @@ enum QueryParserFallback {
             if !isLikelyLandmarkFragment(remaining: remaining, original: original) {
                 locationHint = place
                 text = remaining
-                return
+                // Don't return — let Strategy 2 try to override with a
+                // higher-confidence preposition-based match.
             } else {
                 landmarkGuardTriggered = true
             }
         }
 
         // Strategy 2: Location preposition pattern — "in/at/near/from <words>"
-        // Take words after the preposition until we hit another preposition or temporal word
-        let lowered = text
+        // Take words after the preposition until we hit another preposition or temporal word.
+        // Always search the pre-Strategy-1 text so NLTagger's word removal doesn't
+        // hide a preposition pattern (e.g. "lunar eclipse in berlin" must remain
+        // intact for "in berlin" to match).
+        let lowered = textBeforeExtraction
         let locationPreps = ["in ", "at ", "near ", "from "]
         let stopWords = Set(["in", "at", "on", "from", "near", "during", "last", "this", "yesterday",
                              "today", "summer", "winter", "spring", "fall", "autumn"])
@@ -207,13 +212,17 @@ enum QueryParserFallback {
             }
 
             locationHint = locationWords.joined(separator: " ")
-            // Remove "prep + location" from text, keep the rest
+            // Remove "prep + location" from the original text (not the
+            // NLTagger-modified one) so we preserve all visual query words.
             let locationPhrase = prep + locationWords.joined(separator: " ")
             text = lowered.replacingOccurrences(of: locationPhrase, with: "")
                 .replacingOccurrences(of: "  ", with: " ")
                 .trimmingCharacters(in: .whitespaces)
             return
         }
+
+        // If Strategy 1 already found a location, use it.
+        if locationHint != nil { return }
 
         // Strategy 3: Bare multi-word proper noun fallback
         // If the entire remaining text is 1-4 capitalized words with no obvious
