@@ -19,7 +19,7 @@ Everything runs on-device. No cloud, no accounts, no tracking.
 
 ## How It Works
 
-Memorable uses [MobileCLIP](https://arxiv.org/abs/2311.17049) (MobileCLIP2-S4) to encode photos into 768-dimensional CLIP embeddings, stores them in SQLite, and searches via cosine similarity. Text queries are encoded the same way, and the closest matches are returned.
+Memorable uses [SigLIP2](https://arxiv.org/abs/2502.14786) (Google, Apache 2.0 licensed) to encode photos into 768-dimensional CLIP embeddings, stores them in SQLite, and searches via cosine similarity. Text queries are encoded the same way, and the closest matches are returned.
 
 **One-time setup:** The app scans your photo library and builds a search index. Photos become searchable immediately; videos are indexed in a second pass.
 

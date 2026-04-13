@@ -3,7 +3,7 @@ import CoreML
 class TextEncoder {
     private var model: MLModel
     private let tokenizer: CLIPTokenizer
-    private let contextLength: Int = 77
+    private let contextLength: Int = 64
 
     init() throws {
         let config = MLModelConfiguration()
@@ -12,7 +12,7 @@ class TextEncoder {
         #else
         config.computeUnits = .all
         #endif
-        guard let modelURL = Bundle.main.url(forResource: "MobileCLIP2_S4_TextEncoder", withExtension: "mlmodelc") else {
+        guard let modelURL = Bundle.main.url(forResource: "SigLIP2_TextEncoder", withExtension: "mlmodelc") else {
             throw TextEncoderError.modelNotFound
         }
         self.model = try MLModel(contentsOf: modelURL, configuration: config)
@@ -63,7 +63,7 @@ class TextEncoder {
         #else
         config.computeUnits = .all
         #endif
-        guard let modelURL = Bundle.main.url(forResource: "MobileCLIP2_S4_TextEncoder", withExtension: "mlmodelc") else {
+        guard let modelURL = Bundle.main.url(forResource: "SigLIP2_TextEncoder", withExtension: "mlmodelc") else {
             throw TextEncoderError.modelNotFound
         }
         self.model = try MLModel(contentsOf: modelURL, configuration: config)

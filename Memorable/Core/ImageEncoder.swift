@@ -13,7 +13,7 @@ class ImageEncoder {
         #else
         config.computeUnits = .all  // Use Neural Engine + GPU + CPU
         #endif
-        guard let modelURL = Bundle.main.url(forResource: "MobileCLIP2_S4_ImageEncoder", withExtension: "mlmodelc") else {
+        guard let modelURL = Bundle.main.url(forResource: "SigLIP2_ImageEncoder", withExtension: "mlmodelc") else {
             throw ImageEncoderError.modelNotFound
         }
         self.model = try MLModel(contentsOf: modelURL, configuration: config)
@@ -57,7 +57,7 @@ class ImageEncoder {
         #else
         config.computeUnits = .all
         #endif
-        guard let modelURL = Bundle.main.url(forResource: "MobileCLIP2_S4_ImageEncoder", withExtension: "mlmodelc") else {
+        guard let modelURL = Bundle.main.url(forResource: "SigLIP2_ImageEncoder", withExtension: "mlmodelc") else {
             throw ImageEncoderError.modelNotFound
         }
         self.model = try MLModel(contentsOf: modelURL, configuration: config)
@@ -77,9 +77,9 @@ class ImageEncoder {
         let pixels = baseAddress.assumingMemoryBound(to: UInt8.self)
         let pixelCount = height * width
 
-        // CLIP normalization constants
-        let mean: [Float] = [0.48145466, 0.4578275, 0.40821073]
-        let std: [Float] = [0.26862954, 0.26130258, 0.27577711]
+        // SigLIP2 normalization: maps [0, 1] to [-1, 1]
+        let mean: [Float] = [0.5, 0.5, 0.5]
+        let std: [Float] = [0.5, 0.5, 0.5]
 
         // Write directly to MLMultiArray's underlying buffer — zero NSNumber allocations
         let ptr = array.dataPointer.bindMemory(to: Float16.self, capacity: 3 * pixelCount)

@@ -239,6 +239,19 @@ struct MoreView: View {
                         }
                         .listRowBackground(Celestial.Colors.surfaceContainerHigh)
 
+                        NavigationLink {
+                            LicensesView()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "doc.text")
+                                    .foregroundStyle(Celestial.Colors.outlineVariant)
+                                Text("Licenses")
+                                    .font(.footnote)
+                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                            }
+                        }
+                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+
                         HStack(spacing: 12) {
                             Image(systemName: "info.circle")
                                 .foregroundStyle(Celestial.Colors.outlineVariant)
@@ -482,4 +495,141 @@ struct SurpriseExploreView: View {
             isLoading = false
         }
     }
+}
+
+// MARK: - Licenses View
+
+private struct LicenseEntry: Identifiable {
+    let id = UUID()
+    let name: String
+    let url: String
+    let license: String
+    let text: String
+}
+
+struct LicensesView: View {
+    private let entries: [LicenseEntry] = [
+        LicenseEntry(
+            name: "SigLIP2",
+            url: "github.com/google-research/big_vision",
+            license: "Apache License 2.0",
+            text: apacheLicenseText("Google LLC")
+        ),
+        LicenseEntry(
+            name: "SentencePiece",
+            url: "github.com/google/sentencepiece",
+            license: "Apache License 2.0",
+            text: apacheLicenseText("Google Inc.")
+        ),
+        LicenseEntry(
+            name: "GRDB.swift",
+            url: "github.com/groue/GRDB.swift",
+            license: "MIT License",
+            text: """
+            MIT License
+
+            Copyright (C) 2015-2026 Gwendal Roue
+
+            Permission is hereby granted, free of charge, to any person obtaining a \
+            copy of this software and associated documentation files (the "Software"), \
+            to deal in the Software without restriction, including without limitation \
+            the rights to use, copy, modify, merge, publish, distribute, sublicense, \
+            and/or sell copies of the Software, and to permit persons to whom the \
+            Software is furnished to do so, subject to the following conditions:
+
+            The above copyright notice and this permission notice shall be included in \
+            all copies or substantial portions of the Software.
+
+            THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR \
+            IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, \
+            FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE \
+            AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER \
+            LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING \
+            FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS \
+            IN THE SOFTWARE.
+            """
+        ),
+        LicenseEntry(
+            name: "Swift Protobuf",
+            url: "github.com/apple/swift-protobuf",
+            license: "Apache License 2.0",
+            text: apacheLicenseText("Apple Inc.")
+        ),
+    ]
+
+    var body: some View {
+        ZStack {
+            Celestial.Colors.background.ignoresSafeArea()
+
+            List {
+                ForEach(entries) { entry in
+                    NavigationLink {
+                        LicenseDetailView(entry: entry)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(entry.name)
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(Celestial.Colors.onSurface)
+                            Text(entry.license)
+                                .font(.footnote)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        }
+                    }
+                    .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+                }
+            }
+            .scrollContentBackground(.hidden)
+        }
+        .navigationTitle("Licenses")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+    }
+}
+
+private struct LicenseDetailView: View {
+    let entry: LicenseEntry
+
+    var body: some View {
+        ZStack {
+            Celestial.Colors.background.ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(entry.url)
+                        .font(.footnote)
+                        .foregroundStyle(Celestial.Colors.primaryFixedDim)
+
+                    Text(entry.text)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                }
+                .padding()
+            }
+        }
+        .navigationTitle(entry.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+    }
+}
+
+private func apacheLicenseText(_ copyright: String) -> String {
+    """
+    Apache License
+    Version 2.0, January 2004
+    http://www.apache.org/licenses/
+
+    Copyright \(copyright). All Rights Reserved.
+
+    Licensed under the Apache License, Version 2.0 (the "License"); \
+    you may not use this file except in compliance with the License. \
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software \
+    distributed under the License is distributed on an "AS IS" BASIS, \
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. \
+    See the License for the specific language governing permissions and \
+    limitations under the License.
+    """
 }

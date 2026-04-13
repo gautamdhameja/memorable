@@ -55,11 +55,11 @@ When I report a bug, follow this exact sequence:
 
 ## App Overview
 
-**Memorable** — on-device AI photo & video search for iOS. Uses MobileCLIP2-S4 to encode photos/videos into CLIP embeddings, stores them in SQLite, and searches via cosine similarity. Everything runs on-device. No cloud, no analytics, no network (except CLGeocoder for place name resolution and one-time ODR model download).
+**Memorable** -- on-device AI photo & video search for iOS. Uses SigLIP2 (Google, Apache 2.0 licensed) to encode photos/videos into CLIP embeddings, stores them in SQLite, and searches via cosine similarity. Everything runs on-device. No cloud, no analytics, no network (except CLGeocoder for place name resolution).
 
 - Bundle ID: `com.blockdeep.memorable` (change for personal signing)
 - Minimum: iOS 17.0, A14 chip
-- Model: MobileCLIP2-S4, 768-dim embeddings, 49408-token vocab
+- Model: SigLIP2-base-patch16-224, 768-dim embeddings, 256k-token Gemma vocab, SentencePiece BPE tokenizer
 - Freemium: 200 items free, Pro unlock via StoreKit 2 IAP (`com.blockdeep.memorable.pro`)
 
 ## Build & Run
@@ -77,7 +77,8 @@ StoreKit testing: set the StoreKit Configuration file (`Memorable/Store/Memorabl
 
 ## Dependencies
 
-- **GRDB.swift 7.x** — SQLite database (only external dependency)
+- **GRDB.swift 7.x** -- SQLite database
+- **apple/swift-protobuf 1.28+** -- SentencePiece tokenizer model deserialization
 
 ## Architecture
 
@@ -103,13 +104,15 @@ Core/                          Views/
 ├── OCRService.swift
 ├── OnThisDay.swift
 ├── VideoFrameExtractor.swift
-└── ProFeatures.swift
+├── ProFeatures.swift
+└── Generated/
+    └── sentencepiece_model.pb.swift
 ```
 
 ## Critical Implementation Details
 
-### Tokenizer — Vocab Size Must Be 49408
-The BPE vocab file (`bpe_simple_vocab_16e6.txt`) has 262,144 merges but the model's embedding table is only 49,408 tokens. Only the first 48,894 merges are used: `256 bytes + 256 bytes</w> + 48894 merges + 2 special = 49408`. Using all merges produces token IDs beyond the embedding table and garbage search results. This was a critical bug that caused completely wrong search results.
+### Tokenizer -- SentencePiece BPE with Byte Fallback
+The tokenizer loads a standard SentencePiece `.model` protobuf file (Gemma tokenizer, 256k vocab). It uses BPE with byte fallback -- unknown characters are encoded as UTF-8 byte tokens (`<0x00>`-`<0xFF>`), so every input is tokenizable. Text preprocessing: lowercase, remove punctuation, collapse whitespace (matching SigLIP2's training pipeline). Context length is 64 tokens. All vocab/score/special-token data is derived from the protobuf at init, not hardcoded.
 
 ### PHImageManager Fires Callbacks Twice
 `requestImage` may call its handler multiple times (first degraded, then final). All `withCheckedContinuation` wrappers use a `hasResumed` flag to resume only once on the non-degraded callback. Without this, continuations resume on the nil/degraded first call and all thumbnails return nil.
@@ -192,7 +195,7 @@ Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.sw
 - Batch DB inserts (20 per transaction) instead of per-photo transactions
 - `allIndexedIdentifiers()` returns a Set for O(1) skip-check during indexing
 - `reserveCapacity` on embeddings array before loading
-- Tokenizer BPE cache with 1000-entry eviction
+- Tokenizer cache with 1000-entry eviction
 - Debounced search (500ms) to avoid encoding on every keystroke
 - DuplicateFinder runs on `Task.detached` to avoid blocking main thread
 - OnThisDay filters in SQL (month/day/year) instead of loading all rows

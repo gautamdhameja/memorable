@@ -46,7 +46,7 @@ REQUIREMENTS
 
 WHAT'S NEW (Version 1.0)
 - Initial release
-- Natural language photo search powered by MobileCLIP
+- Natural language photo search powered by SigLIP2
 - Photo Library and folder source support
 - Date-aware hybrid search
 - On-Demand Resources for efficient app download

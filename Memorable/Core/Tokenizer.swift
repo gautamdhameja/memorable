@@ -1,198 +1,197 @@
 import Foundation
 
+/// SentencePiece BPE tokenizer for SigLIP2 (Gemma tokenizer).
+/// Loads a standard SentencePiece .model protobuf and performs BPE tokenization
+/// with byte fallback for unknown characters.
 class CLIPTokenizer {
     private let contextLength: Int
     private let vocab: [String: Int]
-    private let bpeRanks: [String: Int]
-    private let sotToken: Int
-    private let eotToken: Int
-    private let byteEncoder: [Int: Character]
-    private var cache: [String: [String]] = [:]
+    private let scores: [String: Float]
+    private let byteFallbackTokens: [UInt8: Int]
+    private let bosId: Int32
+    private let eosId: Int32
+    private let padId: Int32
+    private var cache: [String: [Int]] = [:]
     private let maxCacheSize = 1000
 
-    static let vocabSize = 49408
-    private static let maxMerges = vocabSize - 256 - 256 - 2 // 48894
+    enum TokenizerError: Error {
+        case filesNotFound
+        case invalidModel
+    }
 
-    init(contextLength: Int = 77) throws {
+    init(contextLength: Int = 64) throws {
         self.contextLength = contextLength
 
-        guard let vocabURL = Bundle.main.url(forResource: "bpe_simple_vocab_16e6", withExtension: "txt") else {
+        guard let modelURL = Bundle.main.url(forResource: "tokenizer", withExtension: "model") else {
             throw TokenizerError.filesNotFound
         }
-        let vocabText = try String(contentsOf: vocabURL, encoding: .utf8)
-        let lines = vocabText.components(separatedBy: "\n")
+        let data = try Data(contentsOf: modelURL)
+        let proto = try Sentencepiece_ModelProto(serializedBytes: data)
 
-        var merges: [(String, String)] = []
-        var ranks: [String: Int] = [:]
-        for i in 1..<lines.count {
-            let parts = lines[i].split(separator: " ")
-            if parts.count == 2 {
-                let pair = (String(parts[0]), String(parts[1]))
-                merges.append(pair)
-                ranks["\(pair.0) \(pair.1)"] = merges.count - 1
-                if merges.count >= Self.maxMerges { break }
-            }
-        }
-        self.bpeRanks = ranks
+        let spec = proto.trainerSpec
+        self.bosId = spec.bosID
+        self.eosId = spec.eosID
+        self.padId = spec.padID
 
         var v: [String: Int] = [:]
-        var idx = 0
-        let be = Self.bytesToUnicode()
-        self.byteEncoder = be
+        var s: [String: Float] = [:]
+        var byteTokens: [UInt8: Int] = [:]
 
-        for b in be.sorted(by: { $0.value < $1.value }) {
-            v[String(b.value)] = idx
-            idx += 1
+        for (i, piece) in proto.pieces.enumerated() {
+            v[piece.piece] = i
+            s[piece.piece] = piece.score
+            if piece.type == .byte {
+                // Byte fallback tokens are formatted as <0xNN>
+                if let byteVal = Self.parseByteToken(piece.piece) {
+                    byteTokens[byteVal] = i
+                }
+            }
         }
-        for b in be.sorted(by: { $0.value < $1.value }) {
-            v[String(b.value) + "</w>"] = idx
-            idx += 1
-        }
-        for (a, b) in merges {
-            v[a + b] = idx
-            idx += 1
-        }
-        v["<|startoftext|>"] = idx
-        v["<|endoftext|>"] = idx + 1
+
         self.vocab = v
-        self.sotToken = idx
-        self.eotToken = idx + 1
+        self.scores = s
+        self.byteFallbackTokens = byteTokens
     }
 
     func tokenize(text: String, maxLength: Int? = nil) -> [Int32] {
         let len = maxLength ?? contextLength
-        let cleaned = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let words = splitIntoWords(cleaned)
+        let cleaned = preprocess(text)
 
-        var tokens: [Int32] = [Int32(sotToken)]
+        var tokens: [Int32] = [bosId]
+        let words = splitIntoWords(cleaned)
         for word in words {
-            for token in bpe(word) {
-                if let id = vocab[token] {
-                    tokens.append(Int32(id))
-                }
-            }
+            let ids = encode(word)
+            tokens.append(contentsOf: ids.map { Int32($0) })
         }
-        tokens.append(Int32(eotToken))
+        tokens.append(eosId)
 
         if tokens.count > len {
-            tokens = Array(tokens.prefix(len - 1)) + [Int32(eotToken)]
+            tokens = Array(tokens.prefix(len - 1)) + [eosId]
         }
         while tokens.count < len {
-            tokens.append(0)
+            tokens.append(padId)
         }
 
         return tokens
     }
 
-    // MARK: - Private
+    // MARK: - Text Preprocessing (SigLIP2 pipeline)
 
-    private func splitIntoWords(_ text: String) -> [String] {
-        var words: [String] = []
-        var current = ""
-
-        for char in text {
-            if char.isWhitespace {
-                if !current.isEmpty {
-                    words.append(encodeToByteString(current) + "</w>")
-                    current = ""
-                }
-            } else if char.isPunctuation && !current.isEmpty {
-                words.append(encodeToByteString(current) + "</w>")
-                current = ""
-                words.append(encodeToByteString(String(char)) + "</w>")
-            } else if char.isPunctuation {
-                words.append(encodeToByteString(String(char)) + "</w>")
-            } else {
-                current.append(char)
-            }
-        }
-        if !current.isEmpty {
-            words.append(encodeToByteString(current) + "</w>")
-        }
-        return words
-    }
-
-    private func encodeToByteString(_ text: String) -> String {
-        String(text.utf8.compactMap { byteEncoder[Int($0)] })
-    }
-
-    private func bpe(_ token: String) -> [String] {
-        if cache.count > maxCacheSize { cache.removeAll() }
-        if let cached = cache[token] { return cached }
-
-        var word: [String]
-        if token.hasSuffix("</w>") {
-            let base = String(token.dropLast(4))
-            word = base.map { String($0) }
-            if !word.isEmpty {
-                word[word.count - 1] += "</w>"
-            } else {
-                word = ["</w>"]
-            }
-        } else {
-            word = token.map { String($0) }
-        }
-
-        if word.count <= 1 {
-            cache[token] = word
-            return word
-        }
-
-        while true {
-            var bestPair: (Int, String, String)?
-            for i in 0..<(word.count - 1) {
-                let key = "\(word[i]) \(word[i + 1])"
-                if let rank = bpeRanks[key] {
-                    if bestPair == nil || rank < bestPair!.0 {
-                        bestPair = (rank, word[i], word[i + 1])
-                        if rank == 0 { break }
-                    }
-                }
-            }
-
-            guard let (_, first, second) = bestPair else { break }
-
-            var newWord: [String] = []
-            var i = 0
-            while i < word.count {
-                if i < word.count - 1 && word[i] == first && word[i + 1] == second {
-                    newWord.append(first + second)
-                    i += 2
-                } else {
-                    newWord.append(word[i])
-                    i += 1
-                }
-            }
-            word = newWord
-            if word.count == 1 { break }
-        }
-
-        cache[token] = word
-        return word
-    }
-
-    static func bytesToUnicode() -> [Int: Character] {
-        var bs: [Int] = []
-        bs.append(contentsOf: Array(Int(UnicodeScalar("!").value)...Int(UnicodeScalar("~").value)))
-        bs.append(contentsOf: Array(Int(UnicodeScalar("\u{00A1}").value)...Int(UnicodeScalar("\u{00AC}").value)))
-        bs.append(contentsOf: Array(Int(UnicodeScalar("\u{00AE}").value)...Int(UnicodeScalar("\u{00FF}").value)))
-        var cs = bs.map { Character(UnicodeScalar($0)!) }
-        var n = 0
-        for b in 0..<256 {
-            if !bs.contains(b) {
-                bs.append(b)
-                cs.append(Character(UnicodeScalar(256 + n)!))
-                n += 1
-            }
-        }
-        var result: [Int: Character] = [:]
-        for (i, b) in bs.enumerated() {
-            result[b] = cs[i]
-        }
+    private func preprocess(_ text: String) -> String {
+        var result = text.lowercased()
+        result.unicodeScalars.removeAll { CharacterSet.punctuationCharacters.contains($0) }
+        result = result.components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
         return result
     }
 
-    enum TokenizerError: Error {
-        case filesNotFound
+    // MARK: - Word Splitting
+
+    /// SentencePiece treats whitespace as part of the token by prefixing words
+    /// with the Unicode block character U+2581 (lower one eighth block).
+    /// The first word in a sentence also gets this prefix (no dummy prefix = false
+    /// means we still prefix all words with the separator, we just don't add an
+    /// extra leading space to the input).
+    private func splitIntoWords(_ text: String) -> [String] {
+        guard !text.isEmpty else { return [] }
+        let separator = "\u{2581}"
+        return text.split(separator: " ", omittingEmptySubsequences: true)
+            .map { separator + String($0) }
+    }
+
+    // MARK: - BPE Encoding
+
+    private func encode(_ word: String) -> [Int] {
+        if cache.count > maxCacheSize { cache.removeAll() }
+        if let cached = cache[word] { return cached }
+
+        // Start with individual characters (or byte fallback for unknowns)
+        var symbols = initialTokens(for: word)
+        if symbols.count <= 1 {
+            let ids = symbols.map { tokenId(for: $0) }
+            cache[word] = ids
+            return ids
+        }
+
+        // Iteratively merge the highest-scoring adjacent pair
+        while symbols.count > 1 {
+            var bestIdx = -1
+            var bestScore: Float = -.infinity
+            var bestMerged = ""
+
+            for i in 0..<(symbols.count - 1) {
+                let merged = symbols[i] + symbols[i + 1]
+                if let score = scores[merged], score > bestScore {
+                    bestScore = score
+                    bestIdx = i
+                    bestMerged = merged
+                }
+            }
+
+            guard bestIdx >= 0, vocab[bestMerged] != nil else { break }
+
+            var newSymbols: [String] = []
+            var i = 0
+            while i < symbols.count {
+                if i == bestIdx {
+                    newSymbols.append(bestMerged)
+                    i += 2
+                } else {
+                    newSymbols.append(symbols[i])
+                    i += 1
+                }
+            }
+            symbols = newSymbols
+        }
+
+        let ids = symbols.map { tokenId(for: $0) }
+        cache[word] = ids
+        return ids
+    }
+
+    /// Break a word into its initial character tokens. For characters that exist
+    /// in the vocab as single-char pieces, use them directly. Otherwise, fall back
+    /// to UTF-8 byte tokens.
+    private func initialTokens(for word: String) -> [String] {
+        var tokens: [String] = []
+        for char in word {
+            let s = String(char)
+            if vocab[s] != nil {
+                tokens.append(s)
+            } else {
+                // Byte fallback: encode the character as UTF-8 bytes
+                for byte in s.utf8 {
+                    tokens.append(Self.byteTokenString(byte))
+                }
+            }
+        }
+        return tokens
+    }
+
+    private func tokenId(for piece: String) -> Int {
+        if let id = vocab[piece] { return id }
+        // If a single byte token, use byte fallback
+        if let byteVal = Self.parseByteToken(piece), let id = byteFallbackTokens[byteVal] {
+            return id
+        }
+        // Unknown token (should not happen with byte fallback)
+        return vocab["<unk>"] ?? 3
+    }
+
+    // MARK: - Byte Token Helpers
+
+    private static func byteTokenString(_ byte: UInt8) -> String {
+        String(format: "<0x%02X>", byte)
+    }
+
+    private static func parseByteToken(_ token: String) -> UInt8? {
+        guard token.hasPrefix("<0x") && token.hasSuffix(">") && token.count == 6 else {
+            return nil
+        }
+        let hex = String(token.dropFirst(3).dropLast(1))
+        guard let val = UInt8(hex, radix: 16) else { return nil }
+        return val
     }
 }

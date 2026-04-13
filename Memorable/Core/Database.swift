@@ -203,6 +203,14 @@ class AppDatabase: DatabaseProtocol {
                            columns: ["locationCity"])
         }
 
+        // SigLIP2 model replacement: old MobileCLIP embeddings are incompatible.
+        // Clear all indexed data so the app re-indexes with the new model.
+        migrator.registerMigration("v2-siglip2-model-swap") { db in
+            try db.execute(sql: "DELETE FROM indexed_video_frames")
+            try db.execute(sql: "DELETE FROM indexed_videos")
+            try db.execute(sql: "DELETE FROM indexed_photos")
+        }
+
         return migrator
     }
 
