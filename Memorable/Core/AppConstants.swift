@@ -51,6 +51,13 @@ enum SearchConfig {
     /// Sparse CLIP fallback: max ratio of results to candidates for fallback to trigger
     static let sparseClipMaxRatio = 0.1
 
+    /// Sparse CLIP fallback: minimum top-candidate score to show results in the
+    /// main grid. Below this, results are demoted to the "Other X photos" fallback
+    /// section. Prevents irrelevant location-filtered photos from filling the grid
+    /// when no actual visual matches exist (e.g., "dog in California" with no dog
+    /// photos in California).
+    static let sparseClipMinScore: Float = 0.07
+
     // Location proximity boost (additive, applied within the filtered radius)
     // These are mild -- the hard filter already removed irrelevant locations.
     // Scaled for SigLIP2's lower score range.

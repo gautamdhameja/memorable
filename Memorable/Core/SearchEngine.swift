@@ -725,6 +725,14 @@ class SearchEngine {
                 locationDescription: hints.locationHint,
                 visualQuery: hints.textQuery
             )
+
+            // If the best candidate score is too low, the visual concept simply
+            // doesn't exist in this location. Demote to fallback instead of
+            // filling the main grid with irrelevant photos.
+            let topScore = merged.first?.score ?? 0
+            if topScore < SearchConfig.sparseClipMinScore {
+                return SearchResponse(results: [], fallbackResults: merged, filtersApplied: summary)
+            }
             return SearchResponse(results: merged, fallbackResults: [], filtersApplied: summary)
         }
 
