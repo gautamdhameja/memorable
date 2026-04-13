@@ -28,11 +28,11 @@ One-time setup: Memorable scans your photo library and builds a private search i
 Type a description of what you're looking for — a scene, an object, a feeling — and Memorable finds the closest matches across your entire library.
 
 COMPLETE PRIVACY
-Unlike cloud-based photo services, Memorable processes everything on your device. No photos are uploaded. No search queries are sent anywhere. No accounts, no analytics, no tracking. Your memories stay yours.
+Unlike cloud-based photo services, Memorable processes everything on your device. Your photos never leave your phone. No accounts, no analytics, no tracking. Your memories stay yours. Location names are resolved using Apple's built-in services to improve search.
 
 KEY FEATURES
 - Natural language search: describe what you see, not tags or dates
-- 100% on-device: works in airplane mode after initial setup
+- On-device AI: your photos never leave your device
 - No subscription: pay once, use forever
 - Fast: search 10,000+ photos in under a second
 - Smart date filtering: "beach photos from last summer" narrows by both content and time
@@ -64,5 +64,5 @@ PRIVACY POLICY URL: (host PRIVACY_POLICY.txt as a webpage)
 APP REVIEW NOTES
 - The app requires photo library access to function. It will request permission on first launch.
 - AI models are bundled with the app. No additional downloads are required.
-- No backend server is required. The app is fully self-contained.
+- No backend server is required. Photos are never uploaded or transmitted.
 - For testing, grant photo library access and wait for indexing to complete, then try search queries like "people", "food", "outdoor", "car", etc.

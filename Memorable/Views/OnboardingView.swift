@@ -19,7 +19,7 @@ struct OnboardingView: View {
                 onboardingPage(
                     icon: "lock.shield",
                     title: "100% Private",
-                    description: "All AI processing happens on your device. Your photos never leave your phone. No cloud. No accounts. No tracking.",
+                    description: "All AI processing happens on your device. Your photos never leave your phone. No accounts. No tracking.",
                     tag: 1
                 )
                 onboardingPage(

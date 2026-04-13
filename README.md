@@ -15,7 +15,7 @@ Type a natural language description and Memorable finds matching photos from you
 - "my dog playing in the snow"
 - "that hike with the waterfall"
 
-Everything runs on-device. No cloud, no accounts, no tracking.
+Your photos never leave your device. No accounts, no tracking.
 
 ## How It Works
 
@@ -51,7 +51,8 @@ Query → Season/Date/Location extraction → Text encoding (3-prompt fusion)
 - `isNetworkAccessAllowed = false` on all PHImageManager requests
 - Database encrypted at rest (`.completeUnlessOpen`)
 - Search history stored in encrypted SQLite, not UserDefaults
-- No analytics, no telemetry, no network calls (except CLGeocoder for place names and one-time model download)
+- No analytics, no telemetry, no third-party SDKs that collect data
+- Location names resolved via Apple's CLGeocoder (coordinates only, no photos or queries sent)
 - Privacy manifest included (`PrivacyInfo.xcprivacy`)
 
 ## Requirements
