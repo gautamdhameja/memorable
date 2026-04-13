@@ -252,7 +252,9 @@ enum QueryParserFallback {
                     // but users almost always mean the visual concept.
                     if candidates.count == 1 {
                         let word = candidates[0].lowercased()
-                        if KnownCities.singleWord.contains(word) && !visualWords.contains(word) {
+                        let isKnownLocation = KnownCities.singleWord.contains(word)
+                            || KnownRegions.singleWord.contains(word)
+                        if isKnownLocation && !visualWords.contains(word) {
                             locationHint = candidates.joined(separator: " ")
                             text = ""
                         }

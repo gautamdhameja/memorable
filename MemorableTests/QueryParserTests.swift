@@ -409,6 +409,40 @@ final class QueryParserTests: XCTestCase {
         XCTAssertNotNil(hints.locationHint, "Prague is a known city")
     }
 
+    // MARK: - State and Country Queries
+
+    func testCaliforniaIsLocation() {
+        let hints = QueryParserFallback.parse(query: "California")
+        XCTAssertNotNil(hints.locationHint, "California is a US state and should be a location")
+        XCTAssertEqual(hints.locationHint?.lowercased(), "california")
+    }
+
+    func testTexasIsLocation() {
+        let hints = QueryParserFallback.parse(query: "Texas")
+        XCTAssertNotNil(hints.locationHint, "Texas is a US state and should be a location")
+    }
+
+    func testFranceIsLocation() {
+        let hints = QueryParserFallback.parse(query: "France")
+        XCTAssertNotNil(hints.locationHint, "France is a country and should be a location")
+    }
+
+    func testBavariaIsLocation() {
+        let hints = QueryParserFallback.parse(query: "Bavaria")
+        XCTAssertNotNil(hints.locationHint, "Bavaria is a German state and should be a location")
+    }
+
+    func testOntarioIsLocation() {
+        let hints = QueryParserFallback.parse(query: "Ontario")
+        XCTAssertNotNil(hints.locationHint, "Ontario is a Canadian province and should be a location")
+    }
+
+    func testFoodInCalifornia() {
+        let hints = QueryParserFallback.parse(query: "food in California")
+        XCTAssertEqual(hints.locationHint?.lowercased(), "california")
+        XCTAssertEqual(hints.textQuery, "food")
+    }
+
     // MARK: - Temporal + Non-Location (the January bug)
 
     func testJanuaryLastYear() {

@@ -100,6 +100,24 @@ enum KnownCities {
     }()
 }
 
+/// Single-word country and state/province names for Strategy 3 location
+/// detection. Cities are population-filtered in KnownCities; regions don't
+/// need population filtering since there are far fewer of them.
+///
+/// Loaded from Resources/known_regions.json (4,036 single-word countries and
+/// states/provinces, sourced from dr5hn/countries-states-cities-database).
+enum KnownRegions {
+    static let singleWord: Set<String> = {
+        guard let url = Bundle.main.url(forResource: "known_regions", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let names = try? JSONDecoder().decode([String].self, from: data) else {
+            logger.error("Failed to load known_regions.json")
+            return []
+        }
+        return Set(names)
+    }()
+}
+
 // MARK: - Scene Label Synonyms
 
 enum SceneLabelConfig {

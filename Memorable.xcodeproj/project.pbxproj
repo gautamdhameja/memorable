@@ -35,6 +35,7 @@
 		4E40249F1F29F80C57BFC385 /* ProFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F4BD1B4A36FBFF9C7A6B633 /* ProFeatures.swift */; };
 		4EE9A386721264C1189DCD76 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5530ADFF94F6C3C46B7E0C85 /* ContentView.swift */; };
 		5989D9F7CDA41944DDC2FC99 /* DataModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EFC89DB05FD6ED1A673D6D9 /* DataModels.swift */; };
+		5A870D4AC1E37836B5698E7B /* known_regions.json in Resources */ = {isa = PBXBuildFile; fileRef = 3929FA12F5FB0529EEF8200C /* known_regions.json */; };
 		5CD5C3D873B2CCF9177929C4 /* SmartQueryParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9F9CE4195912A928F5522C /* SmartQueryParser.swift */; };
 		62CE8351853236412FAF83EF /* TextEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C141E05773B14DC775D16001 /* TextEncoder.swift */; };
 		6A8A579D7A9D41CC787C1C1A /* ReverseGeocoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9AB4235487F03F53BFE2DD /* ReverseGeocoder.swift */; };
@@ -96,29 +97,30 @@
 		1F2A055CD079A0CE08308305 /* SearchEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchEngine.swift; sourceTree = "<group>"; };
 		26975E6845CAD9CA68304AE6 /* AppConstantsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConstantsTests.swift; sourceTree = "<group>"; };
 		272EE6BF9DF0EC613A13B278 /* SourceManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceManagerView.swift; sourceTree = "<group>"; };
-		2A2533BF296E1BD8AE5B5370 /* tokenizer.model */ = {isa = PBXFileReference; lastKnownFileType = file; path = tokenizer.model; sourceTree = "<group>"; };
+		2A2533BF296E1BD8AE5B5370 /* tokenizer.model */ = {isa = PBXFileReference; path = tokenizer.model; sourceTree = "<group>"; };
 		2C9F9CE4195912A928F5522C /* SmartQueryParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartQueryParser.swift; sourceTree = "<group>"; };
 		33D4CD0BFCDC219F92A68A74 /* GPUSimilaritySearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GPUSimilaritySearch.swift; sourceTree = "<group>"; };
 		344A007E7C1A5DF6FB2F93A5 /* FullScreenPhotoViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullScreenPhotoViewer.swift; sourceTree = "<group>"; };
 		348DCC9FF9A2320FBC3EF1D8 /* OCRService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OCRService.swift; sourceTree = "<group>"; };
 		34B6799F1D829C28B03B0D27 /* ZoomableAsyncImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomableAsyncImage.swift; sourceTree = "<group>"; };
 		376E14B0EC3548C6AC3FA6D3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		3929FA12F5FB0529EEF8200C /* known_regions.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = known_regions.json; sourceTree = "<group>"; };
 		3B7873A5DA6C60BBF8D8518E /* ResultGrouperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultGrouperTests.swift; sourceTree = "<group>"; };
 		3D0FF77F13B75AD3DB1DEB59 /* SigLIP2_ImageEncoder.mlmodelc */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SigLIP2_ImageEncoder.mlmodelc; path = Memorable/Models/SigLIP2_ImageEncoder.mlmodelc; sourceTree = SOURCE_ROOT; };
 		3EAFD93307D6C2DE77482E03 /* Tokenizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tokenizer.swift; sourceTree = "<group>"; };
 		3FBEFB9FAF864CADD1957496 /* VideoFrameExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoFrameExtractor.swift; sourceTree = "<group>"; };
 		417A8C58E6554A8CEE918C25 /* DuplicateFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicateFinder.swift; sourceTree = "<group>"; };
 		46746212124ECAE7AC5377A9 /* SearchHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchHistory.swift; sourceTree = "<group>"; };
-		46A3F1D4B56C1A73FC41C8C5 /* MemorableProducts.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = MemorableProducts.storekit; sourceTree = "<group>"; };
+		46A3F1D4B56C1A73FC41C8C5 /* MemorableProducts.storekit */ = {isa = PBXFileReference; path = MemorableProducts.storekit; sourceTree = "<group>"; };
 		4D48BA23721AD432EE2A6416 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		4F9C84188552809F14E06ABD /* MemorySlideshowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemorySlideshowView.swift; sourceTree = "<group>"; };
 		5530ADFF94F6C3C46B7E0C85 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		56EF20ABC8CA852DE15E5495 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		5C3D5A6178EC09B78382C7FD /* Memorable.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Memorable.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5C3D5A6178EC09B78382C7FD /* Memorable.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Memorable.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5EA40A803B04576C000F43D4 /* SmartAlbumStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartAlbumStore.swift; sourceTree = "<group>"; };
 		65A4FE16748683991AAD0D0D /* TimeOfDayConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeOfDayConfigTests.swift; sourceTree = "<group>"; };
 		68BFF5828079A1CBE1AD097A /* GlassModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassModifiers.swift; sourceTree = "<group>"; };
-		695C53E8964D1364616174BE /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		695C53E8964D1364616174BE /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		6BD3DDFF0C17CCBBF2F49794 /* QueryParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryParserTests.swift; sourceTree = "<group>"; };
 		765756E0EA06408766468C75 /* ImageEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageEncoder.swift; sourceTree = "<group>"; };
 		773335085FD380E97797E67E /* VideoFrameConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoFrameConfigTests.swift; sourceTree = "<group>"; };
@@ -306,6 +308,7 @@
 			isa = PBXGroup;
 			children = (
 				AFBC7A6D08712953CA1F73D0 /* known_cities.json */,
+				3929FA12F5FB0529EEF8200C /* known_regions.json */,
 				2A2533BF296E1BD8AE5B5370 /* tokenizer.model */,
 			);
 			path = Resources;
@@ -361,6 +364,8 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+				};
 			};
 			buildConfigurationList = C30144C9E3C8409649BD9D17 /* Build configuration list for PBXProject "Memorable" */;
 			developmentRegion = en;
@@ -372,7 +377,7 @@
 			mainGroup = 7F165B232EA35C3C26DB1CA6;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				24D4F1396522E0634BC0F55D /* XCRemoteSwiftPackageReference "GRDB" */,
+				24D4F1396522E0634BC0F55D /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 				ED45A01296AD0C7A91038D28 /* XCRemoteSwiftPackageReference "swift-protobuf" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -397,6 +402,7 @@
 				FBBFA0ADD4D93538FEC17860 /* SigLIP2_ImageEncoder.mlmodelc in Resources */,
 				A55BCAC4D2CD99A54E00390C /* SigLIP2_TextEncoder.mlmodelc in Resources */,
 				12F4DD4420DEE03F04DCCEE8 /* known_cities.json in Resources */,
+				5A870D4AC1E37836B5698E7B /* known_regions.json in Resources */,
 				206E31C8CA932130BC7D8287 /* tokenizer.model in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -647,18 +653,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = GHL726VCA6;
+				CODE_SIGN_IDENTITY = "-";
 				INFOPLIST_FILE = Memorable/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Memorable;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.blockdeep.memorable;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.10;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -669,18 +670,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = GHL726VCA6;
+				CODE_SIGN_IDENTITY = "-";
 				INFOPLIST_FILE = Memorable/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Memorable;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.blockdeep.memorable;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.10;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -720,7 +716,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		24D4F1396522E0634BC0F55D /* XCRemoteSwiftPackageReference "GRDB" */ = {
+		24D4F1396522E0634BC0F55D /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/groue/GRDB.swift";
 			requirement = {
@@ -746,7 +742,7 @@
 		};
 		CA9CD93EC2ECA0F1E1A17124 /* GRDB */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 24D4F1396522E0634BC0F55D /* XCRemoteSwiftPackageReference "GRDB" */;
+			package = 24D4F1396522E0634BC0F55D /* XCRemoteSwiftPackageReference "GRDB.swift" */;
 			productName = GRDB;
 		};
 /* End XCSwiftPackageProductDependency section */
