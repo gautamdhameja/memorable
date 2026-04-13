@@ -388,7 +388,11 @@ class IndexingService: ObservableObject {
                 do {
                     try database.insertPhotos(batch)
                 } catch {
-                    logger.error("Failed to insert photo batch: \(error.localizedDescription)")
+                    logger.error("Failed to insert photo batch: \(error.localizedDescription), retrying individually")
+                    for photo in batch {
+                        do { try database.insertPhotos([photo]) }
+                        catch { logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)") }
+                    }
                 }
                 batch.removeAll(keepingCapacity: true)
             }
@@ -399,8 +403,15 @@ class IndexingService: ObservableObject {
         }
 
         if !batch.isEmpty {
-            do { try database.insertPhotos(batch) }
-            catch { logger.error("Failed to flush batch: \(error.localizedDescription)") }
+            do {
+                try database.insertPhotos(batch)
+            } catch {
+                logger.error("Failed to flush photo batch: \(error.localizedDescription), retrying individually")
+                for photo in batch {
+                    do { try database.insertPhotos([photo]) }
+                    catch { logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)") }
+                }
+            }
         }
 
         // Photos done — make searchable immediately
@@ -548,8 +559,15 @@ class IndexingService: ObservableObject {
         }
 
         if !batch.isEmpty {
-            do { try database.insertPhotos(batch) }
-            catch { logger.error("Failed to flush batch: \(error.localizedDescription)") }
+            do {
+                try database.insertPhotos(batch)
+            } catch {
+                logger.error("Failed to flush folder batch: \(error.localizedDescription), retrying individually")
+                for photo in batch {
+                    do { try database.insertPhotos([photo]) }
+                    catch { logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)") }
+                }
+            }
         }
 
         do { try database.updateSourceStats(sourceId, photoCount: indexed) }
@@ -643,15 +661,21 @@ class IndexingService: ObservableObject {
             let totalOrphans = orphanedPhotos.count + orphanedVideos.count
             guard totalOrphans > 0 else { return }
 
-            // Safety: skip if more than 20% are orphaned (likely a permissions issue, not real deletions)
+            // Safety: skip if more than 20% are orphaned (likely a permissions issue, not real deletions).
+            // But force cleanup after 3 consecutive skips so the index doesn't stay stale forever.
             let totalIndexed = indexedPhotoIds.count + indexedVideoIds.count
             let orphanRatio = Double(totalOrphans) / Double(max(totalIndexed, 1))
+            let skipKey = "orphanCleanupConsecutiveSkips"
             if orphanRatio > IndexingConfig.maxOrphanRatio {
-                #if DEBUG
-                logger.warning("Orphan cleanup skipped: \(totalOrphans)/\(totalIndexed) (\(Int(orphanRatio * 100))%) exceeds 20% threshold")
-                #endif
-                return
+                let consecutiveSkips = UserDefaults.standard.integer(forKey: skipKey) + 1
+                if consecutiveSkips < 3 {
+                    UserDefaults.standard.set(consecutiveSkips, forKey: skipKey)
+                    logger.warning("Orphan cleanup skipped (\(consecutiveSkips)/3): \(totalOrphans)/\(totalIndexed) (\(Int(orphanRatio * 100))%) exceeds 20% threshold")
+                    return
+                }
+                logger.info("Forcing orphan cleanup after \(consecutiveSkips) consecutive skips: \(totalOrphans)/\(totalIndexed) orphaned")
             }
+            UserDefaults.standard.set(0, forKey: skipKey)
 
             // Delete orphaned photos
             if !orphanedPhotos.isEmpty {

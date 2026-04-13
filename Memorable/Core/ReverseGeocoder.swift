@@ -7,6 +7,7 @@ struct LocationStrings {
     let name: String?       // subLocality, or locality if no subLocality
 }
 
+@MainActor
 class ReverseGeocoder {
     private let geocoder = CLGeocoder()
 

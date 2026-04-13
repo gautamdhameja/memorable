@@ -35,13 +35,17 @@ class FolderScanner {
 
         guard let enumerator = FileManager.default.enumerator(
             at: url,
-            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
             return []
         }
 
         for case let fileURL as URL in enumerator {
+            // Skip symlinks to prevent traversal outside the selected folder
+            if (try? fileURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+                continue
+            }
             let ext = fileURL.pathExtension.lowercased()
             if supportedExtensions.contains(ext) {
                 imageURLs.append(fileURL)

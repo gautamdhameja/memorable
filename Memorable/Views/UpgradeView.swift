@@ -99,6 +99,7 @@ struct UpgradeView: View {
                     .background(Celestial.Colors.surfaceVariant.opacity(0.5))
                     .clipShape(Circle())
             }
+            .accessibilityLabel("Close")
             .padding(16)
         }
         .onChange(of: proManager.isPro) {

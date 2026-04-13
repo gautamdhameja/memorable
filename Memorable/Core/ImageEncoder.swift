@@ -33,12 +33,15 @@ class ImageEncoder {
         let output: MLFeatureProvider
         do {
             output = try model.prediction(from: inputFeatures)
-        } catch {
-            #if DEBUG
-            logger.warning("[ImageEncoder] Prediction failed, reloading model: \(error.localizedDescription)")
-            #endif
-            try reloadModel()
-            output = try model.prediction(from: inputFeatures)
+        } catch let originalError {
+            logger.warning("[ImageEncoder] Prediction failed, reloading model: \(originalError.localizedDescription)")
+            do {
+                try reloadModel()
+                output = try model.prediction(from: inputFeatures)
+            } catch {
+                logger.error("[ImageEncoder] Prediction failed after model reload: \(error.localizedDescription)")
+                throw originalError
+            }
         }
 
         guard let embeddingArray = output.featureValue(for: "image_embedding")?.multiArrayValue else {
@@ -179,8 +182,8 @@ class ImageEncoder {
 extension UIImage {
     func toPixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
         let attrs = [
-            kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue!,
-            kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue!
+            kCVPixelBufferCGImageCompatibilityKey: true as CFBoolean,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true as CFBoolean
         ] as CFDictionary
 
         var pixelBuffer: CVPixelBuffer?

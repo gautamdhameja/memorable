@@ -90,11 +90,6 @@ struct SearchView: View {
         return []
     }
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 6),
-        GridItem(.flexible(), spacing: 6)
-    ]
-
     var body: some View {
         NavigationStack {
             ZStack {
@@ -393,6 +388,7 @@ struct SearchView: View {
                     .foregroundStyle(Celestial.Colors.outline)
                     .padding(6)
             }
+            .accessibilityLabel("Dismiss upgrade banner")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -455,6 +451,7 @@ struct SearchView: View {
                             Text(album.query)
                                 .font(.footnote)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                .lineLimit(1)
                         }
                         Spacer()
                         Image(systemName: "chevron.right")
@@ -624,7 +621,7 @@ struct SearchView: View {
                 if !fallbackResults.isEmpty {
                     VStack(spacing: 10) {
                         HStack {
-                            Text("Other \"\(summary.visualQuery)\" photos")
+                            Text(fallbackTitle(summary: summary))
                                 .font(.footnote.weight(.medium))
                                 .foregroundStyle(Celestial.Colors.amber)
                             Spacer()
@@ -632,11 +629,7 @@ struct SearchView: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 8)
 
-                        let columns = [
-                            GridItem(.flexible(), spacing: 8),
-                            GridItem(.flexible(), spacing: 8),
-                            GridItem(.flexible(), spacing: 8),
-                        ]
+                        let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
                         LazyVGrid(columns: columns, spacing: 8) {
                             ForEach(fallbackResults) { result in
                                 FallbackThumbnail(result: result)
@@ -965,6 +958,22 @@ struct SearchView: View {
                 }
             }
         }
+    }
+
+    private func fallbackTitle(summary: FilterSummary) -> String {
+        let hasLocation = summary.locationDescription != nil
+        let hasDate = summary.dateDescription != nil
+
+        // When filters are active, the fallback contains filter-matched photos
+        // (the visual query didn't find anything in that subset).
+        // Title should describe what's actually shown, not the failed visual query.
+        if hasLocation || hasDate {
+            let parts = [summary.locationDescription, summary.dateDescription].compactMap { $0 }
+            return "Photos from \(parts.joined(separator: ", "))"
+        }
+
+        // No filters: fallback is near-miss CLIP results for the visual query
+        return "Other \"\(summary.visualQuery)\" photos"
     }
 
     private func performSearch(saveToHistory: Bool = false) {

@@ -1,6 +1,7 @@
 import Foundation
 import Accelerate
 
+@MainActor
 class PhotoCaptionService {
     private var categoryEmbeddings: [(category: String, embedding: [Float])] = []
     private var isReady = false

@@ -465,22 +465,37 @@ class AppDatabase: DatabaseProtocol {
 
     func trimToLimit(_ limit: Int) throws {
         try dbQueue.write { db in
-            // Keep the most recently indexed photos, delete the rest
             let photoCount = try IndexedPhoto.fetchCount(db)
-            if photoCount > limit {
+            let videoCount = try IndexedVideo.fetchCount(db)
+            let totalCount = photoCount + videoCount
+
+            guard totalCount > limit else { return }
+
+            // Proportional allocation: each type keeps its share of the limit
+            let photoLimit: Int
+            let videoLimit: Int
+            if photoCount == 0 {
+                photoLimit = 0
+                videoLimit = limit
+            } else if videoCount == 0 {
+                photoLimit = limit
+                videoLimit = 0
+            } else {
+                photoLimit = max(Int(Double(photoCount) / Double(totalCount) * Double(limit)), 1)
+                videoLimit = max(limit - photoLimit, 1)
+            }
+
+            // Trim photos
+            if photoCount > photoLimit {
                 try db.execute(sql: """
                     DELETE FROM indexed_photos WHERE id NOT IN (
                         SELECT id FROM indexed_photos ORDER BY indexedAt DESC LIMIT ?
                     )
-                """, arguments: [limit])
+                """, arguments: [photoLimit])
             }
 
-            // Delete all videos beyond the limit (videos count toward the total)
-            let remainingPhotos = try IndexedPhoto.fetchCount(db)
-            let videoLimit = max(limit - remainingPhotos, 0)
-            let videoCount = try IndexedVideo.fetchCount(db)
+            // Trim videos (delete frames first due to foreign key)
             if videoCount > videoLimit {
-                // Delete excess video frames first, then videos
                 try db.execute(sql: """
                     DELETE FROM indexed_video_frames WHERE videoId IN (
                         SELECT id FROM indexed_videos WHERE id NOT IN (

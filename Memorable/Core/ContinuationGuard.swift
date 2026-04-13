@@ -4,24 +4,19 @@ import os
 /// Protects against PHImageManager's multi-callback pattern where the handler
 /// may fire on different threads.
 final class ContinuationGuard<T: Sendable>: @unchecked Sendable {
-    private var continuation: CheckedContinuation<T, Never>?
-    private let lock = os_unfair_lock_t.allocate(capacity: 1)
+    private let state: OSAllocatedUnfairLock<CheckedContinuation<T, Never>?>
 
     init(_ continuation: CheckedContinuation<T, Never>) {
-        self.continuation = continuation
-        lock.initialize(to: os_unfair_lock())
-    }
-
-    deinit {
-        lock.deallocate()
+        self.state = OSAllocatedUnfairLock(initialState: continuation)
     }
 
     /// Resume with a value. Only the first call succeeds; subsequent calls are no-ops.
     func resume(returning value: T) {
-        os_unfair_lock_lock(lock)
-        let cont = continuation
-        continuation = nil
-        os_unfair_lock_unlock(lock)
+        let cont = state.withLock { continuation -> CheckedContinuation<T, Never>? in
+            let c = continuation
+            continuation = nil
+            return c
+        }
         cont?.resume(returning: value)
     }
 }

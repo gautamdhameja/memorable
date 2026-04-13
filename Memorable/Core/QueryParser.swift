@@ -448,7 +448,8 @@ private enum TemporalParser {
         }
         func seasonRange(year: Int, startMonth: Int, endMonth: Int) -> DateRange {
             if startMonth == 12 {
-                return DateRange(start: makeDate(year - 1, 12, 1), end: dayEnd(makeDate(year, 2, 28)))
+                let febEnd = cal.date(from: DateComponents(year: year, month: 3, day: 0)) ?? makeDate(year, 2, 28)
+                return DateRange(start: makeDate(year - 1, 12, 1), end: dayEnd(febEnd))
             }
             let start = makeDate(year, startMonth, 1)
             let endDate = cal.date(from: DateComponents(year: year, month: endMonth + 1, day: 0)) ?? start

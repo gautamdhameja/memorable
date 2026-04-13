@@ -38,6 +38,7 @@ struct SearchResultsViewer: View {
                                 .background(.ultraThinMaterial)
                                 .clipShape(Circle())
                         }
+                        .accessibilityLabel("Close")
                         Spacer()
                         if allResults.count > 1 {
                             Text("\(currentIndex + 1) of \(allResults.count)")
@@ -57,6 +58,7 @@ struct SearchResultsViewer: View {
                                 .background(.ultraThinMaterial)
                                 .clipShape(Circle())
                         }
+                        .accessibilityLabel("Share")
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
