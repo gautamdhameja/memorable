@@ -33,6 +33,10 @@ struct SearchView: View {
     @State private var isSearching = false
     @State private var selectedPhoto: SearchResult?
     @State private var searchError: String?
+    // Tracks the query string that produced the current `results`. Used so the
+    // "no results" view only appears after a search has actually completed for
+    // the text currently in the field, not while the user is mid-typing.
+    @State private var lastSearchedQuery: String?
     @State private var showUpgrade = false
     @State private var showSaveAlbum = false
     @State private var albumName = ""
@@ -156,7 +160,7 @@ struct SearchView: View {
                             searchingState
                         } else if let error = searchError {
                             errorState(error)
-                        } else if !searchText.isEmpty && results.isEmpty && !isSearching {
+                        } else if !searchText.isEmpty && results.isEmpty && !isSearching && lastSearchedQuery == searchText {
                             noResultsState
                         } else if !searchText.isEmpty {
                             resultsGrid(results: results)
@@ -273,6 +277,7 @@ struct SearchView: View {
                     results = []
                     lastResults = []
                     searchText = ""
+                    lastSearchedQuery = nil
                 }
             }
             .onChange(of: scenePhase) {
@@ -331,6 +336,7 @@ struct SearchView: View {
                     if newValue.isEmpty {
                         results = []
                         searchError = nil
+                        lastSearchedQuery = nil
                     }
                 }
                 .onSubmit {
@@ -339,7 +345,7 @@ struct SearchView: View {
                 .disabled(!indexingService.isReady)
                 .accessibilityLabel("Search photos")
             if !searchText.isEmpty {
-                Button(action: { searchText = ""; results = []; searchError = nil }) {
+                Button(action: { searchText = ""; results = []; searchError = nil; lastSearchedQuery = nil }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(Celestial.Colors.outlineVariant)
                 }
@@ -916,6 +922,7 @@ struct SearchView: View {
                         let similar = searchEngine.findSimilar(photoId: result.id)
                         self.results = similar
                         searchText = "Similar to selected photo"
+                        lastSearchedQuery = "Similar to selected photo"
                     } label: {
                         Label("Find Similar", systemImage: "sparkle.magnifyingglass")
                     }
@@ -994,6 +1001,7 @@ struct SearchView: View {
                 let response = try await searchEngine.search(query: query)
                 if Task.isCancelled { return }
                 results = response.results
+                lastSearchedQuery = query
                 fallbackResults = response.fallbackResults
                 filterSummary = response.filtersApplied
                 mediaFilter = .all
