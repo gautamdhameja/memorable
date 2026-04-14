@@ -19,6 +19,9 @@ Memorable/Models/*.mlmodelc/**
 ## Claude Code
 .claude/
 
+## SourceKit-LSP (xcode-build-server config, machine-specific absolute paths)
+buildServer.json
+
 ## Obj-C/Swift specific
 *.hmap
 
