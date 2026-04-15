@@ -43,7 +43,11 @@ struct UpgradeView: View {
                         }
                     }) {
                         Group {
-                            if let product = proManager.product {
+                            if proManager.isLoadingProduct {
+                                ProgressView()
+                                    .tint(Celestial.Colors.onPrimaryContainer)
+                                    .controlSize(.regular)
+                            } else if let product = proManager.product {
                                 Text("Upgrade for \(product.displayPrice)")
                             } else {
                                 Text("Upgrade to Pro")
@@ -55,6 +59,16 @@ struct UpgradeView: View {
                         .padding(.vertical, 16)
                         .background(Celestial.Colors.primaryContainer)
                         .clipShape(Capsule())
+                        .opacity(proManager.product == nil ? 0.5 : 1.0)
+                    }
+                    .disabled(proManager.product == nil)
+
+                    if proManager.product == nil && !proManager.isLoadingProduct {
+                        Text("Unable to connect to the App Store. Please check your connection and try again.")
+                            .font(.caption)
+                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 8)
                     }
 
                     Button(action: {
@@ -104,6 +118,9 @@ struct UpgradeView: View {
         }
         .onChange(of: proManager.isPro) {
             if proManager.isPro { dismiss() }
+        }
+        .task {
+            await proManager.loadProduct()
         }
     }
 

@@ -20,6 +20,7 @@ class ProManager: ObservableObject {
     @Published var purchaseError: String?
     @Published var isRestoring: Bool = false
     @Published var restoreMessage: String?
+    @Published var isLoadingProduct: Bool = false
 
     private var transactionListener: Task<Void, Never>?
 
@@ -35,8 +36,17 @@ class ProManager: ObservableObject {
     // MARK: - Product
 
     func loadProduct() async {
+        isLoadingProduct = true
+        defer { isLoadingProduct = false }
         do {
-            let products = try await Product.products(for: [Self.productId])
+            var products = try await Product.products(for: [Self.productId])
+            if products.isEmpty {
+                // StoreKit occasionally returns empty on a cold start or a
+                // transient network blip. Give it one more chance before
+                // surfacing a broken upgrade UI to the user (or reviewer).
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                products = (try? await Product.products(for: [Self.productId])) ?? []
+            }
             product = products.first
             #if DEBUG
             logger.info("[ProManager] Loaded \(products.count) products, match: \(products.first?.displayName ?? "nil")")
@@ -49,6 +59,11 @@ class ProManager: ObservableObject {
     // MARK: - Purchase
 
     func purchase() async {
+        if product == nil {
+            // Product may have failed to load at launch (e.g. no network, or
+            // StoreKit cold-start glitch). Retry once before failing.
+            await loadProduct()
+        }
         guard let product else {
             purchaseError = "Product not available. Try again later."
             return
