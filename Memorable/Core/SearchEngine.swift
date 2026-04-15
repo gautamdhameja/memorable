@@ -331,15 +331,23 @@ class SearchEngine {
                 }
 
                 // Tier 2: GPS distance fallback (photo has GPS but no location strings yet)
-                if let target = targetLoc, let radiusKm = hints.locationRadiusKm,
-                   let lat = photoLats[i], let lon = photoLons[i] {
-                    let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
-                    if distKm > radiusKm {
+                if let target = targetLoc, let radiusKm = hints.locationRadiusKm {
+                    if let lat = photoLats[i], let lon = photoLons[i] {
+                        let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                        if distKm > radiusKm {
+                            candidateMask[i] = false
+                        }
+                    } else {
+                        // We have a target coord but the photo has no GPS —
+                        // can't verify, drop.
                         candidateMask[i] = false
                     }
-                } else {
-                    candidateMask[i] = false
                 }
+                // Else: targetLoc is nil (forward-geocode of the location query
+                // failed, e.g. airplane mode). We can't verify any photo's
+                // location by coordinate, so leave it in the candidate pool and
+                // let CLIP rank it. Tier 1 already kept photos whose stored
+                // city/state/country matched via substring.
             }
         }
 
