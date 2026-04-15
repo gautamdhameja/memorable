@@ -11,9 +11,9 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
@@ -24,7 +24,7 @@
 		<false/>
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Memorable uses your photo locations to show place names in search results. Coordinates are resolved to names using Apple's geocoding service. No photos or search queries are sent.</string>
+	<string>Memorable uses your photo locations to show place names in search results. Coordinates are resolved to names using Apple&apos;s geocoding service. No photos or search queries are sent.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Memorable needs access to your photos to build a searchable index. All processing happens on your device. No photos are uploaded anywhere.</string>
 	<key>UILaunchScreen</key>

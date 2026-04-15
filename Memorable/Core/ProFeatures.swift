@@ -9,7 +9,7 @@ enum FreeTier {
 class ProManager: ObservableObject {
     static let shared = ProManager()
 
-    static let productId = "com.blockdeep.memorable.pro"
+    static let productId = "com.blockdeep.memorable.pro.v2"
 
     #if DEBUG
     @Published var isPro: Bool = true
