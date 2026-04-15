@@ -653,7 +653,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = GHL726VCA6;
 				INFOPLIST_FILE = Memorable/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Memorable;
@@ -680,7 +680,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = GHL726VCA6;
 				INFOPLIST_FILE = Memorable/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Memorable;
