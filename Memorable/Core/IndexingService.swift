@@ -3,6 +3,8 @@ import Photos
 import AVFoundation
 import UIKit
 
+private let hitFreeLimitKey = "indexing.hitFreeLimit"
+
 class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver {
     var onNewPhotosDetected: (() -> Void)?
 
@@ -23,7 +25,17 @@ class IndexingService: ObservableObject {
     @Published var isReady = false
     @Published var newPhotosAvailable = false
     @Published var indexVersion: Int = 0
-    @Published var hitFreeLimit = false
+    // Persisted so the "Search your N of M photos" hint and the post-upgrade
+    // resume button survive app relaunches. Without this, a user who upgrades
+    // and relaunches before re-indexing would lose the signal that there are
+    // still unindexed photos in their library.
+    @Published var hitFreeLimit: Bool = UserDefaults.standard.bool(forKey: hitFreeLimitKey) {
+        didSet {
+            UserDefaults.standard.set(hitFreeLimit, forKey: hitFreeLimitKey)
+        }
+    }
+    // Background reverse-geocoding progress. Nil when idle or finished.
+    @Published var geocodingProgress: (completed: Int, total: Int)?
 
     private let imageEncoder: ImageEncoder
     let searchEngine: SearchEngine
@@ -100,6 +112,7 @@ class IndexingService: ObservableObject {
         surpriseValidationTask = nil
         geocodingTask?.cancel()
         geocodingTask = nil
+        geocodingProgress = nil
         progress.isRunning = false
     }
 
@@ -719,13 +732,21 @@ class IndexingService: ObservableObject {
     private func geocodeIndexedMedia() async {
         var totalGeocoded = 0
 
-        #if DEBUG
         let photosToGeocode = (try? database.photosNeedingLocationBackfill(limit: 10000).count) ?? 0
         let videosToGeocode = (try? database.videosNeedingLocationBackfill(limit: 10000).count) ?? 0
+        let totalToGeocode = photosToGeocode + videosToGeocode
+
+        #if DEBUG
         let totalPhotos = (try? database.indexedCount()) ?? 0
         let totalVideos = (try? database.videoIndexedCount()) ?? 0
         logger.info("[Geocoder] Starting: \(photosToGeocode)/\(totalPhotos) photos need geocoding, \(videosToGeocode)/\(totalVideos) videos need geocoding")
         #endif
+
+        if totalToGeocode > 0 {
+            await MainActor.run {
+                self.geocodingProgress = (completed: 0, total: totalToGeocode)
+            }
+        }
 
         // Track failures in-memory to avoid infinite retries within this session.
         // Failed coordinates are retried on next app launch.
@@ -752,6 +773,12 @@ class IndexingService: ObservableObject {
                         country: loc.country, name: loc.name
                     )
                     totalGeocoded += 1
+                    let doneSnapshot = totalGeocoded
+                    await MainActor.run {
+                        if let current = self.geocodingProgress {
+                            self.geocodingProgress = (completed: doneSnapshot, total: current.total)
+                        }
+                    }
                     #if DEBUG
                     if totalGeocoded <= 5 || totalGeocoded % 50 == 0 {
                         logger.info("[Geocoder] #\(totalGeocoded): \(loc.city ?? "?") (\(lat), \(lon))")
@@ -790,6 +817,12 @@ class IndexingService: ObservableObject {
                         country: loc.country, name: loc.name
                     )
                     totalGeocoded += 1
+                    let doneSnapshot = totalGeocoded
+                    await MainActor.run {
+                        if let current = self.geocodingProgress {
+                            self.geocodingProgress = (completed: doneSnapshot, total: current.total)
+                        }
+                    }
                 } else {
                     failedIds.insert(localId)
                 }
@@ -801,6 +834,9 @@ class IndexingService: ObservableObject {
         #endif
         if totalGeocoded > 0 {
             try? searchEngine.loadIndex()
+        }
+        await MainActor.run {
+            self.geocodingProgress = nil
         }
     }
 

@@ -155,6 +155,11 @@ struct SearchView: View {
                             .padding(.bottom, 8)
                         }
 
+                        // Background reverse-geocoding progress
+                        if let geo = indexingService.geocodingProgress, !indexingService.progress.isRunning {
+                            geocodingProgressStrip(completed: geo.completed, total: geo.total)
+                        }
+
                         // Content
                         if isSearching {
                             searchingState
@@ -419,6 +424,7 @@ struct SearchView: View {
                     .foregroundStyle(Celestial.Colors.outline)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
+                resumeIndexingButton
             } else if searchEngine.totalSize > 0 {
                 Text("Search your \(searchEngine.totalSize) photos & videos")
                     .font(.footnote)
@@ -426,6 +432,52 @@ struct SearchView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
             }
+        }
+    }
+
+    // Slim one-line progress strip shown while reverse-geocoding photos in the
+    // background. Location-filtered searches depend on city/state/country
+    // strings that this task populates, so surfacing progress explains why a
+    // location query may initially return incomplete results.
+    private func geocodingProgressStrip(completed: Int, total: Int) -> some View {
+        let progress = total > 0 ? Double(completed) / Double(total) : 0
+        return VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "location.circle")
+                    .font(.caption2)
+                    .foregroundStyle(Celestial.Colors.outline)
+                Text("Finding photo locations  \(completed) / \(total)")
+                    .font(.caption2)
+                    .foregroundStyle(Celestial.Colors.outline)
+                Spacer()
+            }
+            ProgressView(value: progress)
+                .tint(Celestial.Colors.primaryFixedDim)
+                .scaleEffect(y: 0.5)
+                .accessibilityLabel("Finding photo locations: \(completed) of \(total) complete")
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    // Shown after the "Search your N of M photos" hint once the user upgrades,
+    // so they can resume indexing the remaining library without having to
+    // re-scan already-indexed photos (startIndexing() skips those).
+    @ViewBuilder
+    private var resumeIndexingButton: some View {
+        if proManager.isPro {
+            Button(action: {
+                Haptics.medium()
+                indexingService.startIndexing()
+            }) {
+                Label("Index remaining photos", systemImage: "arrow.clockwise")
+                    .font(.subheadline.weight(.medium))
+            }
+            .buttonStyle(.bordered)
+            .tint(Celestial.Colors.primaryDim)
+            .padding(.top, 10)
+            .frame(maxWidth: .infinity)
+            .accessibilityHint("Resumes indexing for the photos that were skipped under the free tier")
         }
     }
 
@@ -705,6 +757,7 @@ struct SearchView: View {
                     Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    resumeIndexingButton
                 } else {
                     Text("Search your \(searchEngine.totalSize) photos & videos")
                         .font(.subheadline.weight(.medium))
