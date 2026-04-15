@@ -48,6 +48,10 @@ protocol DatabaseProtocol {
     // Location backfill
     func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
     func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
+    func photosNeedingLocationBackfillCount() throws -> Int
+    func videosNeedingLocationBackfillCount() throws -> Int
+    func photosWithGPSCount() throws -> Int
+    func videosWithGPSCount() throws -> Int
     func updatePhotoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws
     func updateVideoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws
 
@@ -541,6 +545,44 @@ class AppDatabase: DatabaseProtocol {
                 $0["latitude"] as Double,
                 $0["longitude"] as Double
             ) }
+        }
+    }
+
+    func photosNeedingLocationBackfillCount() throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM indexed_photos
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                AND (locationCity IS NULL OR locationCity = '')
+            """) ?? 0
+        }
+    }
+
+    func videosNeedingLocationBackfillCount() throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM indexed_videos
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                AND (locationCity IS NULL OR locationCity = '')
+            """) ?? 0
+        }
+    }
+
+    func photosWithGPSCount() throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM indexed_photos
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+            """) ?? 0
+        }
+    }
+
+    func videosWithGPSCount() throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM indexed_videos
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+            """) ?? 0
         }
     }
 

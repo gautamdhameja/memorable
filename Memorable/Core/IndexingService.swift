@@ -732,19 +732,25 @@ class IndexingService: ObservableObject {
     private func geocodeIndexedMedia() async {
         var totalGeocoded = 0
 
-        let photosToGeocode = (try? database.photosNeedingLocationBackfill(limit: 10000).count) ?? 0
-        let videosToGeocode = (try? database.videosNeedingLocationBackfill(limit: 10000).count) ?? 0
-        let totalToGeocode = photosToGeocode + videosToGeocode
+        // Absolute (library-wide) figures so the progress indicator reflects
+        // total geocoding progress across the library, not just work remaining
+        // in this session. Without this, the bar appears to reset to 0 on
+        // every launch even though prior sessions already did most of the work.
+        let totalWithGPS = ((try? database.photosWithGPSCount()) ?? 0)
+            + ((try? database.videosWithGPSCount()) ?? 0)
+        let remainingAtStart = ((try? database.photosNeedingLocationBackfillCount()) ?? 0)
+            + ((try? database.videosNeedingLocationBackfillCount()) ?? 0)
+        let alreadyGeocoded = max(0, totalWithGPS - remainingAtStart)
 
         #if DEBUG
         let totalPhotos = (try? database.indexedCount()) ?? 0
         let totalVideos = (try? database.videoIndexedCount()) ?? 0
-        logger.info("[Geocoder] Starting: \(photosToGeocode)/\(totalPhotos) photos need geocoding, \(videosToGeocode)/\(totalVideos) videos need geocoding")
+        logger.info("[Geocoder] Starting: \(remainingAtStart) / \(totalWithGPS) remaining out of GPS-tagged media (\(totalPhotos) photos + \(totalVideos) videos indexed)")
         #endif
 
-        if totalToGeocode > 0 {
+        if remainingAtStart > 0 {
             await MainActor.run {
-                self.geocodingProgress = (completed: 0, total: totalToGeocode)
+                self.geocodingProgress = (completed: alreadyGeocoded, total: totalWithGPS)
             }
         }
 
@@ -773,7 +779,7 @@ class IndexingService: ObservableObject {
                         country: loc.country, name: loc.name
                     )
                     totalGeocoded += 1
-                    let doneSnapshot = totalGeocoded
+                    let doneSnapshot = alreadyGeocoded + totalGeocoded
                     await MainActor.run {
                         if let current = self.geocodingProgress {
                             self.geocodingProgress = (completed: doneSnapshot, total: current.total)
@@ -817,7 +823,7 @@ class IndexingService: ObservableObject {
                         country: loc.country, name: loc.name
                     )
                     totalGeocoded += 1
-                    let doneSnapshot = totalGeocoded
+                    let doneSnapshot = alreadyGeocoded + totalGeocoded
                     await MainActor.run {
                         if let current = self.geocodingProgress {
                             self.geocodingProgress = (completed: doneSnapshot, total: current.total)
