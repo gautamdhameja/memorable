@@ -42,18 +42,32 @@ enum LocationMatcher {
         // form from Apple's placemark, e.g. "CA") OR substring against the
         // raw query (for non-US regions where the stored state is a full
         // name like "Bavaria" and the query might be partial).
+        // Safety net: also check city and name with the raw query. Handles
+        // city-states (Prague, Vienna, Hamburg) where Apple's forward
+        // geocoder returns adminArea instead of locality, but the reverse
+        // geocoder stored the English name in the city column.
         if let admin = adminL, !admin.isEmpty {
-            return { _, state, _, _ in
-                guard let s = state?.lowercased() else { return false }
-                return s == admin || s.contains(q)
+            return { city, state, _, name in
+                if let s = state?.lowercased(), (s == admin || s.contains(q)) {
+                    return true
+                }
+                let cityL = city?.lowercased() ?? ""
+                let nameL = name?.lowercased() ?? ""
+                return cityL.contains(q) || nameL.contains(q)
             }
         }
 
         // Country-level query: same pattern against the country column.
+        // Safety net: also check city and name (not state, to avoid
+        // matching US state "Georgia" when the user means the country).
         if let country = countryL, !country.isEmpty {
-            return { _, _, cnt, _ in
-                guard let c = cnt?.lowercased() else { return false }
-                return c == country || c.contains(q)
+            return { city, _, cnt, name in
+                if let c = cnt?.lowercased(), (c == country || c.contains(q)) {
+                    return true
+                }
+                let cityL = city?.lowercased() ?? ""
+                let nameL = name?.lowercased() ?? ""
+                return cityL.contains(q) || nameL.contains(q)
             }
         }
 

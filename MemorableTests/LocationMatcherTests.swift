@@ -220,6 +220,48 @@ final class LocationMatcherTests: XCTestCase {
         XCTAssertFalse(matcher("Austin", "TX", "United States", nil))
     }
 
+    // MARK: - City-State Queries (admin region that is also a city)
+
+    func testPragueAsAdminMatchesCityColumn() {
+        // Apple forward-geocodes "Prague" with locality=nil, admin="Prague"
+        // but reverse-geocoded photos store city="Prague", state="Praha"
+        let matcher = LocationMatcher.makeMatcher(
+            queryLower: "prague", locality: nil,
+            adminArea: "Prague", country: "Czechia"
+        )
+        XCTAssertTrue(matcher("Prague", "Praha", "Czechia", nil))
+        XCTAssertTrue(matcher("Prague", "Praha", "Czechia", "Mala Strana"))
+        XCTAssertFalse(matcher("Brno", "South Moravian", "Czechia", nil))
+    }
+
+    func testViennaAsAdminMatchesCityColumn() {
+        let matcher = LocationMatcher.makeMatcher(
+            queryLower: "vienna", locality: nil,
+            adminArea: "Vienna", country: "Austria"
+        )
+        XCTAssertTrue(matcher("Vienna", "Wien", "Austria", nil))
+        XCTAssertFalse(matcher("Salzburg", "Salzburg", "Austria", nil))
+    }
+
+    func testHamburgAsAdminMatchesCityColumn() {
+        let matcher = LocationMatcher.makeMatcher(
+            queryLower: "hamburg", locality: nil,
+            adminArea: "Hamburg", country: "Germany"
+        )
+        XCTAssertTrue(matcher("Hamburg", "Hamburg", "Germany", nil))
+        XCTAssertFalse(matcher("Berlin", "Berlin", "Germany", nil))
+    }
+
+    func testAdminBranchMatchesNameColumn() {
+        // A photo whose name field contains the query should match
+        // even if city and state don't
+        let matcher = LocationMatcher.makeMatcher(
+            queryLower: "prague", locality: nil,
+            adminArea: "Prague", country: "Czechia"
+        )
+        XCTAssertTrue(matcher("Unknown", "Praha", "Czechia", "Prague Castle"))
+    }
+
     // MARK: - Edge Cases
 
     func testEmptyQueryMatchesNothing() {
