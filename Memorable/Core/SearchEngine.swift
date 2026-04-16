@@ -324,7 +324,21 @@ class SearchEngine {
 
                 // Tier 1: canonical/substring match on reverse-geocoded strings
                 if let city = pCities[i], !city.isEmpty {
-                    if let match = locationMatcher, !match(pCities[i], pStates[i], pCountries[i], pLocNames[i]) {
+                    if let match = locationMatcher, match(pCities[i], pStates[i], pCountries[i], pLocNames[i]) {
+                        continue // Matched by name, skip GPS check
+                    }
+                    // Tier 1 failed. Try GPS proximity with a tight
+                    // city-level cap (50 km) to rescue cross-language
+                    // mismatches (stored "Praha" vs query "Prague")
+                    // without pulling in distant cities that happen to
+                    // sit inside a large admin radius.
+                    if let target = targetLoc,
+                       let lat = photoLats[i], let lon = photoLons[i] {
+                        let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
+                        if distKm > 50.0 {
+                            candidateMask[i] = false
+                        }
+                    } else {
                         candidateMask[i] = false
                     }
                     continue

@@ -30,7 +30,10 @@ class ReverseGeocoder {
 
         let location = CLLocation(latitude: latitude, longitude: longitude)
         do {
-            let placemarks = try await geocoder.reverseGeocodeLocation(location)
+            let placemarks = try await geocoder.reverseGeocodeLocation(
+                location,
+                preferredLocale: Locale(identifier: "en_US")
+            )
             guard let pm = placemarks.first else { return nil }
             // Always provide a non-nil city so the backfill query
             // doesn't re-process this coordinate. Fall back through hierarchy.
