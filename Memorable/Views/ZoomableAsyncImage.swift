@@ -3,6 +3,7 @@ import Photos
 
 struct ZoomableAsyncImage: View {
     let result: SearchResult
+    var isActive: Bool = true
     var onSingleTap: (() -> Void)? = nil
 
     @State private var image: UIImage?
@@ -57,12 +58,13 @@ struct ZoomableAsyncImage: View {
                     .frame(width: geo.size.width, height: geo.size.height)
             }
         }
-        .task {
-            await loadImage()
-        }
-        .onDisappear {
-            // Reset when swiped away so it's clean if user comes back
-            resetZoom()
+        .task(id: isActive) {
+            if isActive {
+                await loadImage()
+            } else {
+                image = nil
+                resetZoom()
+            }
         }
     }
 
@@ -133,17 +135,20 @@ struct ZoomableAsyncImage: View {
     private func loadImage() async {
         if result.isVideo {
             if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                image = await VideoFrameExtractor.thumbnail(
+                let loaded = await VideoFrameExtractor.thumbnail(
                     from: asset,
                     atPosition: result.bestFramePosition ?? 0.5,
-                    targetSize: CGSize(width: 1024, height: 1024)
+                    targetSize: CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
                 )
+                if !Task.isCancelled { image = loaded }
             }
         } else if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-            image = await PhotoLibrary.loadImage(
+            let targetSize = CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
+            let loaded = await PhotoLibrary.loadImage(
                 for: asset,
-                targetSize: CGSize(width: 1024, height: 1024)
+                targetSize: targetSize
             )
+            if !Task.isCancelled { image = loaded }
         }
     }
 }

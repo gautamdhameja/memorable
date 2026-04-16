@@ -668,9 +668,27 @@ class SearchEngine {
         // =====================================================================
 
         let sorted = scores.enumerated().sorted { $0.element > $1.element }
+
+        // Adaptive thresholding for abstract/compound queries.
+        // When no filters are active and zero candidates pass the hard
+        // threshold, check whether the top candidates form a meaningful
+        // cluster just below it (e.g. "family vacation" scoring 0.08-0.11).
+        // If so, use a relaxed threshold derived from the top score so the
+        // cluster lands in the main grid instead of near-miss fallback.
+        var effectiveThreshold = minimumScoreThreshold
+        if !filtersActive {
+            let aboveThreshold = sorted.prefix(50).filter { $0.element >= minimumScoreThreshold }.count
+            if aboveThreshold == 0, let topScore = sorted.first?.element, topScore >= 0.06 {
+                let clusterCount = sorted.prefix(50).filter { $0.element >= topScore * 0.8 }.count
+                if clusterCount >= 3 {
+                    effectiveThreshold = topScore * 0.6
+                }
+            }
+        }
+
         // No topK cap here — return every above-threshold candidate. The UI
         // layer windows to an initial visible count and lets the user expand.
-        let photoResults = sorted.filter { $0.element >= minimumScoreThreshold }.map { (index, score) in
+        let photoResults = sorted.filter { $0.element >= effectiveThreshold }.map { (index, score) in
             SearchResult(id: ids[index], score: score, localIdentifier: localIds[index], creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
         }
 

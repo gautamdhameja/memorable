@@ -16,7 +16,7 @@ struct SearchResultsViewer: View {
 
             TabView(selection: $currentIndex) {
                 ForEach(Array(allResults.enumerated()), id: \.element.id) { index, result in
-                    ZoomableAsyncImage(result: result, onSingleTap: {
+                    ZoomableAsyncImage(result: result, isActive: index == currentIndex, onSingleTap: {
                         withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
                     })
                     .tag(index)
