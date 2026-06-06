@@ -244,6 +244,7 @@ The project documentation was updated to reflect the new behavior:
 
 - Search scoring docs now describe local-only location matching.
 - Product docs now better describe photos and videos as indexed media.
+- Build metadata docs now reflect iPhone-only targeting on iOS 17+ and the `com.blockdeep.memorable.pro.v2` StoreKit product.
 - The startup/search plan and brainstorm documents remain under `docs/plans` and `docs/brainstorms`.
 
 ## Verification Status
@@ -254,17 +255,10 @@ The following checks passed locally:
 - `git diff --check`.
 - Targeted stale-symbol search for removed or renamed code paths.
 - Package resolution during destination listing resolved `GRDB 7.10.0` and `SwiftProtobuf 1.36.1`.
+- `xcodebuild -project Memorable.xcodeproj -scheme Memorable -destination 'platform=iOS Simulator,id=22A925A6-2D1C-4C4B-9EB7-C3F2E7A112AA' -quiet build`.
+- `xcodebuild -project Memorable.xcodeproj -scheme Memorable -destination 'platform=iOS Simulator,id=22A925A6-2D1C-4C4B-9EB7-C3F2E7A112AA' -quiet test`.
 
-The full simulator build and test run could not be completed on this machine because the local Xcode simulator installation is inconsistent:
-
-- Xcode: `26.5 (17F42)`.
-- Installed SDKs include `iPhoneSimulator26.5.sdk`.
-- CoreSimulator is older than the Xcode build expects: current `1051.49.0`, expected `1051.54.0`.
-- `xcodebuild` cannot load simulator devices.
-- The requested `iPhone 17 Pro` simulator destination is unavailable.
-- The physical-device placeholders are also ineligible because Xcode reports iOS `26.5` as not installed through `Xcode > Settings > Components`.
-
-Because of that environment issue, simulator launch, full app build, and XCTest execution remain unverified locally even though the static checks above passed.
+One simulator test attempt hit a transient CoreSimulator `Busy` launch preflight error. The immediate serial retry passed.
 
 ## Expected User Impact
 

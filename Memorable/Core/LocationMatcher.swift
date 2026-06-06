@@ -2,18 +2,16 @@ import Foundation
 
 /// Decides whether a stored photo's reverse-geocoded location strings match
 /// a user's location query. The matching tier is chosen by the most specific
-/// field present in the forward-geocoded placemark, which is what lets us
-/// canonicalise across US state abbreviations ("CA") and other formats
-/// without a hardcoded alias table.
+/// locally available hint field, with substring fallback when no canonical
+/// fields are available.
 enum LocationMatcher {
 
     typealias Matcher = (_ city: String?, _ state: String?, _ country: String?, _ name: String?) -> Bool
 
-    /// Build a matcher closure from the user's raw query plus the canonical
-    /// placemark fields returned by forward-geocoding that query. Pass `nil`
-    /// for any placemark field that was unavailable; the matcher falls back
-    /// to the legacy substring-everywhere behaviour when no placemark is
-    /// available at all.
+    /// Build a matcher closure from the user's raw query plus optional
+    /// canonical locality/admin/country hints. Pass `nil` for any canonical
+    /// field that was unavailable; the matcher falls back to substring matching
+    /// against stored local metadata.
     static func makeMatcher(
         queryLower: String,
         locality: String?,
@@ -38,14 +36,14 @@ enum LocationMatcher {
             }
         }
 
-        // State-level query: exact match against stored state (canonical
-        // form from Apple's placemark, e.g. "CA") OR substring against the
-        // raw query (for non-US regions where the stored state is a full
-        // name like "Bavaria" and the query might be partial).
+        // State-level query: exact match against stored state when a canonical
+        // hint is available OR substring against the raw query (for non-US
+        // regions where the stored state is a full name like "Bavaria" and
+        // the query might be partial).
         // Safety net: also check city and name with the raw query. Handles
-        // city-states (Prague, Vienna, Hamburg) where Apple's forward
-        // geocoder returns adminArea instead of locality, but the reverse
-        // geocoder stored the English name in the city column.
+        // city-states (Prague, Vienna, Hamburg) where a parser/canonicalizer
+        // may produce an admin area while reverse geocoding stored the English
+        // name in the city column.
         if let admin = adminL, !admin.isEmpty {
             return { city, state, _, name in
                 if let s = state?.lowercased(), (s == admin || s.contains(q)) {
@@ -71,9 +69,8 @@ enum LocationMatcher {
             }
         }
 
-        // Fallback: no placemark at all (forward-geocode failed, offline,
-        // rate-limited, typo). Preserve the legacy substring-everywhere
-        // behaviour so we don't regress against today.
+        // Fallback: no canonical fields at all. Preserve substring-everywhere
+        // behavior for partial names and typos.
         return { city, state, cnt, name in
             (city?.lowercased().contains(q) ?? false)
                 || (state?.lowercased().contains(q) ?? false)

@@ -7,9 +7,8 @@ struct QueryHints {
     var locationHint: String?
     var locationCoordinate: (lat: Double, lon: Double)?
     var locationRadiusKm: Double?
-    // Canonical placemark fields from forward-geocoding `locationHint`.
-    // Populated by SearchEngine after parsing, nil until then. Used by
-    // LocationMatcher to canonicalise matches (e.g. "california" → "CA").
+    // Optional canonical location fields. Search does not forward-geocode
+    // query text; these remain nil unless a local parser can supply them.
     var locationLocality: String?
     var locationSubAdmin: String?
     var locationAdminArea: String?
@@ -227,8 +226,8 @@ enum QueryParserFallback {
         // Strategy 3: Bare multi-word proper noun fallback
         // If the entire remaining text is 1-4 capitalized words with no obvious
         // visual content words, treat it as a potential location.
-        // The geocoder in SearchEngine will validate. If it fails to geocode,
-        // the search proceeds as normal CLIP search.
+        // Local metadata matching validates the hint. If nothing matches, the
+        // search proceeds as normal visual search.
         // Skip if Strategy 1's landmark guard triggered — the query is a landmark
         // name (e.g. "Hoover Dam"), not a city.
         if !landmarkGuardTriggered {

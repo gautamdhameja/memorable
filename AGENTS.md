@@ -55,10 +55,10 @@ When I report a bug, follow this exact sequence:
 
 ## App Overview
 
-**Memorable** -- on-device AI photo & video search for iOS. Uses SigLIP2 (Google, Apache 2.0 licensed) to encode photos/videos into embeddings, stores them in SQLite, and searches via cosine similarity. Photos never leave the device. AI models are bundled in-app. CLGeocoder is used for location name resolution (coordinates only, no photos or queries sent).
+**Memorable** -- on-device AI photo & video search for iOS. Uses SigLIP2 (Google, Apache 2.0 licensed) to encode photos/videos into embeddings, stores them in SQLite, and searches via cosine similarity. Photos never leave the device. AI models are bundled in-app. Indexed media coordinates can be reverse-geocoded with CLGeocoder; photos and search queries are not sent.
 
 - Bundle ID: `com.blockdeep.memorable` (change for personal signing)
-- Minimum: iOS 17.0, A14 chip
+- Minimum: iOS 17.0, iPhone with A14 chip
 - Model: SigLIP2-base-patch16-224, 768-dim embeddings, 256k-token Gemma vocab, SentencePiece BPE tokenizer
 - Freemium: 500 indexed media items free, Pro unlock via StoreKit 2 IAP (`com.blockdeep.memorable.pro.v2`)
 
@@ -143,12 +143,12 @@ In `loadAllVideoEmbeddings()`, metadata (videoId, localId, date, position) must 
 User query
   → QueryParser (Foundation Models on iOS 26+, else NSDataDetector + NLTagger)
   → Extract: visual text, date range, location name, negative terms
-  → Geocode location via CLGeocoder
+  → Match location text locally against stored reverse-geocoded metadata
   → Direct text encoding via SigLIP2 (no prompt templates, raw query only)
   → Dot product against all photo + video embeddings (vDSP, pointer arithmetic)
   → Location/time-of-day/OCR/scene-label boosts (additive, tuned for SigLIP2)
   → Negative term penalty (-30% of negative similarity)
-  → Score threshold >= 0.10
+  → Score threshold >= 0.12
   → Video dedup (best frame per video only)
   → Merge photo + video results, sort, return all matches above threshold
 ```
@@ -159,9 +159,11 @@ User query
 
 Two-pass indexing: photos first, then videos.
 
-**Pass 1 (Photos):** Fetch all media → filter photos → skip already indexed (in-memory Set lookup) → load 224×224 → encode → OCR for screenshots → batch insert (20 per transaction) → reload search index. Photos become searchable immediately.
+**Pass 1 (Photos):** Fetch all media → filter photos → skip already indexed (in-memory Set lookup) → load 224×224 through the fast indexing-only PhotoKit path → encode → batch insert base embeddings and metadata (20 per transaction) → reload search index at progressive checkpoints and after the photo pass. Photos become searchable before slower enrichment finishes.
 
 **Pass 2 (Videos):** For each video → extract 2-5 frames based on duration (spread 10%-90%) → encode each frame → store video record + frame embeddings → reload index. Progress shows "Indexing videos" with "Photos ready — you can search now".
+
+**Deferred enrichment:** After base indexing is idle, incomplete photo rows are enriched in bounded batches with OCR, screenshot OCR, blur scoring, and scene labels. Enrichment state is persisted per photo; folder-source enrichment reopens the saved security-scoped bookmark and validates paths before reading files.
 
 ## Design System — Celestial Theme
 
@@ -181,6 +183,7 @@ Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.sw
 
 - Database file protection: `.completeUnlessOpen` (encrypted at rest, writable during background indexing)
 - Folder security-scoped resources: `start/stop` paired with `defer` in `performFolderIndexing`
+- Deferred folder enrichment resolves the saved bookmark, rejects symlinks and paths outside the bookmarked folder, and then loads the image.
 - Bookmarks keyed by source UUID (not folder name) to prevent collision
 - All SQL parameterized via GRDB's type-safe API
 - Embedding data size validated (1536 bytes) before unsafe pointer access
@@ -193,6 +196,7 @@ Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.sw
 - Embeddings stored as Float16 (1536 bytes/photo), loaded as Float32 for search
 - Dot products use `withUnsafeBufferPointer` pointer arithmetic — no per-iteration array allocation
 - Batch DB inserts (20 per transaction) instead of per-photo transactions
+- Progressive photo index reloads happen at throttled checkpoints; very large libraries use a larger checkpoint interval to avoid excessive full-index rebuilds
 - `allIndexedIdentifiers()` returns a Set for O(1) skip-check during indexing
 - `reserveCapacity` on embeddings array before loading
 - Tokenizer cache with 1000-entry eviction

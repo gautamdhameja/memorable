@@ -58,7 +58,7 @@ Query → Season/Date/Location extraction → Raw SigLIP2 text encoding
 ## Requirements
 
 - iOS 17.0+
-- iPhone or iPad with A14 chip or later
+- iPhone with A14 chip or later
 - Local storage for bundled Core ML model resources
 
 ## Build
@@ -76,7 +76,8 @@ Core ML models are not included in the repository. The active app packaging stra
 
 ### Dependencies
 
-- [GRDB.swift 7.x](https://github.com/groue/GRDB.swift) — SQLite database (only external dependency, resolved via SPM)
+- [GRDB.swift 7.x](https://github.com/groue/GRDB.swift) — SQLite database
+- [SwiftProtobuf 1.28+](https://github.com/apple/swift-protobuf) — SentencePiece tokenizer model deserialization
 
 ## Architecture
 
