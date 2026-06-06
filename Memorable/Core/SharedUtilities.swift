@@ -40,8 +40,6 @@ extension MLMultiArray {
     }
 }
 
-// MARK: - Video Playback
-
 // MARK: - Timeout Wrapper
 
 /// Wraps an async operation with a timeout. Returns nil if the timeout expires.
@@ -68,6 +66,8 @@ extension DateFormatter {
         return f
     }()
 }
+
+// MARK: - Video Playback
 
 /// Present a native AVPlayerViewController from anywhere in the app.
 func presentVideoPlayer(for phAsset: PHAsset) {

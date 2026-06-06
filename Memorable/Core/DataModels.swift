@@ -29,8 +29,24 @@ struct IndexedPhoto: Codable, FetchableRecord, PersistableRecord {
     var locationCountry: String?
     var locationName: String?
     var sceneLabels: String?
+    var enrichmentComplete: Bool = false
 
     static let databaseTableName = "indexed_photos"
+}
+
+struct PhotoEnrichmentCandidate: Equatable {
+    let localIdentifier: String
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let sourceId: String
+    let filePath: String?
+}
+
+struct PhotoEnrichmentUpdate: Equatable {
+    let localIdentifier: String
+    let ocrText: String?
+    let sharpnessScore: Double?
+    let sceneLabels: String?
 }
 
 struct PhotoSource: Codable, FetchableRecord, PersistableRecord, Identifiable {
@@ -101,10 +117,11 @@ struct SmartAlbum: Codable, Identifiable {
     var createdAt: Date
 }
 
-enum IndexingPhase {
+enum IndexingPhase: Equatable {
     case idle
     case photos
     case videos
+    case enrichment
 }
 
 struct IndexingProgress {
@@ -113,10 +130,24 @@ struct IndexingProgress {
     var isRunning: Bool
     var phase: IndexingPhase = .idle
     var photosComplete: Bool = false
+    var searchableCount: Int = 0
+    var phaseStartedAt: Date = Date()
 
     var percentage: Double {
         guard total > 0 else { return 0 }
         return Double(completed) / Double(total) * 100
+    }
+
+    var itemsPerSecond: Double? {
+        guard completed >= IndexingConfig.progressEstimateMinCompleted else { return nil }
+        let elapsed = Date().timeIntervalSince(phaseStartedAt)
+        guard elapsed > 0 else { return nil }
+        return Double(completed) / elapsed
+    }
+
+    var estimatedSecondsRemaining: TimeInterval? {
+        guard total > completed, let itemsPerSecond, itemsPerSecond > 0 else { return nil }
+        return Double(total - completed) / itemsPerSecond
     }
 }
 

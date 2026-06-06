@@ -29,6 +29,56 @@ class FolderScanner {
 
     static let supportedExtensions = Set(["jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp"])
 
+    static func loadImageFromBookmarkedSource(
+        filePath: String,
+        sourceId: String,
+        targetSize: CGSize
+    ) -> UIImage? {
+        let imageURL = URL(fileURLWithPath: filePath)
+        guard sourceId != PhotoSourceType.photokit.rawValue else {
+            logger.error("[FolderScanner] Refusing folder image path on PhotoKit source: \(imageURL.lastPathComponent)")
+            return nil
+        }
+
+        guard let folderURL = resolveBookmark(forSourceId: sourceId) else {
+            logger.error("[FolderScanner] Could not resolve bookmark for source: \(sourceId)")
+            return nil
+        }
+
+        let hasAccess = folderURL.startAccessingSecurityScopedResource()
+        guard hasAccess else {
+            logger.error("[FolderScanner] Could not access bookmark for source: \(sourceId)")
+            return nil
+        }
+        defer { folderURL.stopAccessingSecurityScopedResource() }
+
+        guard isValidImageFile(imageURL, within: folderURL) else {
+            logger.error("[FolderScanner] Refusing image path outside bookmarked folder: \(imageURL.lastPathComponent)")
+            return nil
+        }
+
+        return loadImage(from: imageURL, targetSize: targetSize)
+    }
+
+    static func isValidImageFile(_ imageURL: URL, within folderURL: URL) -> Bool {
+        let ext = imageURL.pathExtension.lowercased()
+        guard supportedExtensions.contains(ext) else { return false }
+
+        do {
+            let values = try imageURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                return false
+            }
+        } catch {
+            logger.error("[FolderScanner] Failed to validate image file: \(error.localizedDescription)")
+            return false
+        }
+
+        let folderPath = folderURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let filePath = imageURL.standardizedFileURL.resolvingSymlinksInPath().path
+        return filePath.hasPrefix(folderPath + "/")
+    }
+
     // Scan a folder and return all image file URLs
     static func scanFolder(at url: URL) -> [URL] {
         var imageURLs: [URL] = []

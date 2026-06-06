@@ -10,17 +10,44 @@ class PhotoLibrary {
 
     // Get a UIImage from a PHAsset at a specific size for embedding
     static func loadImage(for asset: PHAsset, targetSize: CGSize = CGSize(width: 224, height: 224)) async -> UIImage? {
-        await withTimeout(seconds: TimeoutConfig.imageLoad) { completion in
-            let options = PHImageRequestOptions()
-            options.deliveryMode = .highQualityFormat
-            options.isSynchronous = false
-            options.isNetworkAccessAllowed = false
-            options.resizeMode = .exact
+        await requestImage(for: asset, targetSize: targetSize, contentMode: .aspectFill, options: displayImageRequestOptions())
+    }
 
+    // Get a UIImage from a PHAsset for indexing. This path prioritizes fast
+    // 224x224 embedding input and must not be used for user-facing display.
+    static func loadImageForIndexing(for asset: PHAsset, targetSize: CGSize = CGSize(width: 224, height: 224)) async -> UIImage? {
+        await requestImage(for: asset, targetSize: targetSize, contentMode: .aspectFill, options: indexingImageRequestOptions())
+    }
+
+    static func indexingImageRequestOptions() -> PHImageRequestOptions {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .fastFormat
+        options.isSynchronous = false
+        options.isNetworkAccessAllowed = false
+        options.resizeMode = .exact
+        return options
+    }
+
+    static func displayImageRequestOptions() -> PHImageRequestOptions {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isSynchronous = false
+        options.isNetworkAccessAllowed = false
+        options.resizeMode = .exact
+        return options
+    }
+
+    private static func requestImage(
+        for asset: PHAsset,
+        targetSize: CGSize,
+        contentMode: PHImageContentMode,
+        options: PHImageRequestOptions
+    ) async -> UIImage? {
+        await withTimeout(seconds: TimeoutConfig.imageLoad) { completion in
             PHImageManager.default().requestImage(
                 for: asset,
                 targetSize: targetSize,
-                contentMode: .aspectFill,
+                contentMode: contentMode,
                 options: options
             ) { image, info in
                 let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false

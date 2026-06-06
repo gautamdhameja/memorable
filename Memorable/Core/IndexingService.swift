@@ -42,10 +42,12 @@ class IndexingService: ObservableObject {
     private let database: DatabaseProtocol
     private var indexingTask: Task<Void, Never>?
     private let changeObserver = PhotoChangeObserver()
-    private let batchSize = 20
+    private let batchSize = IndexingConfig.batchInsertSize
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var surpriseValidationTask: Task<Void, Never>?
     private var autoResumeTask: Task<Void, Never>?
+    private var enrichmentTask: Task<Void, Never>?
+    private var enrichmentTaskGeneration = 0
     private let reverseGeocoder = ReverseGeocoder()
     private var geocodingTask: Task<Void, Never>?
     private var isObservingPhotoChanges = false
@@ -53,6 +55,11 @@ class IndexingService: ObservableObject {
 
     var onIndexReady: (() -> Void)?
     var onIndexUnavailable: (() -> Void)?
+
+    private struct LoadedPhotoBatch {
+        let assets: [PHAsset]
+        let loadedImages: [(asset: PHAsset, image: UIImage)]
+    }
 
     init(imageEncoder: ImageEncoder, searchEngine: SearchEngine, database: DatabaseProtocol = AppDatabase.shared) {
         self.imageEncoder = imageEncoder
@@ -70,6 +77,10 @@ class IndexingService: ObservableObject {
         startObservingPhotoChanges()
         if scheduleAutoResume && loaded {
             scheduleDeferredAutoResume(totalInLibrary: launchLibraryCountSnapshot)
+            scheduleDeferredEnrichment(
+                delaySeconds: IndexingConfig.postLaunchAutoResumeDelaySeconds
+                    + IndexingConfig.surpriseValidationDelaySeconds
+            )
         }
         return loaded
     }
@@ -111,11 +122,16 @@ class IndexingService: ObservableObject {
 
                 isReady = true
                 let loadedTotal = searchEngine.totalSize
-                progress = IndexingProgress(total: loadedTotal, completed: loadedTotal, isRunning: false)
+                progress = IndexingProgress(
+                    total: loadedTotal,
+                    completed: loadedTotal,
+                    isRunning: false,
+                    searchableCount: loadedTotal
+                )
                 onIndexReady?()
 
                 #if DEBUG
-                logger.info("[IndexingService] Index ready: \(searchEngine.indexSize) photos, \(searchEngine.videoSize) videos")
+                logger.info("[IndexingService] Index ready: \(self.searchEngine.indexSize) photos, \(self.searchEngine.videoSize) videos")
                 #endif
                 return true
             }
@@ -128,12 +144,14 @@ class IndexingService: ObservableObject {
     }
 
     func startIndexing() {
+        cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         SurpriseQueries.clearValidated()
         indexingTask = Task { await performIndexing() }
     }
 
     func indexNewPhotosOnly() {
+        cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         newPhotosAvailable = false
         indexingTask = Task { await performIndexing() }
@@ -146,13 +164,25 @@ class IndexingService: ObservableObject {
         surpriseValidationTask = nil
         autoResumeTask?.cancel()
         autoResumeTask = nil
+        cancelEnrichmentTask()
         geocodingTask?.cancel()
         geocodingTask = nil
         geocodingProgress = nil
         progress.isRunning = false
     }
 
+    func deferEnrichmentForUserSearch() {
+        guard enrichmentTask != nil else { return }
+        cancelEnrichmentWork()
+        scheduleDeferredEnrichment(delaySeconds: IndexingConfig.surpriseValidationDelaySeconds)
+    }
+
+    func cancelEnrichmentForMemoryPressure() {
+        cancelEnrichmentWork()
+    }
+
     func indexFolder(url: URL, name: String) {
+        cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         indexingTask = Task { await performFolderIndexing(url: url, name: name) }
     }
@@ -262,9 +292,16 @@ class IndexingService: ObservableObject {
         logger.info("[IndexingService] Library breakdown: \(photoAssets.count) photos, \(videoAssets.count) videos, \(alreadyIndexed.count) photos and \(alreadyIndexedVideos.count) videos already indexed")
         #endif
 
-        // Pass 1: Index all photos first (batch Core ML encoding)
-        let encodeBatchSize = 16
-        progress = IndexingProgress(total: photoAssets.count, completed: 0, isRunning: true, phase: .photos)
+        // Pass 1: Index all photos first with only base embeddings and metadata.
+        // OCR, blur scoring, and scene labels run later as deferred enrichment.
+        let encodeBatchSize = IndexingConfig.batchEncodeSize
+        progress = IndexingProgress(
+            total: photoAssets.count,
+            completed: 0,
+            isRunning: true,
+            phase: .photos,
+            searchableCount: searchEngine.totalSize
+        )
 
         // Collect assets to index (skip already indexed)
         var assetsToIndex: [PHAsset] = []
@@ -277,32 +314,53 @@ class IndexingService: ObservableObject {
             }
         }
 
-        // Process in batches
-        for batchStart in stride(from: 0, to: assetsToIndex.count, by: encodeBatchSize) {
+        let checkpointInterval = searchableCheckpointInterval(forLibrarySize: total)
+        var nextSearchableReloadCount = nextSearchableCheckpoint(
+            after: alreadyIndexed.count + alreadyIndexedVideos.count,
+            isPro: isPro,
+            interval: checkpointInterval
+        )
+        var lastProgressiveReloadAt: Date?
+        var batchStart = 0
+        var nextLoadTask: Task<LoadedPhotoBatch, Never>?
+        let prefetchEnabled = isPro && IndexingConfig.prefetchBatchCapacity > 0
+
+        func makeBatch(start: Int) -> [PHAsset] {
+            guard start < assetsToIndex.count else { return [] }
+            let batchEnd = min(start + encodeBatchSize, assetsToIndex.count)
+            let slice = Array(assetsToIndex[start..<batchEnd])
+            guard !isPro else { return slice }
+            let remainingAllowed = max(0, FreeTier.maxIndexedMedia - newlyIndexed)
+            return Array(slice.prefix(remainingAllowed))
+        }
+
+        let firstBatch = makeBatch(start: batchStart)
+        if !firstBatch.isEmpty {
+            nextLoadTask = loadPhotoBatchTask(assets: firstBatch)
+            batchStart += encodeBatchSize
+        }
+
+        // Process in batches with one bounded prefetch task ahead of encoding.
+        while let loadTask = nextLoadTask {
             if Task.isCancelled { break }
             if !FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) {
                 hitFreeLimit = true
                 break
             }
 
-            let batchEnd = min(batchStart + encodeBatchSize, assetsToIndex.count)
-            let batchAssets = Array(assetsToIndex[batchStart..<batchEnd])
-
-            // Phase 1: Load images in parallel
-            var loadedImages: [(asset: PHAsset, image: UIImage)] = []
-            await withTaskGroup(of: (PHAsset, UIImage?).self) { group in
-                for asset in batchAssets {
-                    group.addTask {
-                        let image = await PhotoLibrary.loadImage(for: asset)
-                        return (asset, image)
-                    }
+            if prefetchEnabled {
+                let nextBatch = makeBatch(start: batchStart)
+                nextLoadTask = nextBatch.isEmpty ? nil : loadPhotoBatchTask(assets: nextBatch)
+                if !nextBatch.isEmpty {
+                    batchStart += encodeBatchSize
                 }
-                for await (asset, image) in group {
-                    if let image {
-                        loadedImages.append((asset, image))
-                    }
-                }
+            } else {
+                nextLoadTask = nil
             }
+
+            let loadedBatch = await loadTask.value
+            let batchAssets = loadedBatch.assets
+            let loadedImages = loadedBatch.loadedImages
 
             guard !loadedImages.isEmpty else {
                 indexed += batchAssets.count
@@ -320,52 +378,12 @@ class IndexingService: ObservableObject {
                     embeddings = [try imageEncoder.encode(image: images[0])]
                 }
 
-                // Phase 3: Post-process each result (OCR, sharpness, face detection)
-                for (i, (asset, image)) in loadedImages.enumerated() {
+                for (i, (asset, _)) in loadedImages.enumerated() {
                     guard i < embeddings.count else { break }
                     guard FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) else {
                         hitFreeLimit = true
                         break
                     }
-
-                    var ocrText: String?
-                    // Tier 1: Fast OCR on 224x224 thumbnail (catches large text: signs, menus, whiteboards)
-                    let quickOcr = await Task.detached {
-                        OCRService.extractTextFast(from: image)
-                    }.value
-
-                    if OCRService.isLikelyScreenshot(width: asset.pixelWidth, height: asset.pixelHeight) {
-                        // Tier 2: Full-res OCR for screenshots (catches small UI text, capped at 2048px)
-                        let ocrWidth = min(asset.pixelWidth, 2048)
-                        let ocrHeight = min(asset.pixelHeight, 2048)
-                        if let fullImage = await PhotoLibrary.loadImage(
-                            for: asset,
-                            targetSize: CGSize(width: CGFloat(ocrWidth), height: CGFloat(ocrHeight))
-                        ) {
-                            ocrText = await Task.detached { OCRService.extractText(from: fullImage) }.value
-                        }
-                    }
-
-                    // Use full-res result if available, otherwise use quick result
-                    if ocrText == nil || (ocrText?.isEmpty ?? true) {
-                        ocrText = quickOcr
-                    }
-
-                    // Filter out very short OCR results (likely noise from photo artifacts)
-                    if let text = ocrText, text.count < 3 {
-                        ocrText = nil
-                    }
-
-                    // Compute sharpness score (runs on the already-loaded image)
-                    let sharpness = await Task.detached {
-                        BlurDetector.sharpnessScore(for: image)
-                    }.value
-
-                    // Scene classification (runs on Neural Engine, ~5-15ms)
-                    let sceneLabels = await Task.detached {
-                        SceneClassifier.classify(image: image)
-                    }.value
-                    let sceneLabelsString = SceneClassifier.labelsToString(sceneLabels)
 
                     batch.append(IndexedPhoto(
                         id: UUID().uuidString,
@@ -376,10 +394,7 @@ class IndexingService: ObservableObject {
                         pixelWidth: asset.pixelWidth,
                         pixelHeight: asset.pixelHeight,
                         embedding: embeddings[i].toFloat16Data(),
-                        indexedAt: Date(),
-                        ocrText: ocrText,
-                        sharpnessScore: sharpness,
-                        sceneLabels: sceneLabelsString
+                        indexedAt: Date()
                     ))
 
                     newlyIndexed += 1
@@ -395,38 +410,6 @@ class IndexingService: ObservableObject {
                     do {
                         let embedding = try imageEncoder.encode(image: image)
 
-                        // Fast OCR on 224x224 thumbnail
-                        var fallbackOcr: String?
-                        let quickOcrFallback = await Task.detached {
-                            OCRService.extractTextFast(from: image)
-                        }.value
-
-                        if OCRService.isLikelyScreenshot(width: asset.pixelWidth, height: asset.pixelHeight) {
-                            let ocrWidth = min(asset.pixelWidth, 2048)
-                            let ocrHeight = min(asset.pixelHeight, 2048)
-                            if let fullImage = await PhotoLibrary.loadImage(
-                                for: asset,
-                                targetSize: CGSize(width: CGFloat(ocrWidth), height: CGFloat(ocrHeight))
-                            ) {
-                                fallbackOcr = await Task.detached { OCRService.extractText(from: fullImage) }.value
-                            }
-                        }
-                        if fallbackOcr == nil || (fallbackOcr?.isEmpty ?? true) {
-                            fallbackOcr = quickOcrFallback
-                        }
-                        if let text = fallbackOcr, text.count < 3 {
-                            fallbackOcr = nil
-                        }
-
-                        let fallbackSharpness = await Task.detached {
-                            BlurDetector.sharpnessScore(for: image)
-                        }.value
-
-                        let fallbackLabels = await Task.detached {
-                            SceneClassifier.classify(image: image)
-                        }.value
-                        let fallbackLabelsString = SceneClassifier.labelsToString(fallbackLabels)
-
                         batch.append(IndexedPhoto(
                             id: UUID().uuidString,
                             localIdentifier: asset.localIdentifier,
@@ -436,10 +419,7 @@ class IndexingService: ObservableObject {
                             pixelWidth: asset.pixelWidth,
                             pixelHeight: asset.pixelHeight,
                             embedding: embedding.toFloat16Data(),
-                            indexedAt: Date(),
-                            ocrText: fallbackOcr,
-                            sharpnessScore: fallbackSharpness,
-                            sceneLabels: fallbackLabelsString
+                            indexedAt: Date()
                         ))
                         newlyIndexed += 1
                     } catch {
@@ -460,10 +440,25 @@ class IndexingService: ObservableObject {
                     }
                 }
                 batch.removeAll(keepingCapacity: true)
+                let checkpoint = await reloadSearchIndexIfNeeded(
+                    indexedMediaCount: newlyIndexed,
+                    nextCheckpoint: nextSearchableReloadCount,
+                    lastReloadAt: lastProgressiveReloadAt,
+                    interval: checkpointInterval
+                )
+                nextSearchableReloadCount = checkpoint.nextCheckpoint
+                lastProgressiveReloadAt = checkpoint.lastReloadAt
             }
 
             indexed += batchAssets.count
             progress.completed = indexed
+            if !prefetchEnabled {
+                let followingBatch = makeBatch(start: batchStart)
+                if !followingBatch.isEmpty {
+                    nextLoadTask = loadPhotoBatchTask(assets: followingBatch)
+                    batchStart += encodeBatchSize
+                }
+            }
             await Task.yield()
         }
 
@@ -479,7 +474,7 @@ class IndexingService: ObservableObject {
             }
         }
 
-        // Photos done — make searchable immediately
+        // Photos done; ensure the final photo checkpoint is searchable.
         await reloadSearchIndex()
         progress.photosComplete = true
 
@@ -490,7 +485,14 @@ class IndexingService: ObservableObject {
         // Pass 2: Index videos in background
         if !videoAssets.isEmpty && !Task.isCancelled && !hitFreeLimit {
             indexed = 0
-            progress = IndexingProgress(total: videoAssets.count, completed: 0, isRunning: true, phase: .videos, photosComplete: true)
+            progress = IndexingProgress(
+                total: videoAssets.count,
+                completed: 0,
+                isRunning: true,
+                phase: .videos,
+                photosComplete: true,
+                searchableCount: searchEngine.totalSize
+            )
         }
         for asset in videoAssets {
             if Task.isCancelled { break }
@@ -520,6 +522,7 @@ class IndexingService: ObservableObject {
 
         // Geocode location strings in background (doesn't block search)
         if !Task.isCancelled {
+            scheduleDeferredEnrichment()
             scheduleSurpriseValidation()
             launchGeocoding()
         }
@@ -553,7 +556,12 @@ class IndexingService: ObservableObject {
         catch { logger.error("Failed to create source: \(error.localizedDescription)"); return }
 
         let imageURLs = FolderScanner.scanFolder(at: url)
-        progress = IndexingProgress(total: imageURLs.count, completed: 0, isRunning: true)
+        progress = IndexingProgress(
+            total: imageURLs.count,
+            completed: 0,
+            isRunning: true,
+            searchableCount: searchEngine.totalSize
+        )
 
         let alreadyIndexed = (try? database.allIndexedFilePaths()) ?? []
         var indexed = 0
@@ -635,9 +643,11 @@ class IndexingService: ObservableObject {
         catch { logger.error("Failed to update source stats: \(error.localizedDescription)") }
 
         await reloadSearchIndex()
+        scheduleDeferredEnrichment()
     }
 
-    private func reloadSearchIndex() async {
+    @discardableResult
+    private func reloadSearchIndex() async -> Bool {
         do {
             let didLoad = try await Task.detached(priority: .userInitiated) { [searchEngine] in
                 try searchEngine.loadIndex()
@@ -646,7 +656,9 @@ class IndexingService: ObservableObject {
             isReady = didLoad
             if didLoad {
                 indexVersion += 1
+                progress.searchableCount = searchEngine.totalSize
                 onIndexReady?()
+                return true
             } else {
                 onIndexUnavailable?()
             }
@@ -655,6 +667,71 @@ class IndexingService: ObservableObject {
             isReady = false
             onIndexUnavailable?()
         }
+        return false
+    }
+
+    private func loadPhotoBatchTask(assets: [PHAsset]) -> Task<LoadedPhotoBatch, Never> {
+        Task {
+            let loadedImages = await loadImagesForIndexing(assets: assets)
+            return LoadedPhotoBatch(assets: assets, loadedImages: loadedImages)
+        }
+    }
+
+    private func loadImagesForIndexing(assets: [PHAsset]) async -> [(asset: PHAsset, image: UIImage)] {
+        var loadedImages: [(asset: PHAsset, image: UIImage)] = []
+        await withTaskGroup(of: (PHAsset, UIImage?).self) { group in
+            for asset in assets {
+                group.addTask {
+                    let image = await PhotoLibrary.loadImageForIndexing(for: asset)
+                    return (asset, image)
+                }
+            }
+            for await (asset, image) in group {
+                if let image {
+                    loadedImages.append((asset, image))
+                }
+            }
+        }
+        return loadedImages
+    }
+
+    private func firstSearchableCheckpoint(isPro: Bool) -> Int {
+        if isPro { return IndexingConfig.firstSearchableCheckpoint }
+        return min(IndexingConfig.firstSearchableCheckpoint, FreeTier.maxIndexedMedia)
+    }
+
+    private func searchableCheckpointInterval(forLibrarySize librarySize: Int) -> Int {
+        if librarySize >= IndexingConfig.largeLibraryProgressiveReloadThreshold {
+            return IndexingConfig.largeLibrarySearchableCheckpointInterval
+        }
+        return IndexingConfig.searchableCheckpointInterval
+    }
+
+    private func nextSearchableCheckpoint(after indexedMediaCount: Int, isPro: Bool, interval: Int) -> Int {
+        let first = firstSearchableCheckpoint(isPro: isPro)
+        guard indexedMediaCount >= first else { return first }
+        return indexedMediaCount + interval
+    }
+
+    private func reloadSearchIndexIfNeeded(
+        indexedMediaCount: Int,
+        nextCheckpoint: Int,
+        lastReloadAt: Date?,
+        interval: Int
+    ) async -> (nextCheckpoint: Int, lastReloadAt: Date?) {
+        guard indexedMediaCount >= nextCheckpoint else {
+            return (nextCheckpoint, lastReloadAt)
+        }
+        if let lastReloadAt {
+            let elapsed = Date().timeIntervalSince(lastReloadAt)
+            guard elapsed >= IndexingConfig.minSearchReloadIntervalSeconds else {
+                return (nextCheckpoint, lastReloadAt)
+            }
+        }
+        let didLoad = await reloadSearchIndex()
+        let reloadDate = didLoad ? Date() : lastReloadAt
+        let followingCheckpoint = indexedMediaCount + interval
+        return (followingCheckpoint, reloadDate)
     }
 
     private func scheduleDeferredAutoResume(totalInLibrary: Int?) {
@@ -665,6 +742,33 @@ class IndexingService: ObservableObject {
             guard !Task.isCancelled else { return }
             await self?.checkForIncompleteIndex(totalInLibrary: totalInLibrary)
             self?.autoResumeTask = nil
+        }
+    }
+
+    private func scheduleDeferredEnrichment(delaySeconds: TimeInterval = 0) {
+        cancelEnrichmentTask()
+        enrichmentTaskGeneration += 1
+        let generation = enrichmentTaskGeneration
+        enrichmentTask = Task { [weak self] in
+            if delaySeconds > 0 {
+                let delay = UInt64(delaySeconds * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: delay)
+            }
+            guard !Task.isCancelled, let self, !self.progress.isRunning else { return }
+            await self.performPhotoEnrichment(generation: generation)
+        }
+    }
+
+    private func cancelEnrichmentTask() {
+        enrichmentTaskGeneration += 1
+        enrichmentTask?.cancel()
+        enrichmentTask = nil
+    }
+
+    private func cancelEnrichmentWork() {
+        cancelEnrichmentTask()
+        if progress.phase == .enrichment {
+            progress.isRunning = false
         }
     }
 
@@ -709,9 +813,144 @@ class IndexingService: ObservableObject {
 
         // Auto-resume indexing for the remaining items
         // performIndexing will launch geocoding when it finishes
+        if progress.phase == .enrichment {
+            cancelEnrichmentWork()
+        }
         guard markRunningIfIdle() else { return }
         newPhotosAvailable = false
         indexingTask = Task { await performIndexing() }
+    }
+
+    // MARK: - Photo Enrichment
+
+    private func performPhotoEnrichment(generation: Int) async {
+        defer {
+            if enrichmentTaskGeneration == generation {
+                enrichmentTask = nil
+                if progress.phase == .enrichment {
+                    progress.isRunning = false
+                }
+            }
+        }
+
+        let remaining: Int
+        do {
+            remaining = try database.photosNeedingEnrichmentCount()
+        } catch {
+            logger.error("Failed to count photos needing enrichment: \(error.localizedDescription)")
+            return
+        }
+        guard remaining > 0 else { return }
+
+        progress = IndexingProgress(
+            total: remaining,
+            completed: 0,
+            isRunning: true,
+            phase: .enrichment,
+            photosComplete: true,
+            searchableCount: searchEngine.totalSize
+        )
+
+        var completed = 0
+        while !Task.isCancelled {
+            let candidates: [PhotoEnrichmentCandidate]
+            do {
+                candidates = try database.photosNeedingEnrichment(limit: IndexingConfig.enrichmentBatchSize)
+            } catch {
+                logger.error("Failed to fetch photo enrichment batch: \(error.localizedDescription)")
+                return
+            }
+            guard !candidates.isEmpty else { break }
+
+            for candidate in candidates {
+                if Task.isCancelled { return }
+                let update = await enrichPhoto(candidate)
+                do {
+                    try database.updatePhotoEnrichment(update)
+                    completed += 1
+                    progress.completed = min(completed, progress.total)
+                } catch {
+                    logger.error("Failed to update enrichment for \(candidate.localIdentifier): \(error.localizedDescription)")
+                    return
+                }
+                await Task.yield()
+            }
+        }
+
+        if completed > 0, !Task.isCancelled, enrichmentTaskGeneration == generation {
+            await reloadSearchIndex()
+        }
+    }
+
+    private func enrichPhoto(_ candidate: PhotoEnrichmentCandidate) async -> PhotoEnrichmentUpdate {
+        guard let image = await loadImageForEnrichment(candidate, targetSize: CGSize(width: 224, height: 224)) else {
+            return PhotoEnrichmentUpdate(
+                localIdentifier: candidate.localIdentifier,
+                ocrText: nil,
+                sharpnessScore: nil,
+                sceneLabels: nil
+            )
+        }
+
+        var ocrText: String?
+        let quickOcr = await Task.detached {
+            OCRService.extractTextFast(from: image)
+        }.value
+
+        if OCRService.isLikelyScreenshot(width: candidate.pixelWidth, height: candidate.pixelHeight) {
+            let ocrWidth = min(candidate.pixelWidth, 2048)
+            let ocrHeight = min(candidate.pixelHeight, 2048)
+            if let fullImage = await loadImageForEnrichment(
+                candidate,
+                targetSize: CGSize(width: CGFloat(ocrWidth), height: CGFloat(ocrHeight)),
+                highQuality: true
+            ) {
+                ocrText = await Task.detached { OCRService.extractText(from: fullImage) }.value
+            }
+        }
+
+        if ocrText == nil || (ocrText?.isEmpty ?? true) {
+            ocrText = quickOcr
+        }
+        if let text = ocrText, text.count < 3 {
+            ocrText = nil
+        }
+
+        let sharpness = await Task.detached {
+            BlurDetector.sharpnessScore(for: image)
+        }.value
+
+        let sceneLabels = await Task.detached {
+            SceneClassifier.classify(image: image)
+        }.value
+
+        return PhotoEnrichmentUpdate(
+            localIdentifier: candidate.localIdentifier,
+            ocrText: ocrText,
+            sharpnessScore: sharpness,
+            sceneLabels: SceneClassifier.labelsToString(sceneLabels)
+        )
+    }
+
+    private func loadImageForEnrichment(
+        _ candidate: PhotoEnrichmentCandidate,
+        targetSize: CGSize,
+        highQuality: Bool = false
+    ) async -> UIImage? {
+        if let filePath = candidate.filePath {
+            return FolderScanner.loadImageFromBookmarkedSource(
+                filePath: filePath,
+                sourceId: candidate.sourceId,
+                targetSize: targetSize
+            )
+        }
+        guard let asset = PhotoLibrary.getAsset(by: candidate.localIdentifier) else {
+            return nil
+        }
+        if highQuality {
+            return await PhotoLibrary.loadImage(for: asset, targetSize: targetSize)
+        }
+        return await PhotoLibrary.loadImageForIndexing(for: asset, targetSize: targetSize)
     }
 
     // MARK: - Background Task

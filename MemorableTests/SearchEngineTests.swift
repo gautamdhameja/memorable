@@ -249,6 +249,9 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func deleteAll() throws {}
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws {}
     func fetchRandomPhoto(sharp: Bool) throws -> IndexedPhoto? { nil }
+    func photosNeedingEnrichment(limit: Int) throws -> [PhotoEnrichmentCandidate] { [] }
+    func photosNeedingEnrichmentCount() throws -> Int { 0 }
+    func updatePhotoEnrichment(_ update: PhotoEnrichmentUpdate) throws {}
     func insertVideo(_ video: IndexedVideo) throws {}
     func insertVideoFrames(_ frames: [IndexedVideoFrame]) throws {}
     func isVideoIndexed(localIdentifier: String) throws -> Bool { false }
@@ -277,14 +280,14 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func deleteSmartAlbum(id: String) throws {}
 }
 
-func floatVector(first: Float, second: Float = 0) -> [Float] {
+func floatVector(first: Float = 0, second: Float = 0) -> [Float] {
     var values = [Float](repeating: 0, count: EmbeddingConfig.dimensions)
     values[0] = first
     values[1] = second
     return values
 }
 
-func float16Vector(first: Float, second: Float = 0) -> [Float16] {
+func float16Vector(first: Float = 0, second: Float = 0) -> [Float16] {
     let floatValues = floatVector(first: first, second: second)
     return floatValues.map(Float16.init)
 }

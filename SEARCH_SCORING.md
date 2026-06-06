@@ -18,7 +18,7 @@ Query: "sunset in San Diego last summer"
   -> SearchEngine snapshots photo and video embedding matrices under lock
   -> Date/location filters build candidate sets
   -> Dot products rank photo embeddings and video frame embeddings
-  -> Additive boosts adjust location proximity, time of day, OCR, scene labels, and video relevance
+  -> Additive boosts adjust location proximity, time of day, available OCR, available scene labels, and video relevance
   -> Negative terms subtract a weighted negative similarity
   -> Results below SearchConfig.minimumScoreThreshold are removed
   -> Best video frame per video is kept
@@ -65,6 +65,11 @@ Boosts are additive and scaled for SigLIP2's lower cosine score range:
 | `ocrBoostPerWord` | `0.08` | Adds OCR text match strength |
 | `sceneLabelBoostPerMatch` | `0.04` | Adds scene label match strength |
 | `videoRelevanceCompensation` | `0.03` | Offsets missing photo-only boosts for videos |
+
+OCR and scene-label boosts are enrichment-dependent. Newly indexed base photos
+can be searched by embedding before OCR and scene labels are available; those
+photos simply skip the unavailable boosts until the background enrichment pass
+updates the row.
 
 ## Sparse Visual Fallback
 

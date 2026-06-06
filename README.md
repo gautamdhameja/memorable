@@ -21,7 +21,7 @@ Your photos never leave your device. No accounts, no tracking.
 
 Memorable uses [SigLIP2](https://arxiv.org/abs/2502.14786) (Google, Apache 2.0 licensed) to encode photos and video frames into 768-dimensional embeddings, stores them in SQLite, and searches via cosine similarity. Text queries are encoded directly as raw visual queries, and the closest matches are returned.
 
-**One-time setup:** The app scans your photo library and builds a search index. Photos become searchable immediately; videos are indexed in a second pass.
+**One-time setup:** The app scans your photo library and builds a search index. A fast first pass stores base embeddings so photos become searchable in progressive checkpoints. OCR, blur scoring, scene labels, reverse geocoding, and videos continue in background passes.
 
 **Search pipeline:**
 ```
@@ -104,6 +104,8 @@ Key design decisions:
 - **DatabaseProtocol** for dependency injection and testability
 - **Float16 storage** with Float32 compute — halves memory with negligible accuracy loss
 - **GPU search** via MPSGraph matrix multiplication with CPU fallback on simulator
+- **Progressive indexing** — base embeddings become searchable before slower enrichment completes
+- **Deferred enrichment** — OCR, sharpness, and scene labels resume from persisted per-photo state
 - **Thread-safe** embedding access via NSLock with snapshot pattern
 - **Memory pressure handling** — drops index on memory warning, reloads on next search
 - **Timeout wrappers** on all PHImageManager calls to prevent hangs on corrupt assets

@@ -7,8 +7,21 @@ struct IndexingBannerView: View {
         switch indexingService.progress.phase {
         case .photos: return "Indexing photos"
         case .videos: return "Indexing videos"
+        case .enrichment: return "Improving search"
         case .idle: return "Indexing"
         }
+    }
+
+    private var progressDetail: String {
+        let progress = indexingService.progress
+        var parts = ["\(phaseLabel): \(progress.completed) / \(progress.total)"]
+        if let speed = progress.itemsPerSecond {
+            parts.append(String(format: "%.1f/sec", speed))
+        }
+        if let eta = progress.estimatedSecondsRemaining {
+            parts.append("~\(formatDuration(eta)) left")
+        }
+        return parts.joined(separator: " - ")
     }
 
     var body: some View {
@@ -28,11 +41,15 @@ struct IndexingBannerView: View {
 
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(phaseLabel): \(indexingService.progress.completed) / \(indexingService.progress.total)")
+                        Text(progressDetail)
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        if indexingService.progress.phase == .videos {
-                            Text("Photos ready. You can search now.")
+                        if indexingService.progress.searchableCount > 0 {
+                            Text("\(indexingService.progress.searchableCount) media searchable while work continues")
+                                .font(.footnote)
+                                .foregroundStyle(Celestial.Colors.amber)
+                        } else if indexingService.progress.phase == .enrichment {
+                            Text("Search is available. Adding text and scene boosts.")
                                 .font(.footnote)
                                 .foregroundStyle(Celestial.Colors.amber)
                         }
@@ -60,5 +77,19 @@ struct IndexingBannerView: View {
         }
         .padding(20)
         .modifier(GlassPanelModifier(cornerRadius: 20))
+    }
+
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded()))
+        if totalSeconds < 60 {
+            return "\(totalSeconds)s"
+        }
+        let minutes = totalSeconds / 60
+        if minutes < 60 {
+            return "\(minutes)m"
+        }
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        return remainingMinutes == 0 ? "\(hours)h" : "\(hours)h \(remainingMinutes)m"
     }
 }

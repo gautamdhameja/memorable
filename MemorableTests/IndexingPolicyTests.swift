@@ -22,4 +22,39 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertGreaterThan(IndexingConfig.postLaunchAutoResumeDelaySeconds, 0)
         XCTAssertGreaterThan(IndexingConfig.surpriseValidationDelaySeconds, 0)
     }
+
+    func testProgressiveCheckpointDoesNotExceedFreeTierLimit() {
+        XCTAssertLessThanOrEqual(IndexingConfig.firstSearchableCheckpoint, FreeTier.maxIndexedMedia)
+    }
+
+    func testBatchEncodeSizeUsesConservativeDefault() {
+        XCTAssertEqual(IndexingConfig.batchEncodeSize, 16)
+        XCTAssertGreaterThanOrEqual(IndexingConfig.prefetchBatchCapacity, 1)
+    }
+
+    func testProgressEstimateWaitsForMinimumCompletedItems() {
+        let progress = IndexingProgress(
+            total: 100,
+            completed: IndexingConfig.progressEstimateMinCompleted - 1,
+            isRunning: true,
+            phase: .photos,
+            phaseStartedAt: Date(timeIntervalSinceNow: -10)
+        )
+
+        XCTAssertNil(progress.itemsPerSecond)
+        XCTAssertNil(progress.estimatedSecondsRemaining)
+    }
+
+    func testProgressEstimateAppearsAfterMinimumCompletedItems() {
+        let progress = IndexingProgress(
+            total: 100,
+            completed: IndexingConfig.progressEstimateMinCompleted,
+            isRunning: true,
+            phase: .photos,
+            phaseStartedAt: Date(timeIntervalSinceNow: -10)
+        )
+
+        XCTAssertNotNil(progress.itemsPerSecond)
+        XCTAssertNotNil(progress.estimatedSecondsRemaining)
+    }
 }

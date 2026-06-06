@@ -1080,6 +1080,7 @@ struct SearchView: View {
 
         searchTask = Task {
             do {
+                indexingService.deferEnrichmentForUserSearch()
                 if !semanticRuntime.readiness.isSemanticSearchReady || !indexingService.isReady {
                     try await semanticRuntime.prepareForSearch()
                 }

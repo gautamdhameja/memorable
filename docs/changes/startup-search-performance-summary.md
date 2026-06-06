@@ -22,7 +22,7 @@ The implementation also tightens privacy and correctness in search. Location que
 | Index loading | Existing indexes were loaded as part of launch flow and could run on the main actor. | Index loading runs through detached work with explicit readiness callbacks. |
 | Auto-resume indexing | Incomplete indexing checks could happen immediately during launch. | Auto-resume is deferred after launch and only runs if there is already an existing index. |
 | Location search privacy | Query-derived location text could be forward-geocoded. | Query location text is matched locally against stored metadata; no query text is sent to geocoding. |
-| Memory warning handling | Search index was dropped directly. | Index is dropped and readiness state is also marked unavailable. |
+| Memory warning handling | Search index was dropped directly. | Background enrichment is canceled, the index is dropped, and readiness state is marked unavailable. |
 | User feedback | The UI mainly showed generic loading or indexing state. | The UI distinguishes warming search, prioritizing search, waiting for index, failure, and retry states. |
 
 ## Startup Flow
@@ -110,6 +110,8 @@ The search view cancels prior search tasks when the query changes and checks tha
 
 Existing index loading was part of startup and could be coupled to work that fetched the photo library, cleaned orphaned embeddings, and checked for incomplete indexing. That made startup more expensive.
 
+First-time photo indexing also performed enrichment inline. Each photo batch loaded images, encoded embeddings, ran OCR, ran full-resolution screenshot OCR when needed, computed blur/sharpness, ran scene classification, and only then inserted rows.
+
 ### After
 
 Index behavior is more staged:
@@ -120,8 +122,13 @@ Index behavior is more staged:
 - Orphan cleanup is optional and skipped for user-initiated search warmup.
 - Auto-resume of incomplete indexing is delayed until after launch.
 - A brand-new user with no existing index is not auto-indexed just because the app launched.
+- New photo indexing uses an indexing-only fast image loading path for 224x224 embedding inputs.
+- The first photo pass inserts base embeddings and metadata before OCR, blur scoring, and scene labels.
+- Searchable checkpoints reload the index at throttled milestones so a partial library can be searched while indexing continues; very large libraries use a larger checkpoint interval to avoid too many full index reloads.
+- OCR, screenshot OCR, blur scoring, and scene labels run in a resumable enrichment pass backed by per-photo database state.
+- Deferred enrichment waits behind incomplete-index auto-resume, reopens folder security-scoped bookmarks before reading folder files, and aborts the current enrichment pass on persistent database update failures instead of looping on the same row.
 
-This reduces launch-time work and avoids surprising brand-new users with automatic indexing.
+This reduces launch-time work, makes first-time indexing produce searchable coverage sooner, and avoids surprising brand-new users with automatic indexing.
 
 ## Free Tier Counting
 
@@ -185,7 +192,7 @@ On memory warning, the app dropped the search index.
 
 On memory warning, the app drops the search index and updates readiness state so the UI and semantic runtime know the index is no longer available.
 
-That makes the system state more accurate after memory pressure.
+It also cancels deferred enrichment without rescheduling it, so OCR and scene-label work do not immediately reload the index after the app intentionally freed memory.
 
 ## Purchase and Refund Handling
 
@@ -279,4 +286,3 @@ The intended user-facing impact is:
 This implementation intentionally shifts some work from launch time to shortly after launch or to the first search interaction. That improves startup responsiveness, but it means the first search after a cold launch may briefly show "Getting search ready..." if background warmup has not finished yet.
 
 The mitigation is priority promotion: a user-initiated search does not wait behind passive background work. The app treats that search as the important task and prioritizes semantic readiness.
-

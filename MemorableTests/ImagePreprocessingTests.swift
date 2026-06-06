@@ -4,6 +4,24 @@ import UIKit
 
 final class ImagePreprocessingTests: XCTestCase {
 
+    func testIndexingImageRequestOptionsUseFastLocalExactLoading() {
+        let options = PhotoLibrary.indexingImageRequestOptions()
+
+        XCTAssertEqual(options.deliveryMode, .fastFormat)
+        XCTAssertEqual(options.resizeMode, .exact)
+        XCTAssertFalse(options.isSynchronous)
+        XCTAssertFalse(options.isNetworkAccessAllowed)
+    }
+
+    func testDisplayImageRequestOptionsRemainHighQuality() {
+        let options = PhotoLibrary.displayImageRequestOptions()
+
+        XCTAssertEqual(options.deliveryMode, .highQualityFormat)
+        XCTAssertEqual(options.resizeMode, .exact)
+        XCTAssertFalse(options.isSynchronous)
+        XCTAssertFalse(options.isNetworkAccessAllowed)
+    }
+
     func testPixelBufferUsesDisplayedImageOrientation() throws {
         let source = makeTwoColorImage(width: 2, height: 1)
         let oriented = UIImage(cgImage: source.cgImage!, scale: 1, orientation: .right)
@@ -21,6 +39,42 @@ final class ImagePreprocessingTests: XCTestCase {
         let empty = UIImage()
 
         XCTAssertNil(empty.toPixelBuffer(width: 224, height: 224))
+    }
+
+    func testFolderScannerValidatesImageFileWithinSourceFolder() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let imageURL = root.appendingPathComponent("image.jpg")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data([0]).write(to: imageURL)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        XCTAssertTrue(FolderScanner.isValidImageFile(imageURL, within: root))
+    }
+
+    func testFolderScannerRejectsFilesOutsideSourceFolder() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let root = parent.appendingPathComponent("source", isDirectory: true)
+        let outside = parent.appendingPathComponent("outside", isDirectory: true)
+        let outsideImage = outside.appendingPathComponent("image.jpg")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data([0]).write(to: outsideImage)
+        defer { try? FileManager.default.removeItem(at: parent) }
+
+        XCTAssertFalse(FolderScanner.isValidImageFile(outsideImage, within: root))
+    }
+
+    func testFolderScannerRejectsUnsupportedFileExtensions() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let textURL = root.appendingPathComponent("notes.txt")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data([0]).write(to: textURL)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        XCTAssertFalse(FolderScanner.isValidImageFile(textURL, within: root))
     }
 
     private func makeTwoColorImage(width: Int, height: Int) -> UIImage {

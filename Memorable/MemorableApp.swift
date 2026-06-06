@@ -86,6 +86,7 @@ class AppState: ObservableObject {
     }
 
     func handleMemoryWarning() {
+        indexingService?.cancelEnrichmentForMemoryPressure()
         searchEngine?.dropIndex()
         indexingService?.isReady = false
         readiness.markIndexUnavailable()

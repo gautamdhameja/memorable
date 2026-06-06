@@ -34,6 +34,9 @@ protocol DatabaseProtocol {
     func deleteAll() throws
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws
     func fetchRandomPhoto(sharp: Bool) throws -> IndexedPhoto?
+    func photosNeedingEnrichment(limit: Int) throws -> [PhotoEnrichmentCandidate]
+    func photosNeedingEnrichmentCount() throws -> Int
+    func updatePhotoEnrichment(_ update: PhotoEnrichmentUpdate) throws
 
     // Videos
     func insertVideo(_ video: IndexedVideo) throws
@@ -253,6 +256,17 @@ class AppDatabase: DatabaseProtocol {
             try db.execute(sql: "DELETE FROM indexed_photos")
         }
 
+        // Existing rows were enriched inline by older indexing code. New rows
+        // inserted by the progressive indexing path set this to false and are
+        // completed by the deferred enrichment pass.
+        migrator.registerMigration("v4-photo-enrichment-state") { db in
+            try db.alter(table: "indexed_photos") { t in
+                t.add(column: "enrichmentComplete", .boolean).notNull().defaults(to: true)
+            }
+            try db.create(index: "idx_photos_enrichment_pending", on: "indexed_photos",
+                          columns: ["enrichmentComplete", "creationDate"])
+        }
+
         return migrator
     }
 
@@ -360,6 +374,53 @@ class AppDatabase: DatabaseProtocol {
             _ = try IndexedPhoto.deleteAll(db)
             _ = try db.execute(sql: "DELETE FROM indexed_video_frames")
             _ = try IndexedVideo.deleteAll(db)
+        }
+    }
+
+    func photosNeedingEnrichment(limit: Int = IndexingConfig.enrichmentBatchSize) throws -> [PhotoEnrichmentCandidate] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT localIdentifier, pixelWidth, pixelHeight, sourceId, filePath FROM indexed_photos
+                WHERE enrichmentComplete = 0
+                ORDER BY creationDate DESC
+                LIMIT ?
+            """, arguments: [limit])
+            return rows.map {
+                PhotoEnrichmentCandidate(
+                    localIdentifier: $0["localIdentifier"] as String,
+                    pixelWidth: $0["pixelWidth"] as Int,
+                    pixelHeight: $0["pixelHeight"] as Int,
+                    sourceId: $0["sourceId"] as String,
+                    filePath: $0["filePath"] as String?
+                )
+            }
+        }
+    }
+
+    func photosNeedingEnrichmentCount() throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM indexed_photos
+                WHERE enrichmentComplete = 0
+            """) ?? 0
+        }
+    }
+
+    func updatePhotoEnrichment(_ update: PhotoEnrichmentUpdate) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE indexed_photos
+                    SET ocrText = ?, sharpnessScore = ?, sceneLabels = ?, enrichmentComplete = 1
+                    WHERE localIdentifier = ?
+                """,
+                arguments: [
+                    update.ocrText,
+                    update.sharpnessScore,
+                    update.sceneLabels,
+                    update.localIdentifier
+                ]
+            )
         }
     }
 

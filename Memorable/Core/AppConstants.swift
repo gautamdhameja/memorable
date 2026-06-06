@@ -198,6 +198,31 @@ enum IndexingConfig {
     /// Images per Core ML batch prediction
     static let batchEncodeSize = 16
 
+    /// First photo count at which a new index should become searchable.
+    static let firstSearchableCheckpoint = 500
+
+    /// Subsequent photo count interval for progressive search refreshes.
+    static let searchableCheckpointInterval = 500
+
+    /// Minimum number of newly indexed items between full-index reloads for
+    /// very large libraries, where each reload scans the full persisted index.
+    static let largeLibrarySearchableCheckpointInterval = 5_000
+
+    /// Library size at which progressive reloads switch to the larger interval.
+    static let largeLibraryProgressiveReloadThreshold = 20_000
+
+    /// Minimum time between progressive search index reloads.
+    static let minSearchReloadIntervalSeconds: TimeInterval = 5
+
+    /// Number of batches allowed to be loaded ahead of the encoder.
+    static let prefetchBatchCapacity = 1
+
+    /// Photos processed per enrichment fetch/update batch.
+    static let enrichmentBatchSize = 20
+
+    /// Completed items needed before speed/ETA estimates are shown.
+    static let progressEstimateMinCompleted = 5
+
     /// Max photos for duplicate scanning
     static let maxDuplicateScanPhotos = 10_000
 
