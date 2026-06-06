@@ -12,9 +12,14 @@ struct ContentView: View {
                 OnboardingView(isComplete: $onboardingComplete)
             } else if appState.authorizationStatus == .denied || appState.authorizationStatus == .restricted {
                 photoAccessDeniedView
-            } else if appState.isModelLoaded, let indexingService = appState.indexingService,
-                      let searchEngine = appState.searchEngine {
-                MainTabView(indexingService: indexingService, searchEngine: searchEngine, captionService: appState.captionService)
+            } else if appState.readiness.isShellReady {
+                MainTabView(
+                    indexingService: appState.indexingService,
+                    searchEngine: appState.searchEngine,
+                    semanticRuntime: appState.semanticRuntime,
+                    captionService: appState.captionService,
+                    retrySemanticWarmup: appState.retrySemanticWarmup
+                )
             } else if let error = appState.errorMessage {
                 errorView(message: error)
             } else {
@@ -23,7 +28,7 @@ struct ContentView: View {
         }
         .preferredColorScheme(.dark)
         .task(id: onboardingComplete) {
-            if onboardingComplete && !appState.isModelLoaded && appState.errorMessage == nil {
+            if onboardingComplete && !appState.readiness.isShellReady && appState.errorMessage == nil {
                 await appState.initialize()
             }
         }

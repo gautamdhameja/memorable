@@ -19,19 +19,19 @@ Your photos never leave your device. No accounts, no tracking.
 
 ## How It Works
 
-Memorable uses [SigLIP2](https://arxiv.org/abs/2502.14786) (Google, Apache 2.0 licensed) to encode photos into 768-dimensional CLIP embeddings, stores them in SQLite, and searches via cosine similarity. Text queries are encoded the same way, and the closest matches are returned.
+Memorable uses [SigLIP2](https://arxiv.org/abs/2502.14786) (Google, Apache 2.0 licensed) to encode photos and video frames into 768-dimensional embeddings, stores them in SQLite, and searches via cosine similarity. Text queries are encoded directly as raw visual queries, and the closest matches are returned.
 
 **One-time setup:** The app scans your photo library and builds a search index. Photos become searchable immediately; videos are indexed in a second pass.
 
 **Search pipeline:**
 ```
-Query → Season/Date/Location extraction → Text encoding (3-prompt fusion)
-     → GPU dot product (MPSGraph) → Date/Location/OCR boosting → Top 50 results
+Query → Season/Date/Location extraction → Raw SigLIP2 text encoding
+     → GPU/CPU dot product → Date/Location/OCR/scene boosting → matching results
 ```
 
 ## Features
 
-- **Natural language search** with multi-prompt fusion for accuracy
+- **Natural language search** with raw SigLIP2 query encoding
 - **GPU-accelerated** similarity search via Metal Performance Shaders
 - **Photo + video** indexing (2-5 frames per video)
 - **Smart query parsing** — dates ("last summer"), locations ("in Paris"), negations ("dog -cat")
@@ -43,7 +43,7 @@ Query → Season/Date/Location extraction → Text encoding (3-prompt fusion)
 - **Surprise Me** — discover random memories with validated queries
 - **Slideshow** — CLIP-captioned photo slideshow during indexing and in Memories
 - **Swipeable full-screen viewer** with pinch-to-zoom and share
-- **Freemium** — 200 photos free, one-time Pro purchase via StoreKit 2
+- **Freemium** — 500 indexed photos/videos free, one-time Pro purchase via StoreKit 2 (`com.blockdeep.memorable.pro.v2`)
 
 ## Privacy
 
@@ -52,14 +52,14 @@ Query → Season/Date/Location extraction → Text encoding (3-prompt fusion)
 - Database encrypted at rest (`.completeUnlessOpen`)
 - Search history stored in encrypted SQLite, not UserDefaults
 - No analytics, no telemetry, no third-party SDKs that collect data
-- Location names resolved via Apple's CLGeocoder (coordinates only, no photos or queries sent)
+- Indexed media coordinates can be reverse-geocoded via Apple's CLGeocoder; search query location text is matched locally and is not sent off device
 - Privacy manifest included (`PrivacyInfo.xcprivacy`)
 
 ## Requirements
 
 - iOS 17.0+
 - iPhone or iPad with A14 chip or later
-- ~300 MB for AI models (downloaded once via On Demand Resources)
+- Local storage for bundled Core ML model resources
 
 ## Build
 
@@ -70,7 +70,9 @@ xcodegen generate
 open Memorable.xcodeproj
 ```
 
-Core ML models are not included in the repository (they're ~900 MB). They're downloaded at runtime via On Demand Resources. For local development, place the compiled `.mlmodelc` bundles in `Memorable/Models/`.
+For command-line verification, install the iOS Simulator runtime that matches the active Xcode. If `xcodebuild` reports `CoreSimulator is out of date` or `iOS 26.5 is not installed`, update macOS/Xcode components before running the documented simulator build and test commands.
+
+Core ML models are not included in the repository. The active app packaging strategy bundles the compiled `.mlmodelc` folders as app resources via `project.yml`; On Demand Resources or downloaded models are future packaging options, not the current build behavior. For local development, place the compiled `.mlmodelc` bundles in `Memorable/Models/`.
 
 ### Dependencies
 
@@ -80,19 +82,22 @@ Core ML models are not included in the repository (they're ~900 MB). They're dow
 
 ```
 Core/                              Views/
-├── Database.swift (protocol+impl) ├── SearchView.swift (main UI)
-├── SearchEngine.swift             ├── ContentView.swift
-├── IndexingService.swift          ├── OnboardingView.swift
-├── ImageEncoder.swift             ├── FullScreenPhotoViewer.swift
-├── TextEncoder.swift              ├── OnThisDayView.swift
-├── Tokenizer.swift                ├── MoreView.swift
-├── GPUSimilaritySearch.swift      ├── DuplicateFinderView.swift
-├── QueryParser.swift              ├── SourceManagerView.swift
-├── PhotoLibrary.swift             ├── UpgradeView.swift
-├── DuplicateFinder.swift          ├── Theme.swift (Celestial design system)
-├── SharedUtilities.swift          ├── MasonryGrid.swift
-├── ContinuationGuard.swift        ├── GlassModifiers.swift
-└── ProFeatures.swift              └── PhotoThumbnailView.swift
+├── AppReadiness.swift             ├── ContentView.swift
+├── PerformanceMetrics.swift       ├── MainTabView.swift
+├── SemanticSearchRuntime.swift    ├── SearchView.swift (main UI)
+├── ModelResourceManager.swift     ├── MoreView.swift
+├── Database.swift (protocol+impl) ├── OnThisDayView.swift
+├── SearchEngine.swift             ├── FullScreenPhotoViewer.swift
+├── IndexingService.swift          ├── SearchResultsViewer.swift
+├── ImageEncoder.swift             ├── SourceManagerView.swift
+├── TextEncoder.swift              ├── DuplicateFinderView.swift
+├── Tokenizer.swift                ├── UpgradeView.swift
+├── GPUSimilaritySearch.swift      ├── Theme.swift (Celestial design system)
+├── QueryParser.swift              ├── MasonryGrid.swift
+├── PhotoLibrary.swift             ├── GlassModifiers.swift
+├── DuplicateFinder.swift          └── PhotoThumbnailView.swift
+├── SharedUtilities.swift
+└── ProFeatures.swift
 ```
 
 Key design decisions:

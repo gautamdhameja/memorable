@@ -209,6 +209,14 @@ enum IndexingConfig {
 
     /// Library size above which a "large library" warning is shown
     static let largeLibraryThreshold = 100_000
+
+    /// Automatic resume waits until the shell and core search warmup have had
+    /// a chance to settle. User-initiated indexing still starts immediately.
+    static let postLaunchAutoResumeDelaySeconds: TimeInterval = 8
+
+    /// Surprise validation performs many searches, so it runs only after base
+    /// search is usable and other indexing work is no longer in the critical path.
+    static let surpriseValidationDelaySeconds: TimeInterval = 5
 }
 
 // MARK: - Timeouts

@@ -4,8 +4,10 @@ import Accelerate
 
 class ImageEncoder {
     private var model: MLModel
+    private let resourceManager: ModelResourceManaging
 
-    init() throws {
+    init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) throws {
+        self.resourceManager = resourceManager
         // Load the compiled Core ML model from the app bundle
         let config = MLModelConfiguration()
         #if targetEnvironment(simulator)
@@ -13,9 +15,7 @@ class ImageEncoder {
         #else
         config.computeUnits = .all  // Use Neural Engine + GPU + CPU
         #endif
-        guard let modelURL = Bundle.main.url(forResource: "SigLIP2_ImageEncoder", withExtension: "mlmodelc") else {
-            throw ImageEncoderError.modelNotFound
-        }
+        let modelURL = try resourceManager.url(for: .imageEncoder)
         self.model = try MLModel(contentsOf: modelURL, configuration: config)
     }
 
@@ -60,9 +60,7 @@ class ImageEncoder {
         #else
         config.computeUnits = .all
         #endif
-        guard let modelURL = Bundle.main.url(forResource: "SigLIP2_ImageEncoder", withExtension: "mlmodelc") else {
-            throw ImageEncoderError.modelNotFound
-        }
+        let modelURL = try resourceManager.url(for: .imageEncoder)
         self.model = try MLModel(contentsOf: modelURL, configuration: config)
     }
 
@@ -181,6 +179,8 @@ class ImageEncoder {
 // UIImage extension to create a pixel buffer
 extension UIImage {
     func toPixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
+        guard cgImage != nil || ciImage != nil else { return nil }
+
         let attrs = [
             kCVPixelBufferCGImageCompatibilityKey: true as CFBoolean,
             kCVPixelBufferCGBitmapContextCompatibilityKey: true as CFBoolean
@@ -202,12 +202,14 @@ extension UIImage {
             bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         )
 
-        guard let ctx = context, let cgImage = self.cgImage else {
+        guard let ctx = context else {
             CVPixelBufferUnlockBaseAddress(buffer, [])
             return nil
         }
 
-        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        UIGraphicsPushContext(ctx)
+        self.draw(in: CGRect(x: 0, y: 0, width: width, height: height))
+        UIGraphicsPopContext()
         CVPixelBufferUnlockBaseAddress(buffer, [])
 
         return buffer

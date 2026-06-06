@@ -26,6 +26,7 @@ private enum MediaFilter: String, CaseIterable {
 struct SearchView: View {
     @ObservedObject var indexingService: IndexingService
     let searchEngine: SearchEngine
+    @ObservedObject var semanticRuntime: SemanticSearchRuntime
     let captionService: PhotoCaptionService
 
     @State private var searchText = ""
@@ -291,7 +292,7 @@ struct SearchView: View {
                     if !searchEngine.isIndexLoaded {
                         Task {
                             do {
-                                try searchEngine.loadIndex()
+                                try await semanticRuntime.prepareForSearch()
                                 #if DEBUG
                                 logger.info("[SearchView] Reloaded search index after foreground return")
                                 #endif
@@ -334,10 +335,14 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
                 .accessibilityHidden(true)
-            TextField(indexingService.isReady ? Self.placeholders[placeholderIndex] : "Indexing your photos...", text: $searchText)
+            TextField(searchPlaceholder, text: $searchText)
                 .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurface)
                 .onChange(of: searchText) { _, newValue in
+                    if newValue != lastSearchedQuery {
+                        searchTask?.cancel()
+                        isSearching = false
+                    }
                     if newValue.isEmpty {
                         results = []
                         searchError = nil
@@ -347,7 +352,6 @@ struct SearchView: View {
                 .onSubmit {
                     performSearch(saveToHistory: true)
                 }
-                .disabled(!indexingService.isReady)
                 .accessibilityLabel("Search photos")
             if !searchText.isEmpty {
                 Button(action: { searchText = ""; results = []; searchError = nil; lastSearchedQuery = nil }) {
@@ -371,7 +375,23 @@ struct SearchView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .modifier(GlassSearchBarModifier())
-        .opacity(indexingService.isReady ? 1.0 : 0.5)
+        .opacity(searchEngine.isIndexLoaded || !searchText.isEmpty ? 1.0 : 0.85)
+    }
+
+    private var searchPlaceholder: String {
+        if indexingService.isReady {
+            return Self.placeholders[placeholderIndex]
+        }
+        switch semanticRuntime.phase {
+        case .warmingCore(let promoted):
+            return promoted ? "Prioritizing search..." : "Warming search..."
+        case .waitingForIndex:
+            return "Index your photos to search..."
+        case .failed:
+            return "Search setup failed"
+        default:
+            return "Preparing search..."
+        }
     }
 
     // MARK: - Banners
@@ -381,7 +401,7 @@ struct SearchView: View {
             Image(systemName: "sparkles")
                 .font(.subheadline)
                 .foregroundStyle(Celestial.Colors.amber)
-            Text("Searching \(searchEngine.totalSize) of \(totalLibraryCount) photos")
+            Text("Searching \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
                 .font(.subheadline)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             Spacer()
@@ -419,7 +439,7 @@ struct SearchView: View {
                 searchHistoryView
             }
             if indexingService.hitFreeLimit && totalLibraryCount > searchEngine.totalSize {
-                Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos")
+                Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
                     .font(.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
                     .frame(maxWidth: .infinity)
@@ -460,7 +480,7 @@ struct SearchView: View {
         .padding(.bottom, 8)
     }
 
-    // Shown after the "Search your N of M photos" hint once the user upgrades,
+    // Shown after the "Search your N of M photos & videos" hint once the user upgrades,
     // so they can resume indexing the remaining library without having to
     // re-scan already-indexed photos (startIndexing() skips those).
     @ViewBuilder
@@ -470,14 +490,14 @@ struct SearchView: View {
                 Haptics.medium()
                 indexingService.startIndexing()
             }) {
-                Label("Index remaining photos", systemImage: "arrow.clockwise")
+                Label("Index remaining media", systemImage: "arrow.clockwise")
                     .font(.subheadline.weight(.medium))
             }
             .buttonStyle(.bordered)
             .tint(Celestial.Colors.primaryDim)
             .padding(.top, 10)
             .frame(maxWidth: .infinity)
-            .accessibilityHint("Resumes indexing for the photos that were skipped under the free tier")
+            .accessibilityHint("Resumes indexing for media that was skipped under the free tier")
         }
     }
 
@@ -630,12 +650,19 @@ struct SearchView: View {
         VStack(spacing: 12) {
             ProgressView()
                 .tint(Celestial.Colors.primaryDim)
-            Text("Searching...")
+            Text(searchingStateText)
                 .font(.subheadline)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 80)
+    }
+
+    private var searchingStateText: String {
+        if !semanticRuntime.readiness.isSemanticSearchReady {
+            return "Getting search ready..."
+        }
+        return "Searching..."
     }
 
     private func errorState(_ error: String) -> some View {
@@ -754,7 +781,7 @@ struct SearchView: View {
                 .accessibilityHidden(true)
             if indexingService.isReady && searchEngine.totalSize > 0 {
                 if indexingService.hitFreeLimit && totalLibraryCount > searchEngine.totalSize {
-                    Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos")
+                    Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     resumeIndexingButton
@@ -1026,20 +1053,20 @@ struct SearchView: View {
         let hasLocation = summary.locationDescription != nil
         let hasDate = summary.dateDescription != nil
 
-        // When filters are active, the fallback contains filter-matched photos
+        // When filters are active, the fallback contains filter-matched media
         // (the visual query didn't find anything in that subset).
         // Title should describe what's actually shown, not the failed visual query.
         if hasLocation || hasDate {
             let parts = [summary.locationDescription, summary.dateDescription].compactMap { $0 }
-            return "Photos from \(parts.joined(separator: ", "))"
+            return "Media from \(parts.joined(separator: ", "))"
         }
 
         // No filters: fallback is near-miss CLIP results for the visual query
-        return "Other \"\(summary.visualQuery)\" photos"
+        return "Other \"\(summary.visualQuery)\" matches"
     }
 
     private func performSearch(saveToHistory: Bool = false) {
-        guard !searchText.isEmpty, indexingService.isReady else { return }
+        guard !searchText.isEmpty else { return }
         Haptics.light()
         // Cancel any previous search so stale results can't land on top of
         // the new one (race condition when the user types quickly or when
@@ -1053,8 +1080,24 @@ struct SearchView: View {
 
         searchTask = Task {
             do {
+                if !semanticRuntime.readiness.isSemanticSearchReady || !indexingService.isReady {
+                    try await semanticRuntime.prepareForSearch()
+                }
+                guard indexingService.isReady || searchEngine.isIndexLoaded else {
+                    searchError = "Index your photos before searching."
+                    isSearching = false
+                    return
+                }
+                guard searchText == query else {
+                    isSearching = false
+                    return
+                }
                 let response = try await searchEngine.search(query: query)
                 if Task.isCancelled { return }
+                guard searchText == query else {
+                    isSearching = false
+                    return
+                }
                 results = response.results
                 lastSearchedQuery = query
                 fallbackResults = response.fallbackResults
@@ -1109,4 +1152,3 @@ struct SearchView: View {
     }
 
 }
-

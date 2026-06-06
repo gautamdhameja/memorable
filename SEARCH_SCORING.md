@@ -1,165 +1,95 @@
 # Search Scoring Algorithm
 
-## Architecture: Filter First, Then Score
+## Architecture: Parse, Filter, Then Score
 
-When a user specifies time or location constraints, those are applied as **hard filters** before CLIP scoring. Only photos that pass the filters get scored. This prevents a great sunset from Tokyo outranking a mediocre sunset from Berlin when the user asked for Berlin.
+Memorable uses SigLIP2 for raw text/image similarity. The text encoder receives
+the user's visual query directly; it does not apply CLIP-style prompt templates.
+Date and location constraints are parsed first, then applied before ranking so a
+strong visual match from the wrong time or place does not dominate the result set.
 
 ## Pipeline
 
-```
+```text
 Query: "sunset in San Diego last summer"
-  │
-  ├─ Parse → textQuery="sunset", dateRange=Jun-Aug 2025, location="San Diego"
-  ├─ Geocode → (32.72, -117.16), radius=30km (city-level)
-  │
-  ├─ PHASE 1: HARD FILTERS
-  │   ├─ Date filter: keep only photos from Jun 1 – Aug 31, 2025
-  │   ├─ Location filter: keep only photos within 30km of San Diego
-  │   └─ Result: 47 of 5267 photos pass → candidateMask
-  │
-  ├─ PHASE 2: CLIP SCORING
-  │   ├─ GPU dot product on ALL 5267 embeddings
-  │   └─ Zero out non-candidates (score = -1.0)
-  │
-  ├─ PHASE 3: SOFT BOOSTS (candidates only)
-  │   ├─ Location proximity: +15% within 3km, +8% within 9km
-  │   ├─ Time-of-day: "sunset" → 6-10 PM → +30% if match, -30% if not
-  │   ├─ Negative terms: -30% per negative similarity
-  │   └─ OCR text: +15% per matching word
-  │
-  ├─ PHASE 4: VIDEO SCORING (same hard filters)
-  │
-  └─ PHASE 5: RANK AND RETURN
-      ├─ Filter: score >= 0.20
-      ├─ Sort by score descending
-      └─ Return top 50
+  -> QueryParser extracts:
+     visual text="sunset", date range, location name, negative terms
+  -> Location text matches indexed reverse-geocoded metadata locally
+  -> TextEncoder encodes the raw visual text with SigLIP2
+  -> SearchEngine snapshots photo and video embedding matrices under lock
+  -> Date/location filters build candidate sets
+  -> Dot products rank photo embeddings and video frame embeddings
+  -> Additive boosts adjust location proximity, time of day, OCR, scene labels, and video relevance
+  -> Negative terms subtract a weighted negative similarity
+  -> Results below SearchConfig.minimumScoreThreshold are removed
+  -> Best video frame per video is kept
+  -> Photo and video results are merged and sorted
 ```
 
-## Phase 1: Hard Filters
+## Query Encoding
 
-### Date Filter
+SigLIP2 was trained with sigmoid loss over raw web captions. Prompt fusion such
+as averaging `"dog"`, `"a photo of dog"`, and `"a picture of dog"` is intentionally
+not used because it dilutes compositional queries. The implemented path encodes
+the parser's raw `textQuery`.
 
-```
-IF dateRange is specified:
-  FOR each photo:
-    IF photo has a date AND date is outside range → ELIMINATE
-    IF photo has NO date metadata → ELIMINATE
-    (User specified a time — dateless photos are not useful)
-```
+## Hard Filters
 
-### Location Filter
+Date filters remove media outside the requested range. Media without dates is
+removed when the user asked for a date because it cannot satisfy the constraint.
 
-```
-IF locationCoordinate + locationRadiusKm are specified:
-  FOR each photo:
-    IF photo has GPS AND distance > radiusKm → ELIMINATE
-    IF photo has NO GPS → KEEP (can't determine location, let CLIP decide)
-```
+Location filters prefer reverse-geocoded string metadata when available:
+city, state, country, and full location name are matched against the parsed
+location. Query-derived location names are not sent to CLGeocoder. GPS distance
+is used only when trusted coordinates are already present in parsed hints.
 
-### Smart Location Radius
+Pure location queries, such as `"Paris"`, skip visual scoring and return
+metadata matches sorted by date.
 
-The radius is determined by the **specificity** of the geocoded result:
+## Scoring
 
-| Place type | Example | Radius |
-|---|---|---|
-| Neighborhood | "Berlin Mitte", "Manhattan" | 5 km |
-| City | "Berlin", "San Diego", "Paris" | 30 km |
-| County/district | "Orange County" | 75 km |
-| State/province | "California", "Brandenburg" | 150 km |
-| Country | "Italy", "Germany" | 500 km |
-| Unknown | fallback | 50 km |
+Photo scoring uses dot product against normalized embeddings. On device, the app
+uses the GPU search path when available and CPU/vDSP fallback otherwise.
 
-This means "vacation in Italy" uses a 500km radius from Rome (covers the whole country), while "dinner in Berlin Mitte" uses a 5km radius.
+Video scoring applies the same query embedding to each stored frame embedding,
+then keeps the best frame per video.
 
-## Phase 2: CLIP Scoring
+Boosts are additive and scaled for SigLIP2's lower cosine score range:
 
-```
-1. Encode query with 3-prompt fusion:
-   Average("sunset", "a photo of sunset", "a picture of sunset") → L2 normalize
+| Parameter | Current value | Purpose |
+|---|---:|---|
+| `minimumScoreThreshold` | `0.12` | Minimum score for main results |
+| `locationCloseBoost` | `0.025` | Added within 10% of radius |
+| `locationNearBoost` | `0.015` | Added within 30% of radius |
+| `timeOfDayMatchBoost` | `0.03` | Added when creation hour matches query |
+| `negativeTermWeight` | `0.3` | Subtracts weighted negative similarity |
+| `ocrBoostPerWord` | `0.08` | Adds OCR text match strength |
+| `sceneLabelBoostPerMatch` | `0.04` | Adds scene label match strength |
+| `videoRelevanceCompensation` | `0.03` | Offsets missing photo-only boosts for videos |
 
-2. GPU matrix multiply: [N, 768] × [768, 1] → N scores
+## Sparse Visual Fallback
 
-3. Zero out non-candidates: score = -1.0 for filtered photos
-```
+For mixed visual/filter queries, the app keeps a fallback set when filters match
+but visual scores are too sparse for the main grid. This lets the UI explain
+"no dog photos in Berlin" while still showing media from Berlin separately.
 
-## Phase 3: Soft Boosts
+Fallback behavior is controlled by:
 
-Applied ONLY to candidates that passed hard filters.
-
-### Location Proximity (within the filtered radius)
-
-```
-IF photo is within 10% of radius → score *= 1.15
-IF photo is within 30% of radius → score *= 1.08
-(No penalty — everything here already passed the hard filter)
-```
-
-### Time-of-Day
-
-```
-IF "sunset"/"dinner" detected → preferred hours = 18-22
-IF photo.hour is in range → score *= 1.3
-IF photo.hour is out of range → score *= 0.7
-```
-
-### Negative Terms
-
-```
-FOR each negative term (e.g., "-cat"):
-  Encode "a photo of cat" → negEmbedding
-  score -= dot(negEmbedding, photoEmbedding) × 0.3
-```
-
-### OCR Text
-
-```
-FOR screenshots with OCR text:
-  matchCount = query words found in OCR text
-  score += 0.15 × matchCount / totalQueryWords
-```
-
-## Phase 4: Video Scoring
-
-Videos follow the same pipeline:
-1. Hard date filter (same rules as photos)
-2. Hard location filter (same rules, using video GPS)
-3. CLIP score per frame
-4. Negative term penalty
-5. Time-of-day boost
-6. Best frame per video kept
-
-## Phase 5: Rank and Return
-
-```
-1. Sort all candidates by score descending
-2. Filter: score >= 0.20 (minimum visual relevance)
-3. Take top 50
-4. Combine photos + videos, re-sort, return
-```
-
-## Queries Without Constraints
-
-When the user types just "dog" (no time, no location):
-- candidateMask is all `true` — nothing filtered
-- All photos get CLIP scored
-- Minimum threshold (0.20) filters visual junk
-- Behaves exactly like a simple similarity search
+| Parameter | Current value | Purpose |
+|---|---:|---|
+| `locationResultsCap` | `500` | Maximum metadata/fallback results |
+| `sparseClipMinResults` | `5` | Main-result count below which fallback is considered |
+| `sparseClipMaxRatio` | `0.1` | Result/candidate ratio for sparse fallback |
+| `sparseClipMinScore` | `0.07` | Minimum top visual score for main-grid confidence |
 
 ## Empty Results
 
-If hard filters eliminate all photos (e.g., "aurora borealis yesterday in Berlin"):
-- Returns empty results immediately
-- Does NOT fall back to unfiltered search
-- This is correct — showing irrelevant results is worse than showing nothing
+If both hard filters and visual ranking fail, the main result set is empty. The
+app should show a local empty state instead of falling back to remote processing
+or broadening the query silently.
 
-## Configuration (AppConstants.swift → SearchConfig)
+## Evaluation Gate
 
-| Parameter | Value | Purpose |
-|---|---|---|
-| minimumScoreThreshold | 0.20 | Minimum CLIP score to include |
-| locationCloseBoost | 1.15 | Within 10% of location radius |
-| locationNearBoost | 1.08 | Within 30% of location radius |
-| timeOfDayMatchBoost | 1.3 | Photo taken during expected hours |
-| timeOfDayMismatchPenalty | 0.7 | Photo taken at wrong time |
-| negativeTermWeight | 0.3 | Negative term penalty multiplier |
-| ocrBoostPerWord | 0.15 | OCR text match boost |
+Scoring changes, model compression, and model replacement must pass the local
+search evaluation harness. Coverage includes visual queries, date filtering,
+location metadata, mixed visual/location fallback, negative terms, videos, and
+empty-result behavior.

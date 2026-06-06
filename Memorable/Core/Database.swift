@@ -84,50 +84,79 @@ class AppDatabase: DatabaseProtocol {
     let dbQueue: DatabaseQueue
 
     private init() {
-        dbQueue = Self.openDatabase()
+        dbQueue = Self.openMigratedDatabase(
+            openQueue: Self.openOnDiskDatabase,
+            migrate: { try Self.migrator.migrate($0) }
+        )
+    }
+
+    init(openQueue: () throws -> DatabaseQueue, migrate: (DatabaseQueue) throws -> Void) {
+        dbQueue = Self.openMigratedDatabase(openQueue: openQueue, migrate: migrate)
+    }
+
+    private static func openMigratedDatabase(
+        openQueue: () throws -> DatabaseQueue,
+        migrate: (DatabaseQueue) throws -> Void
+    ) -> DatabaseQueue {
+        Self.isInMemoryFallback = false
         do {
-            try migrator.migrate(dbQueue)
+            let queue = try openQueue()
+            try migrate(queue)
             #if DEBUG
             logger.info("[Database] Migrations completed successfully")
             #endif
+            return queue
         } catch {
-            logger.error("Database migration failed: \(error.localizedDescription)")
+            logger.error("Database init or migration failed, using in-memory fallback: \(error.localizedDescription)")
+            return inMemoryFallbackQueue(migrate: migrate)
         }
     }
 
-    private static func openDatabase() -> DatabaseQueue {
+    private static func openOnDiskDatabase() throws -> DatabaseQueue {
+        let fileManager = FileManager.default
+        guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw DatabaseInitError.applicationSupportUnavailable
+        }
+
+        let dbDir = appSupport.appendingPathComponent("Memorable", isDirectory: true)
+        try fileManager.createDirectory(at: dbDir, withIntermediateDirectories: true)
+        let dbPath = dbDir.appendingPathComponent("photos.sqlite").path
+
+        let config = Configuration()
+        let queue = try DatabaseQueue(path: dbPath, configuration: config)
+
+        if fileManager.fileExists(atPath: dbPath) {
+            try fileManager.setAttributes(
+                [.protectionKey: FileProtectionType.completeUnlessOpen],
+                ofItemAtPath: dbPath
+            )
+        }
+
+        return queue
+    }
+
+    private static func inMemoryFallbackQueue(migrate: (DatabaseQueue) throws -> Void) -> DatabaseQueue {
+        Self.isInMemoryFallback = true
         do {
-            let fileManager = FileManager.default
-            guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-                logger.error("Application Support directory not found, using in-memory fallback")
-                Self.isInMemoryFallback = true
-                // Intentional force-try: in-memory DatabaseQueue allocation virtually never fails
-                return try! DatabaseQueue()
-            }
-            let dbDir = appSupport.appendingPathComponent("Memorable", isDirectory: true)
-            try fileManager.createDirectory(at: dbDir, withIntermediateDirectories: true)
-            let dbPath = dbDir.appendingPathComponent("photos.sqlite").path
-
-            let config = Configuration()
-            let queue = try DatabaseQueue(path: dbPath, configuration: config)
-
-            if fileManager.fileExists(atPath: dbPath) {
-                try fileManager.setAttributes(
-                    [.protectionKey: FileProtectionType.completeUnlessOpen],
-                    ofItemAtPath: dbPath
-                )
-            }
-
+            let queue = try DatabaseQueue()
+            try migrate(queue)
             return queue
         } catch {
-            logger.error("Database init failed, using in-memory fallback: \(error.localizedDescription)")
-            Self.isInMemoryFallback = true
+            logger.error("In-memory database migration failed: \(error.localizedDescription)")
             // Intentional force-try: in-memory DatabaseQueue allocation virtually never fails
             return try! DatabaseQueue()
         }
     }
 
-    private var migrator: DatabaseMigrator {
+    private enum DatabaseInitError: LocalizedError {
+        case applicationSupportUnavailable
+
+        var errorDescription: String? {
+            "Application Support directory not found"
+        }
+    }
+
+    static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
 
         migrator.registerMigration("v1") { db in
@@ -210,6 +239,15 @@ class AppDatabase: DatabaseProtocol {
         // SigLIP2 model replacement: old MobileCLIP embeddings are incompatible.
         // Clear all indexed data so the app re-indexes with the new model.
         migrator.registerMigration("v2-siglip2-model-swap") { db in
+            try db.execute(sql: "DELETE FROM indexed_video_frames")
+            try db.execute(sql: "DELETE FROM indexed_videos")
+            try db.execute(sql: "DELETE FROM indexed_photos")
+        }
+
+        // Embedding preprocessing changed to respect UIImage/EXIF orientation.
+        // Old embeddings may represent raw sensor pixels rather than the
+        // displayed image, so clear indexed media and rebuild homogeneously.
+        migrator.registerMigration("v3-orientation-normalized-embeddings") { db in
             try db.execute(sql: "DELETE FROM indexed_video_frames")
             try db.execute(sql: "DELETE FROM indexed_videos")
             try db.execute(sql: "DELETE FROM indexed_photos")

@@ -60,7 +60,7 @@ When I report a bug, follow this exact sequence:
 - Bundle ID: `com.blockdeep.memorable` (change for personal signing)
 - Minimum: iOS 17.0, A14 chip
 - Model: SigLIP2-base-patch16-224, 768-dim embeddings, 256k-token Gemma vocab, SentencePiece BPE tokenizer
-- Freemium: 200 items free, Pro unlock via StoreKit 2 IAP (`com.blockdeep.memorable.pro`)
+- Freemium: 500 indexed media items free, Pro unlock via StoreKit 2 IAP (`com.blockdeep.memorable.pro.v2`)
 
 ## Build & Run
 
@@ -150,7 +150,7 @@ User query
   → Negative term penalty (-30% of negative similarity)
   → Score threshold >= 0.10
   → Video dedup (best frame per video only)
-  → Merge photo + video results, sort, return top 50
+  → Merge photo + video results, sort, return all matches above threshold
 ```
 
 **Note on prompt templates:** SigLIP2 uses sigmoid loss and was trained on raw web captions. Unlike CLIP (softmax loss), "a photo of X" templates hurt retrieval quality by diluting compositional queries. The text encoder receives the raw visual query directly.
@@ -172,7 +172,7 @@ Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.sw
 - `ProManager.shared.isPro` gates features
 - In DEBUG builds: `isPro = true` (all features unlocked for testing)
 - In RELEASE: `isPro = false` until StoreKit purchase verified
-- Free tier: 200 indexed items, basic search only
+- Free tier: 500 indexed photos/videos, basic search only
 - Pro: unlimited indexing, Find Similar, negative search, folder sources, smart query parsing, date/location boost
 - Refund handling: `verifyEntitlement()` checks `revocationDate` on every launch
 - `Transaction.updates` listener catches real-time refund events

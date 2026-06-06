@@ -1,21 +1,25 @@
 import CoreML
 import Accelerate
 
-class TextEncoder {
+protocol TextEmbeddingEncoding {
+    func encode(text: String) throws -> [Float]
+}
+
+class TextEncoder: TextEmbeddingEncoding {
     private var model: MLModel
+    private let resourceManager: ModelResourceManaging
     private let tokenizer: CLIPTokenizer
     private let contextLength: Int = 64
 
-    init() throws {
+    init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) throws {
+        self.resourceManager = resourceManager
         let config = MLModelConfiguration()
         #if targetEnvironment(simulator)
         config.computeUnits = .cpuOnly
         #else
         config.computeUnits = .all
         #endif
-        guard let modelURL = Bundle.main.url(forResource: "SigLIP2_TextEncoder", withExtension: "mlmodelc") else {
-            throw TextEncoderError.modelNotFound
-        }
+        let modelURL = try resourceManager.url(for: .textEncoder)
         self.model = try MLModel(contentsOf: modelURL, configuration: config)
         self.tokenizer = try CLIPTokenizer(contextLength: contextLength)
     }
@@ -80,9 +84,7 @@ class TextEncoder {
         #else
         config.computeUnits = .all
         #endif
-        guard let modelURL = Bundle.main.url(forResource: "SigLIP2_TextEncoder", withExtension: "mlmodelc") else {
-            throw TextEncoderError.modelNotFound
-        }
+        let modelURL = try resourceManager.url(for: .textEncoder)
         self.model = try MLModel(contentsOf: modelURL, configuration: config)
     }
 

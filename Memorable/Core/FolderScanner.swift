@@ -63,7 +63,13 @@ class FolderScanner {
             #endif
             return nil
         }
-        guard let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+        let options: [CFString: Any] = [
+            kCGImageSourceThumbnailMaxPixelSize: max(targetSize.width, targetSize.height),
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true
+        ]
+
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
             #if DEBUG
             logger.error("[FolderScanner] Failed to decode image: \(url.lastPathComponent)")
             #endif

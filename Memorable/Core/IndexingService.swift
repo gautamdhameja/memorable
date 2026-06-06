@@ -45,8 +45,14 @@ class IndexingService: ObservableObject {
     private let batchSize = 20
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var surpriseValidationTask: Task<Void, Never>?
+    private var autoResumeTask: Task<Void, Never>?
     private let reverseGeocoder = ReverseGeocoder()
     private var geocodingTask: Task<Void, Never>?
+    private var isObservingPhotoChanges = false
+    private var launchLibraryCountSnapshot: Int?
+
+    var onIndexReady: (() -> Void)?
+    var onIndexUnavailable: (() -> Void)?
 
     init(imageEncoder: ImageEncoder, searchEngine: SearchEngine, database: DatabaseProtocol = AppDatabase.shared) {
         self.imageEncoder = imageEncoder
@@ -54,53 +60,81 @@ class IndexingService: ObservableObject {
         self.database = database
     }
 
-    func checkAndLoadExistingIndex() async {
+    @discardableResult
+    func checkAndLoadExistingIndex(
+        scheduleAutoResume: Bool = true,
+        cleanOrphans: Bool = true,
+        loadPriority: TaskPriority = .utility
+    ) async -> Bool {
+        let loaded = await loadExistingIndexIfAvailable(cleanOrphans: cleanOrphans, loadPriority: loadPriority)
+        startObservingPhotoChanges()
+        if scheduleAutoResume && loaded {
+            scheduleDeferredAutoResume(totalInLibrary: launchLibraryCountSnapshot)
+        }
+        return loaded
+    }
+
+    @discardableResult
+    func loadExistingIndexIfAvailable(cleanOrphans: Bool = false, loadPriority: TaskPriority = .utility) async -> Bool {
         do {
-            let count = try database.indexedCount()
-
-            // Fetch library once — shared across orphan cleanup and incomplete check
-            let allMedia = PhotoLibrary.fetchAllMedia()
-
-            if count > 0 {
-                #if DEBUG
-                logger.info("[IndexingService] Found \(count) indexed photos, loading index")
-                #endif
-
-                await cleanOrphanedEmbeddings(allMedia: allMedia)
-
-                try searchEngine.loadIndex()
-                isReady = true
-                let videoCount: Int
-                do {
-                    videoCount = try database.videoIndexedCount()
-                } catch {
-                    logger.error("Failed to count indexed videos: \(error.localizedDescription)")
-                    videoCount = 0
-                }
-                progress = IndexingProgress(total: count + videoCount, completed: count + videoCount, isRunning: false)
-
-                #if DEBUG
-                logger.info("[IndexingService] Index ready: \(count) photos, \(videoCount) videos")
-                #endif
+            let photoCount = try database.indexedCount()
+            let videoCount: Int
+            do {
+                videoCount = try database.videoIndexedCount()
+            } catch {
+                logger.error("Failed to count indexed videos: \(error.localizedDescription)")
+                videoCount = 0
             }
-            startObservingPhotoChanges()
+            let totalIndexed = photoCount + videoCount
 
-            await checkForIncompleteIndex(allMedia: allMedia)
+            if totalIndexed > 0 {
+                #if DEBUG
+                logger.info("[IndexingService] Found \(photoCount) indexed photos and \(videoCount) indexed videos, loading index")
+                #endif
+
+                if cleanOrphans {
+                    let allMedia = PhotoLibrary.fetchAllMedia()
+                    launchLibraryCountSnapshot = allMedia.count
+                    await cleanOrphanedEmbeddings(allMedia: allMedia)
+                }
+
+                let didLoad = try await Task.detached(priority: loadPriority) { [searchEngine] in
+                    try searchEngine.loadIndex()
+                    return searchEngine.isIndexLoaded
+                }.value
+                guard didLoad else {
+                    isReady = false
+                    progress = IndexingProgress(total: 0, completed: 0, isRunning: false)
+                    onIndexUnavailable?()
+                    return false
+                }
+
+                isReady = true
+                let loadedTotal = searchEngine.totalSize
+                progress = IndexingProgress(total: loadedTotal, completed: loadedTotal, isRunning: false)
+                onIndexReady?()
+
+                #if DEBUG
+                logger.info("[IndexingService] Index ready: \(searchEngine.indexSize) photos, \(searchEngine.videoSize) videos")
+                #endif
+                return true
+            }
         } catch {
             logger.error("Failed to load existing index: \(error.localizedDescription)")
         }
+        isReady = false
+        onIndexUnavailable?()
+        return false
     }
 
     func startIndexing() {
-        guard !progress.isRunning else { return }
-        progress.isRunning = true
+        guard markRunningIfIdle() else { return }
         SurpriseQueries.clearValidated()
         indexingTask = Task { await performIndexing() }
     }
 
     func indexNewPhotosOnly() {
-        guard !progress.isRunning else { return }
-        progress.isRunning = true
+        guard markRunningIfIdle() else { return }
         newPhotosAvailable = false
         indexingTask = Task { await performIndexing() }
     }
@@ -110,6 +144,8 @@ class IndexingService: ObservableObject {
         indexingTask = nil
         surpriseValidationTask?.cancel()
         surpriseValidationTask = nil
+        autoResumeTask?.cancel()
+        autoResumeTask = nil
         geocodingTask?.cancel()
         geocodingTask = nil
         geocodingProgress = nil
@@ -117,17 +153,25 @@ class IndexingService: ObservableObject {
     }
 
     func indexFolder(url: URL, name: String) {
-        guard !progress.isRunning else { return }
+        guard markRunningIfIdle() else { return }
         indexingTask = Task { await performFolderIndexing(url: url, name: name) }
     }
 
     // MARK: - Private
 
+    private func markRunningIfIdle() -> Bool {
+        guard !progress.isRunning else { return false }
+        progress.isRunning = true
+        return true
+    }
+
     private func startObservingPhotoChanges() {
+        guard !isObservingPhotoChanges else { return }
         changeObserver.onNewPhotosDetected = { [weak self] in
             Task { @MainActor in self?.checkForNewPhotos() }
         }
         changeObserver.startObserving()
+        isObservingPhotoChanges = true
     }
 
     private func checkForNewPhotos() {
@@ -199,7 +243,7 @@ class IndexingService: ObservableObject {
         }
         let isPro = ProManager.shared.isPro
         var indexed = 0
-        var newlyIndexed = alreadyIndexed.count
+        var newlyIndexed = alreadyIndexed.count + alreadyIndexedVideos.count
         var batch: [IndexedPhoto] = []
 
         // Separate photos and videos
@@ -215,7 +259,7 @@ class IndexingService: ObservableObject {
         }
 
         #if DEBUG
-        logger.info("[IndexingService] Library breakdown: \(photoAssets.count) photos, \(videoAssets.count) videos, \(alreadyIndexed.count) already indexed")
+        logger.info("[IndexingService] Library breakdown: \(photoAssets.count) photos, \(videoAssets.count) videos, \(alreadyIndexed.count) photos and \(alreadyIndexedVideos.count) videos already indexed")
         #endif
 
         // Pass 1: Index all photos first (batch Core ML encoding)
@@ -236,7 +280,7 @@ class IndexingService: ObservableObject {
         // Process in batches
         for batchStart in stride(from: 0, to: assetsToIndex.count, by: encodeBatchSize) {
             if Task.isCancelled { break }
-            if !isPro && newlyIndexed >= FreeTier.maxPhotos {
+            if !FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) {
                 hitFreeLimit = true
                 break
             }
@@ -279,6 +323,10 @@ class IndexingService: ObservableObject {
                 // Phase 3: Post-process each result (OCR, sharpness, face detection)
                 for (i, (asset, image)) in loadedImages.enumerated() {
                     guard i < embeddings.count else { break }
+                    guard FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) else {
+                        hitFreeLimit = true
+                        break
+                    }
 
                     var ocrText: String?
                     // Tier 1: Fast OCR on 224x224 thumbnail (catches large text: signs, menus, whiteboards)
@@ -340,6 +388,10 @@ class IndexingService: ObservableObject {
                 logger.error("Batch encoding failed: \(error.localizedDescription)")
                 // Fallback: encode individually
                 for (asset, image) in loadedImages {
+                    guard FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) else {
+                        hitFreeLimit = true
+                        break
+                    }
                     do {
                         let embedding = try imageEncoder.encode(image: image)
 
@@ -435,12 +487,6 @@ class IndexingService: ObservableObject {
         logger.info("[IndexingService] Photo indexing complete: \(newlyIndexed) newly indexed")
         #endif
 
-        // Validate surprise queries against actual library content
-        surpriseValidationTask?.cancel()
-        surpriseValidationTask = Task.detached(priority: .utility) { [searchEngine] in
-            await SurpriseQueries.validateQueries(using: searchEngine)
-        }
-
         // Pass 2: Index videos in background
         if !videoAssets.isEmpty && !Task.isCancelled && !hitFreeLimit {
             indexed = 0
@@ -448,7 +494,7 @@ class IndexingService: ObservableObject {
         }
         for asset in videoAssets {
             if Task.isCancelled { break }
-            if !isPro && newlyIndexed >= FreeTier.maxPhotos {
+            if !FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) {
                 hitFreeLimit = true
                 break
             }
@@ -474,6 +520,7 @@ class IndexingService: ObservableObject {
 
         // Geocode location strings in background (doesn't block search)
         if !Task.isCancelled {
+            scheduleSurpriseValidation()
             launchGeocoding()
         }
     }
@@ -481,6 +528,7 @@ class IndexingService: ObservableObject {
     private func performFolderIndexing(url: URL, name: String) async {
         beginBackgroundTask()
         defer { endBackgroundTask() }
+        defer { progress.isRunning = false }
 
         // Bail out if we can't acquire the security-scoped resource. Continuing
         // without access would fail later with confusing permission errors.
@@ -587,24 +635,53 @@ class IndexingService: ObservableObject {
         catch { logger.error("Failed to update source stats: \(error.localizedDescription)") }
 
         await reloadSearchIndex()
-        progress.isRunning = false
     }
 
     private func reloadSearchIndex() async {
         do {
-            try searchEngine.loadIndex()
-            isReady = true
-            indexVersion += 1
+            let didLoad = try await Task.detached(priority: .userInitiated) { [searchEngine] in
+                try searchEngine.loadIndex()
+                return searchEngine.isIndexLoaded
+            }.value
+            isReady = didLoad
+            if didLoad {
+                indexVersion += 1
+                onIndexReady?()
+            } else {
+                onIndexUnavailable?()
+            }
         } catch {
             logger.error("Failed to reload search index: \(error.localizedDescription)")
+            isReady = false
+            onIndexUnavailable?()
+        }
+    }
+
+    private func scheduleDeferredAutoResume(totalInLibrary: Int?) {
+        autoResumeTask?.cancel()
+        autoResumeTask = Task { [weak self] in
+            let delay = UInt64(IndexingConfig.postLaunchAutoResumeDelaySeconds * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            await self?.checkForIncompleteIndex(totalInLibrary: totalInLibrary)
+            self?.autoResumeTask = nil
+        }
+    }
+
+    private func scheduleSurpriseValidation() {
+        surpriseValidationTask?.cancel()
+        surpriseValidationTask = Task.detached(priority: .utility) { [searchEngine] in
+            let delay = UInt64(IndexingConfig.surpriseValidationDelaySeconds * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled, searchEngine.isIndexLoaded else { return }
+            await SurpriseQueries.validateQueries(using: searchEngine)
         }
     }
 
     /// Check if there are unindexed photos/videos remaining from an interrupted indexing session.
     /// If found, automatically resume indexing in the background.
-    private func checkForIncompleteIndex(allMedia: PHFetchResult<PHAsset>? = nil) async {
-        let media = allMedia ?? PhotoLibrary.fetchAllMedia()
-        let totalInLibrary = media.count
+    private func checkForIncompleteIndex(totalInLibrary providedTotal: Int? = nil) async {
+        let totalInLibrary = providedTotal ?? PhotoLibrary.fetchAllMedia().count
 
         let indexedPhotoCount: Int
         let indexedVideoCount: Int
@@ -617,6 +694,7 @@ class IndexingService: ObservableObject {
         }
 
         let totalIndexed = indexedPhotoCount + indexedVideoCount
+        guard totalIndexed > 0 else { return }
         let unindexedCount = totalInLibrary - totalIndexed
 
         if unindexedCount <= 0 {
@@ -631,8 +709,7 @@ class IndexingService: ObservableObject {
 
         // Auto-resume indexing for the remaining items
         // performIndexing will launch geocoding when it finishes
-        guard !progress.isRunning else { return }
-        progress.isRunning = true
+        guard markRunningIfIdle() else { return }
         newPhotosAvailable = false
         indexingTask = Task { await performIndexing() }
     }

@@ -2,7 +2,11 @@ import Foundation
 import StoreKit
 
 enum FreeTier {
-    static let maxPhotos = 500
+    static let maxIndexedMedia = 500
+
+    static func canIndexMore(indexedMediaCount: Int, isPro: Bool) -> Bool {
+        isPro || indexedMediaCount < maxIndexedMedia
+    }
 }
 
 @MainActor

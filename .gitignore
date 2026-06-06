@@ -19,6 +19,9 @@ Memorable/Models/*.mlmodelc/**
 ## Claude Code
 .claude/
 
+## Compound Engineering local preferences
+.compound-engineering/*.local.yaml
+
 ## SourceKit-LSP (xcode-build-server config, machine-specific absolute paths)
 buildServer.json
 

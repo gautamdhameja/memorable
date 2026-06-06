@@ -52,6 +52,6 @@ final class AppConstantsTests: XCTestCase {
     // MARK: - FreeTier
 
     func testFreeTierLimit() {
-        XCTAssertGreaterThan(FreeTier.maxPhotos, 0)
+        XCTAssertGreaterThan(FreeTier.maxIndexedMedia, 0)
     }
 }

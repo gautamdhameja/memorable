@@ -20,7 +20,7 @@ struct MemorableApp: App {
                     #if DEBUG
                     logger.warning("[App] Memory warning received, dropping search index")
                     #endif
-                    appState.searchEngine?.dropIndex()
+                    appState.handleMemoryWarning()
                 }
         }
     }
@@ -29,7 +29,7 @@ struct MemorableApp: App {
 @MainActor
 class AppState: ObservableObject {
     @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
-    @Published var isModelLoaded = false
+    @Published var readiness = AppReadiness()
     @Published var errorMessage: String?
     @Published var loadingStatus: String = "Preparing your experience..."
 
@@ -37,14 +37,27 @@ class AppState: ObservableObject {
     var textEncoder: TextEncoder?
     var searchEngine: SearchEngine?
     var indexingService: IndexingService?
+    let semanticRuntime = SemanticSearchRuntime()
     let captionService = PhotoCaptionService()
     private var isInitializing = false
+    private var isCoreWarmupRunning = false
+    private var currentWarmupPriority: SemanticWarmupPriority = .postPaint
+
+    init() {
+        semanticRuntime.setWarmupLoader { [weak self] priority in
+            try await self?.warmCoreSearch(priority: priority)
+        }
+        semanticRuntime.setPromotionHandler { [weak self] in
+            self?.currentWarmupPriority = .userInitiatedSearch
+        }
+    }
 
     func initialize() async {
-        guard !isInitializing && !isModelLoaded else { return }
+        guard !isInitializing && !readiness.isShellReady else { return }
         isInitializing = true
+        defer { isInitializing = false }
         #if DEBUG
-        let initStart = CFAbsoluteTimeGetCurrent()
+        PerformanceMetrics.shared.start(PerformancePhase.launchToShell)
         logger.info("[AppState] initialize() started")
         #endif
 
@@ -62,77 +75,143 @@ class AppState: ObservableObject {
             return
         }
 
+        readiness.markShellReady()
+        semanticRuntime.markShellReady()
+        loadingStatus = "Preparing search..."
+
+        #if DEBUG
+        PerformanceMetrics.shared.end(PerformancePhase.launchToShell)
+        #endif
+        semanticRuntime.startPostPaintWarmup()
+    }
+
+    func handleMemoryWarning() {
+        searchEngine?.dropIndex()
+        indexingService?.isReady = false
+        readiness.markIndexUnavailable()
+        semanticRuntime.markIndexUnavailable()
+    }
+
+    func retrySemanticWarmup() {
+        errorMessage = nil
+        semanticRuntime.startUserInitiatedWarmup()
+    }
+
+    private func warmCoreSearch(priority: SemanticWarmupPriority) async throws {
+        guard !isCoreWarmupRunning else { return }
+        isCoreWarmupRunning = true
+        currentWarmupPriority = priority
+        defer { isCoreWarmupRunning = false }
+
+        #if DEBUG
+        PerformanceMetrics.shared.start(PerformancePhase.semanticWarmup)
+        logger.info("[AppState] Core semantic warmup started, priority=\(String(describing: priority))")
+        #endif
+
         do {
+            let search: SearchEngine
+            let indexing: IndexingService
+
+            if let existingSearch = searchEngine, let existingIndexing = indexingService {
+                search = existingSearch
+                indexing = existingIndexing
+                semanticRuntime.markSemanticModelReady()
+            } else {
+                loadingStatus = "Warming search..."
+                semanticRuntime.markSemanticModelWarming()
+
+                async let imageTask: ImageEncoder = Task.detached {
+                    try ImageEncoder()
+                }.value
+                async let textTask: TextEncoder = Task.detached {
+                    try TextEncoder()
+                }.value
+
+                let imgEncoder = try await imageTask
+                let txtEncoder = try await textTask
+                search = await Task.detached {
+                    SearchEngine(textEncoder: txtEncoder)
+                }.value
+                indexing = IndexingService(imageEncoder: imgEncoder, searchEngine: search)
+
+                imageEncoder = imgEncoder
+                textEncoder = txtEncoder
+                searchEngine = search
+                indexingService = indexing
+                wireIndexingCallbacks(indexing)
+                semanticRuntime.markSemanticModelReady()
+
+                // Wire up refund handler: trim index to free tier limit
+                ProManager.shared.onProRevoked = { [weak self] in
+                    do {
+                        try AppDatabase.shared.trimToLimit(FreeTier.maxIndexedMedia)
+                        try search.loadIndex()
+                        self?.indexingService?.indexVersion += 1
+                    } catch {
+                        logger.error("Failed to trim index after refund: \(error.localizedDescription)")
+                    }
+                }
+
+                // ProManager.init() fires verifyEntitlement on launch to detect
+                // refunds, but that Task may complete before the callback above
+                // is set, losing the trim. Re-verify now that the callback is
+                // wired so a refunded user always gets their index trimmed.
+                await ProManager.shared.verifyEntitlement()
+            }
+
+            loadingStatus = "Loading searchable memories..."
+            let effectivePriority = currentWarmupPriority
+            let alreadyPromoted: Bool
+            if case .warmingCore(let promoted) = semanticRuntime.phase {
+                alreadyPromoted = promoted
+            } else {
+                alreadyPromoted = false
+            }
+            semanticRuntime.markIndexWarming(promoted: effectivePriority == .userInitiatedSearch || alreadyPromoted)
+            readiness.markSemanticModelReady()
+            readiness.markIndexWarming()
+
             #if DEBUG
-            let modelStart = CFAbsoluteTimeGetCurrent()
+            PerformanceMetrics.shared.start(PerformancePhase.indexLoad)
             #endif
 
-            loadingStatus = "Waking up the neural engine..."
-
-            let imgEncoder = try await Task.detached {
-                try ImageEncoder()
-            }.value
-
-            #if DEBUG
-            logger.info("[AppState] ImageEncoder loaded in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - modelStart))s")
-            let textStart = CFAbsoluteTimeGetCurrent()
-            #endif
-
-            loadingStatus = "Understanding words and images..."
-
-            let txtEncoder = try await Task.detached {
-                try TextEncoder()
-            }.value
+            let loadedIndex = await indexing.checkAndLoadExistingIndex(
+                scheduleAutoResume: true,
+                cleanOrphans: effectivePriority != .userInitiatedSearch,
+                loadPriority: effectivePriority == .userInitiatedSearch ? .userInitiated : .utility
+            )
 
             #if DEBUG
-            logger.info("[AppState] TextEncoder loaded in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - textStart))s")
+            PerformanceMetrics.shared.end(PerformancePhase.indexLoad)
             #endif
 
-            loadingStatus = "Spinning up the search engine..."
-
-            let search = await Task.detached {
-                SearchEngine(textEncoder: txtEncoder)
-            }.value
-
-            imageEncoder = imgEncoder
-            textEncoder = txtEncoder
-            searchEngine = search
-            indexingService = IndexingService(imageEncoder: imgEncoder, searchEngine: search)
-            captionService.prepare(textEncoder: txtEncoder)
-            isModelLoaded = true
-
-            // Wire up refund handler: trim index to free tier limit
-            ProManager.shared.onProRevoked = { [weak self] in
-                do {
-                    try AppDatabase.shared.trimToLimit(FreeTier.maxPhotos)
-                    try search.loadIndex()
-                    self?.indexingService?.indexVersion += 1
-                } catch {
-                    logger.error("Failed to trim index after refund: \(error.localizedDescription)")
+            if loadedIndex {
+                if let txtEncoder = textEncoder {
+                    Task { @MainActor in
+                        self.captionService.prepare(textEncoder: txtEncoder)
+                    }
                 }
             }
 
-            // ProManager.init() fires verifyEntitlement on launch to detect
-            // refunds, but that Task may complete before the callback above
-            // is set, losing the trim. Re-verify now that the callback is
-            // wired so a refunded user always gets their index trimmed.
-            await ProManager.shared.verifyEntitlement()
-
             #if DEBUG
-            let indexStart = CFAbsoluteTimeGetCurrent()
-            #endif
-
-            loadingStatus = "Getting your memories ready..."
-
-            await indexingService?.checkAndLoadExistingIndex()
-
-            #if DEBUG
-            logger.info("[AppState] Index loaded in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - indexStart))s")
-            logger.info("[AppState] Total initialization: \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - initStart))s")
+            PerformanceMetrics.shared.end(PerformancePhase.semanticWarmup)
             #endif
         } catch {
             logger.error("Model loading failed: \(error.localizedDescription)")
+            semanticRuntime.markFailure(error.localizedDescription)
             errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    private func wireIndexingCallbacks(_ indexing: IndexingService) {
+        indexing.onIndexReady = { [weak self] in
+            self?.readiness.markIndexReady()
+            self?.semanticRuntime.markIndexReady()
+        }
+        indexing.onIndexUnavailable = { [weak self] in
+            self?.readiness.markIndexUnavailable()
+            self?.semanticRuntime.markIndexUnavailable()
         }
     }
 }
