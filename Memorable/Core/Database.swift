@@ -267,6 +267,18 @@ class AppDatabase: DatabaseProtocol {
                           columns: ["enrichmentComplete", "creationDate"])
         }
 
+        // V2 briefly indexed first-pass photo embeddings from PhotoKit
+        // `.fastFormat` images. That can produce low-quality embedding inputs
+        // on device and leave the app with a populated but ineffective search
+        // index. Rebuild photo embeddings with the high-quality local loader.
+        migrator.registerMigration("v5-rebuild-fastformat-photo-embeddings") { db in
+            let existingPhotoCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM indexed_photos") ?? 0
+            try db.execute(sql: "DELETE FROM indexed_photos")
+            if existingPhotoCount > 0 {
+                UserDefaults.standard.set(true, forKey: IndexingConfig.needsFastFormatPhotoRebuildKey)
+            }
+        }
+
         return migrator
     }
 

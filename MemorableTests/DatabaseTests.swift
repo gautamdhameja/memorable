@@ -6,6 +6,7 @@ final class DatabaseTests: XCTestCase {
 
     override func tearDown() {
         AppDatabase.isInMemoryFallback = false
+        UserDefaults.standard.removeObject(forKey: IndexingConfig.needsFastFormatPhotoRebuildKey)
         super.tearDown()
     }
 

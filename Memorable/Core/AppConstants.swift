@@ -192,6 +192,10 @@ enum TimeOfDayConfig {
 // MARK: - Indexing
 
 enum IndexingConfig {
+    /// Set by the v5 database migration when photo embeddings are cleared
+    /// because they may have been generated from degraded PhotoKit input.
+    static let needsFastFormatPhotoRebuildKey = "indexing.needsFastFormatPhotoRebuild"
+
     /// Photos per DB transaction
     static let batchInsertSize = 20
 

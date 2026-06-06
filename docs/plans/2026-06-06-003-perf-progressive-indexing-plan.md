@@ -57,7 +57,7 @@ The pasted external spec was directionally useful but over-specified risky detai
 
 ## Key Technical Decisions
 
-- **Use an indexing-specific image loader.** `PhotoLibrary.loadImage(for:)` is used by indexing and some user-facing paths today, so changing it globally risks lowering display quality. The plan adds an indexing-only loader or request-options seam that uses `.fastFormat` only for 224x224 embedding inputs.
+- **Use an indexing-specific image loader.** `PhotoLibrary.loadImage(for:)` is used by indexing and some user-facing paths today, so changing it globally risks lowering display quality. The implementation keeps an indexing-only request-options seam, but embedding inputs must use local high-quality PhotoKit requests because `.fastFormat` can degrade SigLIP retrieval quality on device.
 - **Make base embeddings the first-pass contract.** First-pass records should include identifier, date, GPS coordinates, dimensions, source metadata, and embedding. Enrichment fields can be nil until the second pass updates them.
 - **Persist enrichment completion directly.** A boolean or status column is clearer than inferring completion from nullable fields because legitimate OCR or scene-label results can be empty.
 - **Reload at milestones, not append GPU state per batch.** `GPUSimilaritySearch` caches an MPS graph shaped by embedding count. Rebuilding at meaningful checkpoints is simpler and safer than adding append semantics to the Metal path.
@@ -110,7 +110,7 @@ stateDiagram-v2
 
 ### U1. Add Indexing Image Loading Profile
 
-**Goal:** Separate indexing image loading from display image loading so embeddings can use `.fastFormat` without lowering user-facing image quality.
+**Goal:** Separate indexing image loading from display image loading so embedding input settings can be controlled without lowering user-facing image quality.
 
 **Requirements:** R1, R14, R15.
 
@@ -123,13 +123,13 @@ stateDiagram-v2
 - `MemorableTests/ImagePreprocessingTests.swift`
 - `MemorableTests/IndexingPolicyTests.swift`
 
-**Approach:** Add a dedicated indexing loader, or a testable request-options builder, that uses `.fastFormat`, `resizeMode = .exact`, `isNetworkAccessAllowed = false`, and the existing 224x224 default. Keep `loadThumbnail`, Quick Look, and full-size display paths on high-quality loading. Route only first-pass embedding and thumbnail OCR input through the indexing loader.
+**Approach:** Add a dedicated indexing loader, or a testable request-options builder, that uses `.highQualityFormat`, `resizeMode = .exact`, `isNetworkAccessAllowed = false`, and the existing 224x224 default. Keep `loadThumbnail`, Quick Look, and full-size display paths on high-quality loading. Route first-pass embedding and thumbnail OCR input through the indexing loader without sacrificing embedding quality.
 
 **Patterns to follow:** Existing `PHImageManager` continuation handling in `PhotoLibrary.loadImage(for:)`, including the non-degraded callback guard and no-network setting.
 
 **Test scenarios:**
 
-- Indexing request options use `.fastFormat`, `.exact`, async loading, and network-disabled behavior.
+- Indexing request options use `.highQualityFormat`, `.exact`, async loading, and network-disabled behavior.
 - Thumbnail/display request options continue to use high-quality delivery.
 - Indexing loader keeps 224x224 as the default target size.
 - Degraded PhotoKit callbacks do not resume the async result before the final image.
@@ -361,7 +361,7 @@ stateDiagram-v2
 
 ### In Scope
 
-- Indexing-only `.fastFormat` image loading.
+- Indexing-only high-quality local image loading.
 - First-pass base embedding insertion.
 - Resumable photo enrichment for OCR, screenshot OCR, blur scoring, and scene labels.
 - Progressive checkpoint index reloads.
@@ -398,7 +398,7 @@ The database gains persistent enrichment state, so migrations and fixture databa
 - **Risk: More frequent index reloads could hurt indexing throughput.** Mitigate with explicit checkpoint thresholds and minimum reload spacing.
 - **Risk: Deferred OCR temporarily lowers text-heavy screenshot recall.** Mitigate by making progress copy clear and by scheduling enrichment promptly after base indexing is idle.
 - **Risk: Database migration mistakes could mark rows as permanently enriched or permanently pending.** Mitigate with migration tests covering old rows, new base rows, empty OCR outcomes, and retries.
-- **Risk: `.fastFormat` could affect embedding quality on some assets.** Mitigate by keeping the change indexing-only and validating with visual-query spot checks or the existing search evaluation harness before widening scope.
+- **Risk: lowering PhotoKit delivery quality could affect embedding quality on some assets.** Mitigate by keeping embedding input loading on `.highQualityFormat` and using deferral for enrichment work instead of lowering core embedding quality.
 - **Risk: Prefetching can increase memory pressure.** Mitigate with a bounded buffer, conservative defaults, cancellation propagation, and memory-warning behavior that pauses enrichment first.
 
 ---

@@ -13,15 +13,16 @@ class PhotoLibrary {
         await requestImage(for: asset, targetSize: targetSize, contentMode: .aspectFill, options: displayImageRequestOptions())
     }
 
-    // Get a UIImage from a PHAsset for indexing. This path prioritizes fast
-    // 224x224 embedding input and must not be used for user-facing display.
+    // Get a UIImage from a PHAsset for indexing. Embedding quality depends on
+    // matching the displayed photo representation, so this intentionally uses
+    // the same high-quality local request mode as the display path.
     static func loadImageForIndexing(for asset: PHAsset, targetSize: CGSize = CGSize(width: 224, height: 224)) async -> UIImage? {
         await requestImage(for: asset, targetSize: targetSize, contentMode: .aspectFill, options: indexingImageRequestOptions())
     }
 
     static func indexingImageRequestOptions() -> PHImageRequestOptions {
         let options = PHImageRequestOptions()
-        options.deliveryMode = .fastFormat
+        options.deliveryMode = .highQualityFormat
         options.isSynchronous = false
         options.isNetworkAccessAllowed = false
         options.resizeMode = .exact

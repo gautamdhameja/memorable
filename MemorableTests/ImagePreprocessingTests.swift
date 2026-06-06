@@ -4,10 +4,10 @@ import UIKit
 
 final class ImagePreprocessingTests: XCTestCase {
 
-    func testIndexingImageRequestOptionsUseFastLocalExactLoading() {
+    func testIndexingImageRequestOptionsUseHighQualityLocalExactLoading() {
         let options = PhotoLibrary.indexingImageRequestOptions()
 
-        XCTAssertEqual(options.deliveryMode, .fastFormat)
+        XCTAssertEqual(options.deliveryMode, .highQualityFormat)
         XCTAssertEqual(options.resizeMode, .exact)
         XCTAssertFalse(options.isSynchronous)
         XCTAssertFalse(options.isNetworkAccessAllowed)
