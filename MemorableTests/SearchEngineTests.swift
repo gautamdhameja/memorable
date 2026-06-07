@@ -185,6 +185,7 @@ struct FixturePhoto {
     let localIdentifier: String
     let date: Date?
     var city: String? = nil
+    var sceneLabels: String? = nil
     let embedding: [Float16]
 }
 
@@ -220,7 +221,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
             locationStates: Array<String?>(repeating: nil, count: photos.count),
             locationCountries: Array<String?>(repeating: nil, count: photos.count),
             locationNames: Array<String?>(repeating: nil, count: photos.count),
-            sceneLabels: Array<String?>(repeating: nil, count: photos.count),
+            sceneLabels: photos.map(\.sceneLabels),
             embeddings: photos.flatMap(\.embedding)
         )
     }

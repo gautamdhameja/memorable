@@ -55,6 +55,9 @@ struct PhotoThumbnailView: View {
         .accessibilityLabel(accessibilityDescription)
         .accessibilityAddTraits(.isImage)
         .task {
+            #if DEBUG
+            logger.info("[PhotoThumbnailView] start load id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo) score=\(String(format: "%.4f", result.score)) frame=\(result.bestFramePosition ?? -1)")
+            #endif
             if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
                 if result.isVideo {
                     thumbnail = await VideoFrameExtractor.thumbnail(
@@ -64,6 +67,17 @@ struct PhotoThumbnailView: View {
                 } else {
                     thumbnail = await PhotoLibrary.loadThumbnail(for: asset)
                 }
+                #if DEBUG
+                if let thumbnail {
+                    logger.info("[PhotoThumbnailView] loaded thumbnail id=\(result.id) localId=\(result.localIdentifier) size=\(String(format: "%.0fx%.0f", thumbnail.size.width, thumbnail.size.height))")
+                } else {
+                    logger.warning("[PhotoThumbnailView] thumbnail nil id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo)")
+                }
+                #endif
+            } else {
+                #if DEBUG
+                logger.warning("[PhotoThumbnailView] PHAsset missing id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo)")
+                #endif
             }
         }
     }

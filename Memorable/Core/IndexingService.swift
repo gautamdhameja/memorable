@@ -22,9 +22,23 @@ class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver {
 @MainActor
 class IndexingService: ObservableObject {
     @Published var progress = IndexingProgress(total: 0, completed: 0, isRunning: false)
-    @Published var isReady = false
+    @Published var isReady = false {
+        didSet {
+            #if DEBUG
+            if oldValue != isReady {
+                logger.info("[IndexingService] isReady changed \(oldValue) -> \(self.isReady); indexVersion=\(self.indexVersion), searchIndexLoaded=\(self.searchEngine.isIndexLoaded), totalSize=\(self.searchEngine.totalSize)")
+            }
+            #endif
+        }
+    }
     @Published var newPhotosAvailable = false
-    @Published var indexVersion: Int = 0
+    @Published var indexVersion: Int = 0 {
+        didSet {
+            #if DEBUG
+            logger.info("[IndexingService] indexVersion changed \(oldValue) -> \(self.indexVersion); isReady=\(self.isReady), searchIndexLoaded=\(self.searchEngine.isIndexLoaded), totalSize=\(self.searchEngine.totalSize)")
+            #endif
+        }
+    }
     // Persisted so the "Search your N of M photos" hint and the post-upgrade
     // resume button survive app relaunches. Without this, a user who upgrades
     // and relaunches before re-indexing would lose the signal that there are
@@ -35,7 +49,17 @@ class IndexingService: ObservableObject {
         }
     }
     // Background reverse-geocoding progress. Nil when idle or finished.
-    @Published var geocodingProgress: (completed: Int, total: Int)?
+    @Published var geocodingProgress: (completed: Int, total: Int)? {
+        didSet {
+            #if DEBUG
+            let oldText = oldValue.map { "\($0.completed)/\($0.total)" } ?? "nil"
+            let newText = geocodingProgress.map { "\($0.completed)/\($0.total)" } ?? "nil"
+            if oldText != newText {
+                logger.info("[IndexingService] geocodingProgress changed \(oldText) -> \(newText)")
+            }
+            #endif
+        }
+    }
 
     private let imageEncoder: ImageEncoder
     let searchEngine: SearchEngine
@@ -73,6 +97,9 @@ class IndexingService: ObservableObject {
         cleanOrphans: Bool = true,
         loadPriority: TaskPriority = .utility
     ) async -> Bool {
+        #if DEBUG
+        logger.info("[IndexingService] checkAndLoadExistingIndex start scheduleAutoResume=\(scheduleAutoResume), cleanOrphans=\(cleanOrphans), priority=\(String(describing: loadPriority))")
+        #endif
         let loaded = await loadExistingIndexIfAvailable(cleanOrphans: cleanOrphans, loadPriority: loadPriority)
         startObservingPhotoChanges()
         if scheduleAutoResume && loaded {
@@ -82,12 +109,18 @@ class IndexingService: ObservableObject {
                     + IndexingConfig.surpriseValidationDelaySeconds
             )
         }
+        #if DEBUG
+        logger.info("[IndexingService] checkAndLoadExistingIndex finish loaded=\(loaded), isReady=\(self.isReady), indexLoaded=\(self.searchEngine.isIndexLoaded), totalSize=\(self.searchEngine.totalSize)")
+        #endif
         return loaded
     }
 
     @discardableResult
     func loadExistingIndexIfAvailable(cleanOrphans: Bool = false, loadPriority: TaskPriority = .utility) async -> Bool {
         do {
+            #if DEBUG
+            logger.info("[IndexingService] loadExistingIndexIfAvailable start cleanOrphans=\(cleanOrphans), priority=\(String(describing: loadPriority))")
+            #endif
             let photoCount = try database.indexedCount()
             let videoCount: Int
             do {
@@ -649,6 +682,9 @@ class IndexingService: ObservableObject {
     @discardableResult
     private func reloadSearchIndex() async -> Bool {
         do {
+            #if DEBUG
+            logger.info("[IndexingService] reloadSearchIndex start; previousIndexVersion=\(self.indexVersion), progressPhase=\(String(describing: self.progress.phase)), progressRunning=\(self.progress.isRunning)")
+            #endif
             let didLoad = try await Task.detached(priority: .userInitiated) { [searchEngine] in
                 try searchEngine.loadIndex()
                 return searchEngine.isIndexLoaded
@@ -658,8 +694,14 @@ class IndexingService: ObservableObject {
                 indexVersion += 1
                 progress.searchableCount = searchEngine.totalSize
                 onIndexReady?()
+                #if DEBUG
+                logger.info("[IndexingService] reloadSearchIndex success; indexVersion=\(self.indexVersion), totalSize=\(self.searchEngine.totalSize), photos=\(self.searchEngine.indexSize), videos=\(self.searchEngine.videoSize)")
+                #endif
                 return true
             } else {
+                #if DEBUG
+                logger.info("[IndexingService] reloadSearchIndex did not load an index; indexVersion=\(self.indexVersion)")
+                #endif
                 onIndexUnavailable?()
             }
         } catch {

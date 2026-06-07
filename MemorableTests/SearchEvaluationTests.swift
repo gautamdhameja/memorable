@@ -90,6 +90,54 @@ final class SearchEvaluationTests: XCTestCase {
         XCTAssertEqual(response.results[0].id, "video")
     }
 
+    func testVideoCompensationCanLiftNearThresholdFrameIntoResults() throws {
+        let database = SearchFixtureDatabase(videos: [
+            .init(
+                id: "near-threshold-video",
+                localIdentifier: "local-near-threshold-video",
+                date: nil,
+                city: nil,
+                embedding: float16Vector(first: 0.10)
+            )
+        ])
+        let engine = SearchEngine(textEncoder: FakeTextEncoder(["dog eating carrot": floatVector(first: 1)]), database: database)
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(hints: hints(text: "dog eating carrot"))
+
+        XCTAssertEqual(response.results.map(\.id), ["near-threshold-video"])
+        XCTAssertTrue(response.fallbackResults.isEmpty)
+    }
+
+    func testSingleSceneLabelDoesNotBuryStrongerVideoForCompoundQuery() throws {
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "generic-dog-photo",
+                    localIdentifier: "local-generic-dog-photo",
+                    date: nil,
+                    sceneLabels: "dog",
+                    embedding: float16Vector(first: 0.13)
+                )
+            ],
+            videos: [
+                .init(
+                    id: "dog-eating-carrot-video",
+                    localIdentifier: "local-dog-eating-carrot-video",
+                    date: nil,
+                    city: nil,
+                    embedding: float16Vector(first: 0.125)
+                )
+            ]
+        )
+        let engine = SearchEngine(textEncoder: FakeTextEncoder(["dog eating carrot": floatVector(first: 1)]), database: database)
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(hints: hints(text: "dog eating carrot"))
+
+        XCTAssertEqual(response.results.first?.id, "dog-eating-carrot-video")
+    }
+
     func testEmptyResultFixtureReturnsNoMainResults() throws {
         let database = SearchFixtureDatabase(photos: [
             .init(id: "cat", localIdentifier: "local-cat", date: nil, embedding: float16Vector(second: 1)),

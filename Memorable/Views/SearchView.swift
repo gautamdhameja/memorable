@@ -51,6 +51,8 @@ struct SearchView: View {
     @State private var filterSummary: FilterSummary?
     @State private var placeholderIndex: Int = 0
     @State private var placeholderTimer: Task<Void, Never>?
+    @State private var searchSequence: Int = 0
+    @State private var activeSearchID: Int?
 
     // Persisted sort mode. Stored as rawValue because @AppStorage doesn't
     // support RawRepresentable enums directly.
@@ -64,8 +66,8 @@ struct SearchView: View {
     private let initialVisibleCount = 50
     @State private var visibleCount: Int = 50
 
-    // Tracks the in-flight search so we can cancel it when a new search
-    // starts or when the index is rebuilt under us.
+    // Tracks the in-flight submitted search. Text edits do not cancel a submitted
+    // query; only a newer submitted query supersedes an older one.
     @State private var searchTask: Task<Void, Never>?
 
     // Media type filter (All / Photos / Videos / Screenshots)
@@ -130,6 +132,9 @@ struct SearchView: View {
                     // Sticky controls panel (above scroll)
                     if !searchText.isEmpty && !results.isEmpty && !isSearching {
                         let filtered = applyMediaFilter(applySort(results, mode: sortMode))
+                        #if DEBUG
+                        let _ = debugLogControlsPanel(filteredCount: filtered.count)
+                        #endif
                         controlsPanel(filteredCount: filtered.count)
                     }
 
@@ -162,11 +167,14 @@ struct SearchView: View {
                         }
 
                         // Content
+                        #if DEBUG
+                        let _ = debugLogContentBranch()
+                        #endif
                         if isSearching {
                             searchingState
                         } else if let error = searchError {
                             errorState(error)
-                        } else if !searchText.isEmpty && results.isEmpty && !isSearching && lastSearchedQuery == searchText {
+                        } else if !searchText.isEmpty && results.isEmpty && !isSearching && lastSearchedQuery == normalizedSearchQuery(searchText) {
                             noResultsState
                         } else if !searchText.isEmpty {
                             resultsGrid(results: results)
@@ -270,21 +278,23 @@ struct SearchView: View {
             .onDisappear {
                 placeholderTimer?.cancel()
             }
-            .onChange(of: indexingService.isReady) {
+            .onChange(of: indexingService.isReady) { oldValue, newValue in
+                #if DEBUG
+                logger.info("[SearchView] indexingService.isReady changed \(oldValue) -> \(newValue); indexLoaded=\(searchEngine.isIndexLoaded), totalSize=\(searchEngine.totalSize), indexVersion=\(indexingService.indexVersion)")
+                #endif
                 if indexingService.isReady {
                     startPlaceholderRotation()
                 }
             }
-            .onChange(of: indexingService.indexVersion) {
-                // Index changed (e.g., photos deleted). Cancel any in-flight
-                // search so it can't land stale results on top, then clear.
-                searchTask?.cancel()
-                if !results.isEmpty {
-                    results = []
-                    lastResults = []
-                    searchText = ""
-                    lastSearchedQuery = nil
-                }
+            .onChange(of: indexingService.indexVersion) { oldValue, newValue in
+                #if DEBUG
+                logger.info("[SearchView] indexVersion changed \(oldValue) -> \(newValue); activeSearchID=\(activeSearchID.map(String.init) ?? "nil"), results=\(results.count), lastResults=\(lastResults.count), searchText='\(searchText)'")
+                #endif
+                // SearchEngine snapshots under lock, so an in-flight submitted
+                // search can safely finish against its snapshot. Do not clear
+                // visible results here: background enrichment/reloads can advance
+                // indexVersion without invalidating the user's current UI.
+                validateVisibleResults(reason: "indexVersion changed")
             }
             .onChange(of: scenePhase) {
                 if scenePhase == .active {
@@ -302,27 +312,7 @@ struct SearchView: View {
                         }
                     }
 
-                    // Remove any results pointing to deleted assets.
-                    // Run off the main thread because each getAsset call is a
-                    // synchronous PHFetchRequest. With 50+ results this blocks
-                    // the UI for hundreds of milliseconds.
-                    if !results.isEmpty {
-                        let currentResults = results
-                        let currentLast = lastResults
-                        Task.detached {
-                            let validIds = Set(
-                                currentResults
-                                    .filter { PhotoLibrary.getAsset(by: $0.localIdentifier) != nil }
-                                    .map(\.id)
-                            )
-                            await MainActor.run { [self] in
-                                if validIds.count != currentResults.count {
-                                    results = currentResults.filter { validIds.contains($0.id) }
-                                    lastResults = currentLast.filter { validIds.contains($0.id) }
-                                }
-                            }
-                        }
-                    }
+                    validateVisibleResults(reason: "foreground return")
                 }
             }
         }
@@ -338,18 +328,30 @@ struct SearchView: View {
             TextField(searchPlaceholder, text: $searchText)
                 .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurface)
-                .onChange(of: searchText) { _, newValue in
-                    if newValue != lastSearchedQuery {
-                        searchTask?.cancel()
-                        isSearching = false
-                    }
-                    if newValue.isEmpty {
+                .onChange(of: searchText) { oldValue, newValue in
+                    #if DEBUG
+                    logger.info("[SearchView] searchText changed activeSearchID=\(activeSearchID.map(String.init) ?? "nil") old={\(debugTextMetadata(oldValue))} new={\(debugTextMetadata(newValue))} equalsLast=\(newValue == (lastSearchedQuery ?? "")) trimEqualOldNew=\(oldValue.trimmingCharacters(in: .whitespacesAndNewlines) == newValue.trimmingCharacters(in: .whitespacesAndNewlines)) lastSearched={\(debugTextMetadata(lastSearchedQuery ?? ""))}")
+                    #endif
+                    if normalizedSearchQuery(newValue).isEmpty {
+                        #if DEBUG
+                        logger.info("[SearchView] Clearing search state because searchText is empty")
+                        #endif
+                        cancelActiveSearch(reason: "searchText cleared", details: "old={\(debugTextMetadata(oldValue))} new={\(debugTextMetadata(newValue))}")
                         results = []
+                        fallbackResults = []
+                        filterSummary = nil
                         searchError = nil
                         lastSearchedQuery = nil
+                        lastResults = []
+                        isSearching = false
+                        activeSearchID = nil
+                        searchTask = nil
                     }
                 }
                 .onSubmit {
+                    #if DEBUG
+                    logger.info("[SearchView] onSubmit searchText={\(debugTextMetadata(searchText))} activeSearchID=\(activeSearchID.map(String.init) ?? "nil")")
+                    #endif
                     performSearch(saveToHistory: true)
                 }
                 .accessibilityLabel("Search photos")
@@ -925,6 +927,15 @@ struct SearchView: View {
         let filtered = applyMediaFilter(sorted)
         let visible = Array(filtered.prefix(visibleCount))
         let hasMore = filtered.count > visible.count
+        #if DEBUG
+        let _ = debugLogResultsGrid(
+            inputCount: results.count,
+            sortedCount: sorted.count,
+            filteredCount: filtered.count,
+            visibleCount: visible.count,
+            hasMore: hasMore
+        )
+        #endif
         return VStack(alignment: .leading, spacing: 0) {
             if sortMode == .recent {
                 let groups = ResultGrouper.groupByMonth(results: visible)
@@ -1023,6 +1034,9 @@ struct SearchView: View {
     // MARK: - Actions
 
     private func handleResultTap(_ result: SearchResult) {
+        #if DEBUG
+        logger.info("[SearchView] result tapped id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo) score=\(String(format: "%.4f", result.score))")
+        #endif
         Haptics.selection()
         if result.isVideo {
             if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
@@ -1030,6 +1044,53 @@ struct SearchView: View {
             }
         } else {
             selectedPhoto = result
+        }
+    }
+
+    private func validateVisibleResults(reason: String) {
+        let currentResults = results
+        let currentLast = lastResults
+        guard !currentResults.isEmpty || !currentLast.isEmpty else {
+            #if DEBUG
+            logger.info("[SearchView] visible-result validation skipped reason='\(reason)' because no visible results exist")
+            #endif
+            return
+        }
+
+        let resultIds = Set(currentResults.map(\.id))
+        let lastResultIds = Set(currentLast.map(\.id))
+        let candidates = currentResults + currentLast
+
+        // Run off the main thread because each getAsset call is a synchronous
+        // PHFetchRequest. With many results this can otherwise block the UI.
+        Task.detached {
+            let validIds = Set(
+                candidates
+                    .filter { PhotoLibrary.getAsset(by: $0.localIdentifier) != nil }
+                    .map(\.id)
+            )
+            await MainActor.run { [self] in
+                guard Set(results.map(\.id)) == resultIds, Set(lastResults.map(\.id)) == lastResultIds else {
+                    #if DEBUG
+                    logger.info("[SearchView] visible-result validation skipped reason='\(reason)' because results changed")
+                    #endif
+                    return
+                }
+
+                let updatedResults = currentResults.filter { validIds.contains($0.id) }
+                let updatedLast = currentLast.filter { validIds.contains($0.id) }
+                if updatedResults.count != currentResults.count || updatedLast.count != currentLast.count {
+                    #if DEBUG
+                    logger.info("[SearchView] visible-result validation removed stale assets reason='\(reason)' results \(currentResults.count) -> \(updatedResults.count), last \(currentLast.count) -> \(updatedLast.count)")
+                    #endif
+                    results = updatedResults
+                    lastResults = updatedLast
+                } else {
+                    #if DEBUG
+                    logger.info("[SearchView] visible-result validation kept all assets reason='\(reason)' count=\(candidates.count)")
+                    #endif
+                }
+            }
         }
     }
 
@@ -1066,37 +1127,78 @@ struct SearchView: View {
     }
 
     private func performSearch(saveToHistory: Bool = false) {
-        guard !searchText.isEmpty else { return }
+        let submittedText = searchText
+        let query = normalizedSearchQuery(submittedText)
+        guard !query.isEmpty else {
+            #if DEBUG
+            logger.info("[SearchView] performSearch ignored because normalized searchText is empty; submitted={\(debugTextMetadata(submittedText))}")
+            #endif
+            return
+        }
         Haptics.light()
         // Cancel any previous search so stale results can't land on top of
         // the new one (race condition when the user types quickly or when
         // the index is rebuilt mid-query).
-        searchTask?.cancel()
+        cancelActiveSearch(reason: "new search submitted", details: "incoming={\(debugTextMetadata(searchText))}")
         isSearching = true
         searchError = nil
         visibleCount = initialVisibleCount
-        let query = searchText
+        searchSequence += 1
+        let searchID = searchSequence
+        activeSearchID = searchID
         let startTime = CFAbsoluteTimeGetCurrent()
 
         searchTask = Task {
             do {
+                #if DEBUG
+                logger.info("[SearchView #\(searchID)] start query={\(debugTextMetadata(query))} submitted={\(debugTextMetadata(submittedText))} saveToHistory=\(saveToHistory) isReady=\(indexingService.isReady) indexLoaded=\(searchEngine.isIndexLoaded) indexVersion=\(indexingService.indexVersion) semanticReady=\(semanticRuntime.readiness.isSemanticSearchReady) progressRunning=\(indexingService.progress.isRunning)")
+                #endif
+                defer {
+                    #if DEBUG
+                    logger.info("[SearchView #\(searchID)] finish; activeSearchID=\(activeSearchID.map(String.init) ?? "nil"), results=\(results.count), fallback=\(fallbackResults.count), lastSearched='\(lastSearchedQuery ?? "nil")'")
+                    #endif
+                    if activeSearchID == searchID {
+                        isSearching = false
+                        activeSearchID = nil
+                        searchTask = nil
+                    }
+                }
                 indexingService.deferEnrichmentForUserSearch()
                 if !semanticRuntime.readiness.isSemanticSearchReady || !indexingService.isReady {
+                    #if DEBUG
+                    logger.info("[SearchView #\(searchID)] preparing semantic search; semanticReady=\(semanticRuntime.readiness.isSemanticSearchReady) isReady=\(indexingService.isReady)")
+                    #endif
                     try await semanticRuntime.prepareForSearch()
+                    #if DEBUG
+                    logger.info("[SearchView #\(searchID)] semantic prepare complete; semanticReady=\(semanticRuntime.readiness.isSemanticSearchReady) isReady=\(indexingService.isReady) indexLoaded=\(searchEngine.isIndexLoaded)")
+                    #endif
                 }
                 guard indexingService.isReady || searchEngine.isIndexLoaded else {
-                    searchError = "Index your photos before searching."
-                    isSearching = false
+                    #if DEBUG
+                    logger.info("[SearchView #\(searchID)] abort: index unavailable after prepare; isReady=\(indexingService.isReady) indexLoaded=\(searchEngine.isIndexLoaded)")
+                    #endif
+                    if activeSearchID == searchID {
+                        searchError = "Index your photos before searching."
+                    }
                     return
                 }
-                guard searchText == query else {
-                    isSearching = false
+                guard activeSearchID == searchID else {
+                    #if DEBUG
+                    logger.info("[SearchView #\(searchID)] abort before engine: superseded by activeSearchID=\(activeSearchID.map(String.init) ?? "nil")")
+                    #endif
                     return
                 }
+                #if DEBUG
+                logger.info("[SearchView #\(searchID)] calling SearchEngine.search query='\(query)'")
+                #endif
                 let response = try await searchEngine.search(query: query)
-                if Task.isCancelled { return }
-                guard searchText == query else {
-                    isSearching = false
+                #if DEBUG
+                logger.info("[SearchView #\(searchID)] engine returned main=\(response.results.count) fallback=\(response.fallbackResults.count) filters=\(response.filtersApplied != nil)")
+                #endif
+                if Task.isCancelled || activeSearchID != searchID {
+                    #if DEBUG
+                    logger.info("[SearchView #\(searchID)] abort after engine: canceledOrSuperseded taskCancelled=\(Task.isCancelled), activeSearchID=\(activeSearchID.map(String.init) ?? "nil")")
+                    #endif
                     return
                 }
                 results = response.results
@@ -1105,10 +1207,18 @@ struct SearchView: View {
                 filterSummary = response.filtersApplied
                 mediaFilter = .all
                 searchTimeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+                #if DEBUG
+                let first = response.results.first
+                logger.info("[SearchView #\(searchID)] applied response: results=\(results.count), fallback=\(fallbackResults.count), firstId=\(first?.localIdentifier ?? "nil"), firstIsVideo=\(first?.isVideo ?? false), mediaFilter=\(mediaFilter.rawValue), searchTimeMs=\(searchTimeMs)")
+                #endif
 
                 // Detect screenshots in background for the media filter
+                let resultIDs = Set(response.results.map(\.id))
                 let photoResults = response.results.filter { !$0.isVideo }
                 Task.detached {
+                    #if DEBUG
+                    logger.info("[SearchView #\(searchID)] screenshot detection started for photoResults=\(photoResults.count)")
+                    #endif
                     let detected = Set(
                         photoResults.compactMap { r -> String? in
                             guard let asset = PhotoLibrary.getAsset(by: r.localIdentifier),
@@ -1116,7 +1226,18 @@ struct SearchView: View {
                             return r.id
                         }
                     )
-                    await MainActor.run { screenshotIds = detected }
+                    await MainActor.run {
+                        guard Set(results.map(\.id)) == resultIDs else {
+                            #if DEBUG
+                            logger.info("[SearchView #\(searchID)] screenshot detection skipped because visible results changed")
+                            #endif
+                            return
+                        }
+                        #if DEBUG
+                        logger.info("[SearchView #\(searchID)] screenshot detection applied count=\(detected.count)")
+                        #endif
+                        screenshotIds = detected
+                    }
                 }
 
                 #if DEBUG
@@ -1144,12 +1265,78 @@ struct SearchView: View {
                     }
                 }
             } catch {
-                logger.error("Search failed: \(error.localizedDescription)")
-                searchError = "Search failed: \(error.localizedDescription)"
-                results = []
+                logger.error("[SearchView #\(searchID)] Search failed: \(error.localizedDescription)")
+                if activeSearchID == searchID {
+                    searchError = "Search failed: \(error.localizedDescription)"
+                    results = []
+                }
             }
-            isSearching = false
         }
     }
+
+    private func normalizedSearchQuery(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func cancelActiveSearch(reason: String, details: String) {
+        guard let task = searchTask else {
+            #if DEBUG
+            logger.info("[SearchView] cancel skipped reason='\(reason)' activeSearchID=\(activeSearchID.map(String.init) ?? "nil") details=\(details)")
+            #endif
+            return
+        }
+        #if DEBUG
+        logger.info("[SearchView] cancel searchTask reason='\(reason)' activeSearchID=\(activeSearchID.map(String.init) ?? "nil") isSearching=\(isSearching) searchText={\(debugTextMetadata(searchText))} lastSearched={\(debugTextMetadata(lastSearchedQuery ?? ""))} indexVersion=\(indexingService.indexVersion) details=\(details)")
+        #endif
+        task.cancel()
+    }
+
+    private func debugTextMetadata(_ value: String) -> String {
+        #if DEBUG
+        let scalars = value.unicodeScalars.map { String(format: "U+%04X", $0.value) }.joined(separator: ",")
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "text='\(value)' count=\(value.count) trimmed='\(trimmed)' scalars=[\(scalars)]"
+        #else
+        return value
+        #endif
+    }
+
+    #if DEBUG
+    private func debugLogResultsGrid(
+        inputCount: Int,
+        sortedCount: Int,
+        filteredCount: Int,
+        visibleCount: Int,
+        hasMore: Bool
+    ) {
+        logger.info("[SearchView] resultsGrid render input=\(inputCount) sorted=\(sortedCount) filtered=\(filteredCount) visible=\(visibleCount) hasMore=\(hasMore) mediaFilter=\(mediaFilter.rawValue) sort=\(sortMode.rawValue) searchText='\(searchText)' isSearching=\(isSearching)")
+    }
+
+    private func debugLogControlsPanel(filteredCount: Int) {
+        logger.info("[SearchView] controlsPanel render filteredCount=\(filteredCount) rawResults=\(results.count) isSearching=\(isSearching) mediaFilter=\(mediaFilter.rawValue)")
+    }
+
+    private func debugLogContentBranch() {
+        let branch: String
+        if isSearching {
+            branch = "searchingState"
+        } else if searchError != nil {
+            branch = "errorState"
+        } else if !searchText.isEmpty && results.isEmpty && !isSearching && lastSearchedQuery == normalizedSearchQuery(searchText) {
+            branch = "noResultsState"
+        } else if !searchText.isEmpty {
+            branch = "resultsGrid"
+        } else if !lastResults.isEmpty {
+            branch = "lastResultsView"
+        } else if indexingService.progress.isRunning && searchText.isEmpty && !indexingService.progress.photosComplete {
+            branch = "indexingSlideshow"
+        } else if results.isEmpty && searchText.isEmpty && (!indexingService.progress.isRunning || indexingService.progress.photosComplete) {
+            branch = "emptyOrHistoryState"
+        } else {
+            branch = "none"
+        }
+        logger.info("[SearchView] contentBranch=\(branch) searchTextLen=\(searchText.count) results=\(results.count) fallback=\(fallbackResults.count) lastResults=\(lastResults.count) isSearching=\(isSearching) lastSearched='\(lastSearchedQuery ?? "nil")' searchError=\(searchError ?? "nil") mediaFilter=\(mediaFilter.rawValue) indexReady=\(indexingService.isReady) indexLoaded=\(searchEngine.isIndexLoaded)")
+    }
+    #endif
 
 }

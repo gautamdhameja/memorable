@@ -227,7 +227,7 @@ class SearchEngine {
         let response = try hybridSearch(hints: hints)
 
         #if DEBUG
-        logger.info("[SearchEngine] Search completed in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - searchStart))s, \(response.results.count) results")
+        logger.info("[SearchEngine] Search completed in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - searchStart))s, main=\(response.results.count), fallback=\(response.fallbackResults.count), filters=\(response.filtersApplied != nil)")
         #endif
 
         return response
@@ -504,15 +504,20 @@ class SearchEngine {
 
                 var matchScore: Float = 0
                 for word in queryWords {
+                    var wordScore: Float = 0
                     if labelSet.contains(word) {
-                        matchScore += SearchConfig.sceneLabelBoostPerMatch
+                        wordScore += SearchConfig.sceneLabelBoostPerMatch
                     }
                     if let synonyms = SceneLabelConfig.synonyms[word] {
-                        let hits = synonyms.intersection(labelSet).count
+                        let hits = synonyms
+                            .subtracting([word])
+                            .intersection(labelSet)
+                            .count
                         if hits > 0 {
-                            matchScore += SearchConfig.sceneLabelBoostPerMatch * 0.5 * Float(hits)
+                            wordScore += SearchConfig.sceneLabelBoostPerMatch * 0.5 * Float(hits)
                         }
                     }
+                    matchScore += wordScore / Float(queryWords.count)
                 }
                 if matchScore > 0 {
                     scores[i] += matchScore
@@ -568,7 +573,7 @@ class SearchEngine {
 
             for i in 0..<vCount {
                 var frameScore = videoScores[i]
-                guard frameScore >= minimumScoreThreshold else { continue }
+                guard frameScore > 0 else { continue }
                 guard videoPassesHardFilters(
                     index: i, hints: hints, locationMatcher: locationMatcher, targetLoc: targetLoc,
                     dates: vDates, latitudes: vLats, longitudes: vLons,
@@ -588,15 +593,16 @@ class SearchEngine {
                     if inRange { frameScore += SearchConfig.timeOfDayMatchBoost }
                 }
 
-                guard frameScore >= minimumScoreThreshold else { continue }
-
                 // Videos don't get scene-label, OCR, or location-name boosts
                 // that photos receive because those features aren't indexed
                 // per video frame. Compensate so a genuinely relevant video
                 // isn't outranked by boost-inflated photos.
                 frameScore += SearchConfig.videoRelevanceCompensation
+                guard frameScore > 0 else { continue }
 
                 let vid = vIds[i]
+                guard frameScore >= minimumScoreThreshold else { continue }
+
                 if let existing = videoScoreMap[vid] {
                     if frameScore > existing.score {
                         videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], vPositions[i])
