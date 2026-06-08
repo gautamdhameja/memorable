@@ -133,22 +133,32 @@ struct ZoomableAsyncImage: View {
     // MARK: - Loading
 
     private func loadImage() async {
+        let targetSize = displayTargetSize()
         if result.isVideo {
             if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
                 let loaded = await VideoFrameExtractor.thumbnail(
                     from: asset,
                     atPosition: result.bestFramePosition ?? 0.5,
-                    targetSize: CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
+                    targetSize: targetSize
                 )
                 if !Task.isCancelled { image = loaded }
             }
         } else if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-            let targetSize = CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
             let loaded = await PhotoLibrary.loadImage(
                 for: asset,
                 targetSize: targetSize
             )
             if !Task.isCancelled { image = loaded }
         }
+    }
+
+    private func displayTargetSize() -> CGSize {
+        let screen = UIScreen.main.bounds.size
+        let scale = UIScreen.main.scale
+        let zoomHeadroom: CGFloat = 3
+        return CGSize(
+            width: screen.width * scale * zoomHeadroom,
+            height: screen.height * scale * zoomHeadroom
+        )
     }
 }

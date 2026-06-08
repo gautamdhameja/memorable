@@ -248,6 +248,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func allIndexedIdentifiers() throws -> Set<String> { [] }
     func allIndexedFilePaths() throws -> Set<String> { [] }
     func deleteAll() throws {}
+    func deletePhoto(localIdentifier: String) throws {}
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws {}
     func fetchRandomPhoto(sharp: Bool) throws -> IndexedPhoto? { nil }
     func photosNeedingEnrichment(limit: Int) throws -> [PhotoEnrichmentCandidate] { [] }

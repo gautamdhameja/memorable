@@ -137,7 +137,9 @@ class IndexingService: ObservableObject {
                 #endif
 
                 if cleanOrphans {
-                    let allMedia = PhotoLibrary.fetchAllMedia()
+                    let allMedia = await Task.detached(priority: loadPriority) {
+                        PhotoLibrary.fetchAllMedia()
+                    }.value
                     launchLibraryCountSnapshot = allMedia.count
                     await cleanOrphanedEmbeddings(allMedia: allMedia)
                 }
@@ -257,6 +259,12 @@ class IndexingService: ObservableObject {
                 if totalInLibrary > totalIndexed {
                     await MainActor.run { self.newPhotosAvailable = true }
                 } else if totalInLibrary < totalIndexed {
+                    guard PHPhotoLibrary.authorizationStatus(for: .readWrite) != .limited else {
+                        #if DEBUG
+                        logger.info("[IndexingService] Ignoring lower visible PhotoKit count under limited Photos access")
+                        #endif
+                        return
+                    }
                     // Photos were deleted. Run lightweight orphan cleanup.
                     var currentIds = Set<String>()
                     for i in 0..<allMedia.count {
@@ -281,7 +289,9 @@ class IndexingService: ObservableObject {
         beginBackgroundTask()
         defer { endBackgroundTask() }
 
-        let allAssets = PhotoLibrary.fetchAllMedia()
+        let allAssets = await Task.detached(priority: .userInitiated) {
+            PhotoLibrary.fetchAllMedia()
+        }.value
         let total = allAssets.count
         hitFreeLimit = false
 
@@ -292,14 +302,20 @@ class IndexingService: ObservableObject {
 
         let alreadyIndexed: Set<String>
         do {
-            alreadyIndexed = try database.allIndexedIdentifiers()
+            let db = database
+            alreadyIndexed = try await Task.detached(priority: .userInitiated) {
+                try db.allIndexedIdentifiers()
+            }.value
         } catch {
             logger.error("Failed to load indexed identifiers: \(error.localizedDescription)")
             alreadyIndexed = []
         }
         let alreadyIndexedVideos: Set<String>
         do {
-            alreadyIndexedVideos = try database.allIndexedVideoIdentifiers()
+            let db = database
+            alreadyIndexedVideos = try await Task.detached(priority: .userInitiated) {
+                try db.allIndexedVideoIdentifiers()
+            }.value
         } catch {
             logger.error("Failed to load indexed video identifiers: \(error.localizedDescription)")
             alreadyIndexedVideos = []
@@ -404,12 +420,13 @@ class IndexingService: ObservableObject {
             // Phase 2: Batch Core ML encoding
             do {
                 let images = loadedImages.map { $0.image }
-                let embeddings: [[Float]]
-                if images.count > 1 {
-                    embeddings = try imageEncoder.encodeBatch(images: images)
-                } else {
-                    embeddings = [try imageEncoder.encode(image: images[0])]
-                }
+                let encoder = imageEncoder
+                let embeddings = try await Task.detached(priority: .userInitiated) {
+                    if images.count > 1 {
+                        return try encoder.encodeBatch(images: images)
+                    }
+                    return [try encoder.encode(image: images[0])]
+                }.value
 
                 for (i, (asset, _)) in loadedImages.enumerated() {
                     guard i < embeddings.count else { break }
@@ -441,7 +458,10 @@ class IndexingService: ObservableObject {
                         break
                     }
                     do {
-                        let embedding = try imageEncoder.encode(image: image)
+                        let encoder = imageEncoder
+                        let embedding = try await Task.detached(priority: .userInitiated) {
+                            try encoder.encode(image: image)
+                        }.value
 
                         batch.append(IndexedPhoto(
                             id: UUID().uuidString,
@@ -464,11 +484,20 @@ class IndexingService: ObservableObject {
             // Flush DB batches (outside encoding try block)
             if batch.count >= batchSize {
                 do {
-                    try database.insertPhotos(batch)
+                    let db = database
+                    let photosToInsert = batch
+                    try await Task.detached(priority: .utility) {
+                        try db.insertPhotos(photosToInsert)
+                    }.value
                 } catch {
                     logger.error("Failed to insert photo batch: \(error.localizedDescription), retrying individually")
                     for photo in batch {
-                        do { try database.insertPhotos([photo]) }
+                        do {
+                            let db = database
+                            try await Task.detached(priority: .utility) {
+                                try db.insertPhotos([photo])
+                            }.value
+                        }
                         catch { logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)") }
                     }
                 }
@@ -497,11 +526,20 @@ class IndexingService: ObservableObject {
 
         if !batch.isEmpty {
             do {
-                try database.insertPhotos(batch)
+                let db = database
+                let photosToInsert = batch
+                try await Task.detached(priority: .utility) {
+                    try db.insertPhotos(photosToInsert)
+                }.value
             } catch {
                 logger.error("Failed to flush photo batch: \(error.localizedDescription), retrying individually")
                 for photo in batch {
-                    do { try database.insertPhotos([photo]) }
+                    do {
+                        let db = database
+                        try await Task.detached(priority: .utility) {
+                            try db.insertPhotos([photo])
+                        }.value
+                    }
                     catch { logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)") }
                 }
             }
@@ -585,10 +623,17 @@ class IndexingService: ObservableObject {
             id: sourceId, type: PhotoSourceType.folder.rawValue, path: url.path, name: name,
             addedAt: Date(), lastIndexedAt: nil, photoCount: 0
         )
-        do { try database.insertSource(source) }
+        do {
+            let db = database
+            try await Task.detached(priority: .utility) {
+                try db.insertSource(source)
+            }.value
+        }
         catch { logger.error("Failed to create source: \(error.localizedDescription)"); return }
 
-        let imageURLs = FolderScanner.scanFolder(at: url)
+        let imageURLs = await Task.detached(priority: .utility) {
+            FolderScanner.scanFolder(at: url)
+        }.value
         progress = IndexingProgress(
             total: imageURLs.count,
             completed: 0,
@@ -596,7 +641,10 @@ class IndexingService: ObservableObject {
             searchableCount: searchEngine.totalSize
         )
 
-        let alreadyIndexed = (try? database.allIndexedFilePaths()) ?? []
+        let db = database
+        let alreadyIndexed = await Task.detached(priority: .utility) {
+            (try? db.allIndexedFilePaths()) ?? []
+        }.value
         var indexed = 0
         var batch: [IndexedPhoto] = []
 
@@ -609,24 +657,35 @@ class IndexingService: ObservableObject {
                 continue
             }
 
-            guard let image = FolderScanner.loadImage(from: imageURL) else {
+            let loadedImage = await Task.detached(priority: .utility) {
+                FolderScanner.loadImage(from: imageURL)
+            }.value
+            guard let image = loadedImage else {
                 indexed += 1
                 progress.completed = indexed
                 continue
             }
 
             do {
-                let embedding = try imageEncoder.encode(image: image)
-                let metadata = FolderScanner.extractMetadata(from: imageURL)
+                let encoder = imageEncoder
+                let embedding = try await Task.detached(priority: .userInitiated) {
+                    try encoder.encode(image: image)
+                }.value
+                let metadata = await Task.detached(priority: .utility) {
+                    FolderScanner.extractMetadata(from: imageURL)
+                }.value
 
                 // Use original image dimensions from the file, not the resized 224x224 image
-                var originalWidth = 0
-                var originalHeight = 0
-                if let imageSource = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
-                   let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any] {
-                    originalWidth = properties[kCGImagePropertyPixelWidth] as? Int ?? 0
-                    originalHeight = properties[kCGImagePropertyPixelHeight] as? Int ?? 0
-                }
+                var (originalWidth, originalHeight) = await Task.detached(priority: .utility) {
+                    var width = 0
+                    var height = 0
+                    if let imageSource = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
+                       let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any] {
+                        width = properties[kCGImagePropertyPixelWidth] as? Int ?? 0
+                        height = properties[kCGImagePropertyPixelHeight] as? Int ?? 0
+                    }
+                    return (width, height)
+                }.value
                 if originalWidth == 0 || originalHeight == 0 {
                     // Fallback to UIImage size (may still be resized, but better than nothing)
                     if originalWidth == 0 { originalWidth = Int(image.size.width) }
@@ -635,7 +694,7 @@ class IndexingService: ObservableObject {
 
                 batch.append(IndexedPhoto(
                     id: UUID().uuidString,
-                    localIdentifier: imageURL.lastPathComponent,
+                    localIdentifier: FolderScanner.localIdentifier(for: imageURL, within: url, sourceId: sourceId),
                     creationDate: metadata.date,
                     latitude: metadata.latitude,
                     longitude: metadata.longitude,
@@ -648,7 +707,11 @@ class IndexingService: ObservableObject {
                 ))
 
                 if batch.count >= batchSize {
-                    try database.insertPhotos(batch)
+                    let db = database
+                    let photosToInsert = batch
+                    try await Task.detached(priority: .utility) {
+                        try db.insertPhotos(photosToInsert)
+                    }.value
                     batch.removeAll(keepingCapacity: true)
                 }
             } catch {
@@ -662,17 +725,31 @@ class IndexingService: ObservableObject {
 
         if !batch.isEmpty {
             do {
-                try database.insertPhotos(batch)
+                let db = database
+                let photosToInsert = batch
+                try await Task.detached(priority: .utility) {
+                    try db.insertPhotos(photosToInsert)
+                }.value
             } catch {
                 logger.error("Failed to flush folder batch: \(error.localizedDescription), retrying individually")
                 for photo in batch {
-                    do { try database.insertPhotos([photo]) }
+                    do {
+                        let db = database
+                        try await Task.detached(priority: .utility) {
+                            try db.insertPhotos([photo])
+                        }.value
+                    }
                     catch { logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)") }
                 }
             }
         }
 
-        do { try database.updateSourceStats(sourceId, photoCount: indexed) }
+        do {
+            let db = database
+            try await Task.detached(priority: .utility) {
+                try db.updateSourceStats(sourceId, photoCount: indexed)
+            }.value
+        }
         catch { logger.error("Failed to update source stats: \(error.localizedDescription)") }
 
         await reloadSearchIndex()
@@ -1015,18 +1092,36 @@ class IndexingService: ObservableObject {
 
     private func cleanOrphanedEmbeddings(allMedia: PHFetchResult<PHAsset>? = nil) async {
         do {
-            let media = allMedia ?? PhotoLibrary.fetchAllMedia()
+            guard PHPhotoLibrary.authorizationStatus(for: .readWrite) != .limited else {
+                #if DEBUG
+                logger.info("[IndexingService] Skipping orphan cleanup under limited Photos access")
+                #endif
+                return
+            }
+            let media: PHFetchResult<PHAsset>
+            if let allMedia {
+                media = allMedia
+            } else {
+                media = await Task.detached(priority: .utility) {
+                    PhotoLibrary.fetchAllMedia()
+                }.value
+            }
             var libraryIds = Set<String>(minimumCapacity: media.count)
             for i in 0..<media.count {
                 libraryIds.insert(media[i].localIdentifier)
             }
 
             // Find orphaned photo embeddings
-            let indexedPhotoIds = try database.allIndexedIdentifiers()
+            let db = database
+            let indexedPhotoIds = try await Task.detached(priority: .utility) {
+                try db.allIndexedIdentifiers()
+            }.value
             let orphanedPhotos = indexedPhotoIds.subtracting(libraryIds)
 
             // Find orphaned video embeddings
-            let indexedVideoIds = try database.allIndexedVideoIdentifiers()
+            let indexedVideoIds = try await Task.detached(priority: .utility) {
+                try db.allIndexedVideoIdentifiers()
+            }.value
             let orphanedVideos = indexedVideoIds.subtracting(libraryIds)
 
             let totalOrphans = orphanedPhotos.count + orphanedVideos.count
@@ -1050,7 +1145,9 @@ class IndexingService: ObservableObject {
 
             // Delete orphaned photos
             if !orphanedPhotos.isEmpty {
-                try database.deleteOrphanedPhotos(localIdentifiers: orphanedPhotos)
+                try await Task.detached(priority: .utility) {
+                    try db.deleteOrphanedPhotos(localIdentifiers: orphanedPhotos)
+                }.value
                 #if DEBUG
                 logger.info("Cleaned \(orphanedPhotos.count) orphaned photo embeddings")
                 #endif
@@ -1058,7 +1155,9 @@ class IndexingService: ObservableObject {
 
             // Delete orphaned videos
             if !orphanedVideos.isEmpty {
-                try database.deleteOrphanedVideos(localIdentifiers: orphanedVideos)
+                try await Task.detached(priority: .utility) {
+                    try db.deleteOrphanedVideos(localIdentifiers: orphanedVideos)
+                }.value
                 #if DEBUG
                 logger.info("Cleaned \(orphanedVideos.count) orphaned video embeddings")
                 #endif
@@ -1094,16 +1193,27 @@ class IndexingService: ObservableObject {
         // total geocoding progress across the library, not just work remaining
         // in this session. Without this, the bar appears to reset to 0 on
         // every launch even though prior sessions already did most of the work.
-        let totalWithGPS = ((try? database.photosWithGPSCount()) ?? 0)
-            + ((try? database.videosWithGPSCount()) ?? 0)
-        let remainingAtStart = ((try? database.photosNeedingLocationBackfillCount()) ?? 0)
-            + ((try? database.videosNeedingLocationBackfillCount()) ?? 0)
+        let db = database
+        let counts = await Task.detached(priority: .utility) {
+            let totalWithGPS = ((try? db.photosWithGPSCount()) ?? 0)
+                + ((try? db.videosWithGPSCount()) ?? 0)
+            let remainingAtStart = ((try? db.photosNeedingLocationBackfillCount()) ?? 0)
+                + ((try? db.videosNeedingLocationBackfillCount()) ?? 0)
+            let totalPhotos = (try? db.indexedCount()) ?? 0
+            let totalVideos = (try? db.videoIndexedCount()) ?? 0
+            return (
+                totalWithGPS: totalWithGPS,
+                remainingAtStart: remainingAtStart,
+                totalPhotos: totalPhotos,
+                totalVideos: totalVideos
+            )
+        }.value
+        let totalWithGPS = counts.totalWithGPS
+        let remainingAtStart = counts.remainingAtStart
         let alreadyGeocoded = max(0, totalWithGPS - remainingAtStart)
 
         #if DEBUG
-        let totalPhotos = (try? database.indexedCount()) ?? 0
-        let totalVideos = (try? database.videoIndexedCount()) ?? 0
-        logger.info("[Geocoder] Starting: \(remainingAtStart) / \(totalWithGPS) remaining out of GPS-tagged media (\(totalPhotos) photos + \(totalVideos) videos indexed)")
+        logger.info("[Geocoder] Starting: \(remainingAtStart) / \(totalWithGPS) remaining out of GPS-tagged media (\(counts.totalPhotos) photos + \(counts.totalVideos) videos indexed)")
         #endif
 
         if remainingAtStart > 0 {
@@ -1120,7 +1230,10 @@ class IndexingService: ObservableObject {
         while true {
             let batch: [(localIdentifier: String, lat: Double, lon: Double)]
             do {
-                batch = try database.photosNeedingLocationBackfill(limit: 500)
+                let db = database
+                batch = try await Task.detached(priority: .utility) {
+                    try db.photosNeedingLocationBackfill(limit: 500)
+                }.value
             } catch {
                 logger.error("[Geocoder] Failed to fetch photo backfill batch: \(error.localizedDescription)")
                 break
@@ -1131,11 +1244,14 @@ class IndexingService: ObservableObject {
             for (localId, lat, lon) in actionable {
                 if Task.isCancelled { return }
                 if let loc = await reverseGeocoder.reverseGeocode(latitude: lat, longitude: lon) {
-                    try? database.updatePhotoLocationStrings(
-                        localIdentifier: localId,
-                        city: loc.city, state: loc.state,
-                        country: loc.country, name: loc.name
-                    )
+                    let db = database
+                    await Task.detached(priority: .utility) {
+                        try? db.updatePhotoLocationStrings(
+                            localIdentifier: localId,
+                            city: loc.city, state: loc.state,
+                            country: loc.country, name: loc.name
+                        )
+                    }.value
                     totalGeocoded += 1
                     let doneSnapshot = alreadyGeocoded + totalGeocoded
                     await MainActor.run {
@@ -1164,7 +1280,10 @@ class IndexingService: ObservableObject {
         while true {
             let batch: [(localIdentifier: String, lat: Double, lon: Double)]
             do {
-                batch = try database.videosNeedingLocationBackfill(limit: 500)
+                let db = database
+                batch = try await Task.detached(priority: .utility) {
+                    try db.videosNeedingLocationBackfill(limit: 500)
+                }.value
             } catch {
                 logger.error("[Geocoder] Failed to fetch video backfill batch: \(error.localizedDescription)")
                 break
@@ -1175,11 +1294,14 @@ class IndexingService: ObservableObject {
             for (localId, lat, lon) in actionable {
                 if Task.isCancelled { return }
                 if let loc = await reverseGeocoder.reverseGeocode(latitude: lat, longitude: lon) {
-                    try? database.updateVideoLocationStrings(
-                        localIdentifier: localId,
-                        city: loc.city, state: loc.state,
-                        country: loc.country, name: loc.name
-                    )
+                    let db = database
+                    await Task.detached(priority: .utility) {
+                        try? db.updateVideoLocationStrings(
+                            localIdentifier: localId,
+                            city: loc.city, state: loc.state,
+                            country: loc.country, name: loc.name
+                        )
+                    }.value
                     totalGeocoded += 1
                     let doneSnapshot = alreadyGeocoded + totalGeocoded
                     await MainActor.run {
@@ -1197,7 +1319,10 @@ class IndexingService: ObservableObject {
         logger.info("[Geocoder] Completed: \(totalGeocoded) media items geocoded")
         #endif
         if totalGeocoded > 0 {
-            try? searchEngine.loadIndex()
+            let engine = searchEngine
+            try? await Task.detached(priority: .utility) {
+                try engine.loadIndex()
+            }.value
         }
         await MainActor.run {
             self.geocodingProgress = nil
@@ -1207,7 +1332,12 @@ class IndexingService: ObservableObject {
     // MARK: - Video Indexing
 
     private func indexVideo(asset: PHAsset) async {
-        guard (try? database.isVideoIndexed(localIdentifier: asset.localIdentifier)) != true else { return }
+        let db = database
+        let localIdentifier = asset.localIdentifier
+        let alreadyIndexed = await Task.detached(priority: .utility) {
+            (try? db.isVideoIndexed(localIdentifier: localIdentifier)) == true
+        }.value
+        guard !alreadyIndexed else { return }
 
         guard let avAsset = await VideoFrameExtractor.loadAVAsset(from: asset) else { return }
 
@@ -1237,7 +1367,10 @@ class IndexingService: ObservableObject {
         )
 
         do {
-            try database.insertVideo(video)
+            let db = database
+            try await Task.detached(priority: .utility) {
+                try db.insertVideo(video)
+            }.value
         } catch {
             logger.error("Failed to insert video record: \(error.localizedDescription)")
             return
@@ -1246,12 +1379,13 @@ class IndexingService: ObservableObject {
         // Batch-encode all frames at once
         do {
             let images = frames.map { $0.image }
-            let embeddings: [[Float]]
-            if images.count > 1 {
-                embeddings = try imageEncoder.encodeBatch(images: images)
-            } else {
-                embeddings = [try imageEncoder.encode(image: images[0])]
-            }
+            let encoder = imageEncoder
+            let embeddings = try await Task.detached(priority: .userInitiated) {
+                if images.count > 1 {
+                    return try encoder.encodeBatch(images: images)
+                }
+                return [try encoder.encode(image: images[0])]
+            }.value
 
             // Batch-insert all frames in one transaction
             var frameRecords: [IndexedVideoFrame] = []
@@ -1265,7 +1399,10 @@ class IndexingService: ObservableObject {
                     indexedAt: Date()
                 ))
             }
-            try database.insertVideoFrames(frameRecords)
+            let db = database
+            try await Task.detached(priority: .utility) {
+                try db.insertVideoFrames(frameRecords)
+            }.value
         } catch {
             logger.error("Failed to index video frames: \(error.localizedDescription)")
         }

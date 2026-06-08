@@ -103,13 +103,20 @@ struct SearchResultsViewer: View {
         guard let asset = PhotoLibrary.getAsset(by: result.localIdentifier) else { return }
 
         Task {
-            guard let image = await PhotoLibrary.loadImage(
+            let item: Any
+            if let url = await PhotoLibrary.getQuickLookURL(for: asset) {
+                item = url
+            } else if let image = await PhotoLibrary.loadImage(
                 for: asset,
-                targetSize: CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
-            ) else { return }
+                targetSize: shareFallbackTargetSize()
+            ) {
+                item = image
+            } else {
+                return
+            }
 
             await MainActor.run {
-                let activityVC = UIActivityViewController(activityItems: [image], applicationActivities: nil)
+                let activityVC = UIActivityViewController(activityItems: [item], applicationActivities: nil)
                 if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                    let rootVC = windowScene.windows.first?.rootViewController {
                     var topVC = rootVC
@@ -119,5 +126,11 @@ struct SearchResultsViewer: View {
                 }
             }
         }
+    }
+
+    private func shareFallbackTargetSize() -> CGSize {
+        let screen = UIScreen.main.bounds.size
+        let scale = UIScreen.main.scale
+        return CGSize(width: screen.width * scale * 2, height: screen.height * scale * 2)
     }
 }

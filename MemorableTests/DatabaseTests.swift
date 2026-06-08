@@ -81,6 +81,67 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(candidate.filePath, "/tmp/folder-image.jpg")
     }
 
+    func testDeletePhotoRemovesOnlyMatchingIdentifier() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.insertPhoto(makePhoto(localIdentifier: "delete-me"))
+        try database.insertPhoto(makePhoto(localIdentifier: "keep-me"))
+
+        try database.deletePhoto(localIdentifier: "delete-me")
+
+        XCTAssertFalse(try database.isIndexed(localIdentifier: "delete-me"))
+        XCTAssertTrue(try database.isIndexed(localIdentifier: "keep-me"))
+        XCTAssertEqual(try database.indexedCount(), 1)
+    }
+
+    func testDeleteSourceRemovesPersistedBookmark() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let sourceId = "folder-source-delete"
+        UserDefaults.standard.set(Data([1, 2, 3]), forKey: AppKeys.folderBookmark(sourceId: sourceId))
+        try database.insertSource(PhotoSource(
+            id: sourceId,
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/folder",
+            name: "Folder",
+            addedAt: Date(timeIntervalSince1970: 100),
+            lastIndexedAt: nil,
+            photoCount: 0
+        ))
+
+        try database.deleteSource(sourceId)
+
+        XCTAssertNil(UserDefaults.standard.data(forKey: AppKeys.folderBookmark(sourceId: sourceId)))
+    }
+
+    func testFolderLocalIdentifierUsesSourceAndRelativePath() {
+        let folderA = URL(fileURLWithPath: "/tmp/a")
+        let folderB = URL(fileURLWithPath: "/tmp/b")
+        let first = FolderScanner.localIdentifier(
+            for: URL(fileURLWithPath: "/tmp/a/nested/IMG_0001.JPG"),
+            within: folderA,
+            sourceId: "source-a"
+        )
+        let second = FolderScanner.localIdentifier(
+            for: URL(fileURLWithPath: "/tmp/b/nested/IMG_0001.JPG"),
+            within: folderB,
+            sourceId: "source-b"
+        )
+        let sibling = FolderScanner.localIdentifier(
+            for: URL(fileURLWithPath: "/tmp/a/other/IMG_0001.JPG"),
+            within: folderA,
+            sourceId: "source-a"
+        )
+
+        XCTAssertEqual(first, "folder:source-a:nested/IMG_0001.JPG")
+        XCTAssertNotEqual(first, second)
+        XCTAssertNotEqual(first, sibling)
+    }
+
     func testPhotoEnrichmentMigrationCreatesPendingLookupIndex() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },

@@ -59,15 +59,7 @@ class VideoFrameExtractor {
     }
 
     static func loadAVAsset(from phAsset: PHAsset) async -> AVAsset? {
-        await withTimeout(seconds: TimeoutConfig.videoLoad) { completion in
-            let options = PHVideoRequestOptions()
-            options.isNetworkAccessAllowed = false
-            options.deliveryMode = .highQualityFormat
-
-            PHImageManager.default().requestAVAsset(forVideo: phAsset, options: options) { avAsset, _, _ in
-                completion(avAsset)
-            }
-        }
+        await PhotoLibrary.loadAVAsset(for: phAsset)
     }
 
     static func thumbnail(from phAsset: PHAsset, atPosition position: Double, targetSize: CGSize = CGSize(width: 400, height: 400)) async -> UIImage? {

@@ -2,6 +2,10 @@ import Foundation
 import UIKit
 
 class FolderScanner {
+    // `.withSecurityScope` is unavailable on iOS. Persist the document-picker
+    // bookmark and pair every access with start/stopAccessingSecurityScopedResource.
+    private static let bookmarkOptions: URL.BookmarkCreationOptions = .minimalBookmark
+    private static let bookmarkResolutionOptions: URL.BookmarkResolutionOptions = []
 
     private static let exifDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -15,12 +19,17 @@ class FolderScanner {
             return nil
         }
         var isStale = false
-        guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &isStale) else {
+        guard let url = try? URL(
+            resolvingBookmarkData: data,
+            options: bookmarkResolutionOptions,
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ) else {
             return nil
         }
         if isStale {
             // Re-save refreshed bookmark
-            if let fresh = try? url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil) {
+            if let fresh = try? url.bookmarkData(options: bookmarkOptions, includingResourceValuesForKeys: nil, relativeTo: nil) {
                 UserDefaults.standard.set(fresh, forKey: AppKeys.folderBookmark(sourceId: sourceId))
             }
         }
@@ -77,6 +86,18 @@ class FolderScanner {
         let folderPath = folderURL.standardizedFileURL.resolvingSymlinksInPath().path
         let filePath = imageURL.standardizedFileURL.resolvingSymlinksInPath().path
         return filePath.hasPrefix(folderPath + "/")
+    }
+
+    static func localIdentifier(for imageURL: URL, within folderURL: URL, sourceId: String) -> String {
+        let folderPath = folderURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let filePath = imageURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let relativePath: String
+        if filePath.hasPrefix(folderPath + "/") {
+            relativePath = String(filePath.dropFirst(folderPath.count + 1))
+        } else {
+            relativePath = imageURL.lastPathComponent
+        }
+        return "folder:\(sourceId):\(relativePath)"
     }
 
     // Scan a folder and return all image file URLs

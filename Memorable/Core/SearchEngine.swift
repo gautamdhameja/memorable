@@ -94,6 +94,15 @@ class SearchEngine {
             throw SearchEngineError.corruptedIndex
         }
 
+        #if !targetEnvironment(simulator)
+        let newGPUSearch = GPUSimilaritySearch()
+        newGPUSearch?.buildIndex(embeddings: data.embeddings, count: data.ids.count)
+        let newGPUVideoSearch = GPUSimilaritySearch()
+        if videoData.videoIds.count > 0 {
+            newGPUVideoSearch?.buildIndex(embeddings: videoData.embeddings, count: videoData.videoIds.count)
+        }
+        #endif
+
         lock.lock()
         defer { lock.unlock() }
         self.photoIds = data.ids
@@ -124,21 +133,10 @@ class SearchEngine {
         self.videoFrameCount = videoData.videoIds.count
         self.uniqueVideoCount = Set(videoData.videoIds).count
 
-        // Recreate GPU search objects if they were dropped (e.g. after memory warning)
         #if !targetEnvironment(simulator)
-        if gpuSearch == nil {
-            gpuSearch = GPUSimilaritySearch()
-        }
-        if gpuVideoSearch == nil {
-            gpuVideoSearch = GPUSimilaritySearch()
-        }
+        self.gpuSearch = newGPUSearch
+        self.gpuVideoSearch = videoData.videoIds.isEmpty ? nil : newGPUVideoSearch
         #endif
-
-        // Build GPU search indices
-        gpuSearch?.buildIndex(embeddings: data.embeddings, count: data.ids.count)
-        if videoData.videoIds.count > 0 {
-            gpuVideoSearch?.buildIndex(embeddings: videoData.embeddings, count: videoData.videoIds.count)
-        }
 
         let count = data.ids.count
         let memoryMB = (count + videoFrameCount) * embeddingDim * MemoryLayout<Float16>.size / 1_048_576
@@ -155,16 +153,34 @@ class SearchEngine {
     }
 
     var estimatedMemoryUsage: Int {
-        (photoCount + videoFrameCount) * embeddingDim * MemoryLayout<Float16>.size
+        lock.lock()
+        defer { lock.unlock() }
+        return (photoCount + videoFrameCount) * embeddingDim * MemoryLayout<Float16>.size
     }
 
     var isLargeLibrary: Bool {
-        (photoCount + videoFrameCount) > Self.maxRecommendedPhotos
+        lock.lock()
+        defer { lock.unlock() }
+        return (photoCount + videoFrameCount) > Self.maxRecommendedPhotos
     }
 
-    var indexSize: Int { photoCount }
-    var videoSize: Int { uniqueVideoCount }
-    var totalSize: Int { photoCount + uniqueVideoCount }
+    var indexSize: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return photoCount
+    }
+
+    var videoSize: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return uniqueVideoCount
+    }
+
+    var totalSize: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return photoCount + uniqueVideoCount
+    }
 
     var isIndexLoaded: Bool {
         lock.lock()
@@ -251,17 +267,20 @@ class SearchEngine {
         let (ids, localIds, photoDates, photoLats, photoLons, photoOcrTexts,
              pCities, pStates, pCountries, pLocNames, photoLabels, matrix, count,
              vIds, vLocalIds, vDates, vLats, vLons, vPositions,
-             vCities, vStates, vCountries, vLocNames, vMatrix, vCount):
+             vCities, vStates, vCountries, vLocNames, vMatrix, vCount,
+             photoGPU, videoGPU):
             ([String], [String], [Date?], [Double?], [Double?], [String?],
              [String?], [String?], [String?], [String?], [String?], [Float16], Int,
              [String], [String], [Date?], [Double?], [Double?], [Double],
-             [String?], [String?], [String?], [String?], [Float16], Int) = {
+             [String?], [String?], [String?], [String?], [Float16], Int,
+             GPUSimilaritySearch?, GPUSimilaritySearch?) = {
             lock.lock()
             defer { lock.unlock() }
             return (photoIds, localIdentifiers, dates, latitudes, longitudes, ocrTexts,
                     photoCities, photoStates, photoCountries, photoLocationNames, photoSceneLabels, embeddingMatrix, photoCount,
                     videoIds, videoLocalIds, videoDates, videoLatitudes, videoLongitudes, videoFramePositions,
-                    videoCities, videoStates, videoCountries, videoLocationNames, videoEmbeddingMatrix, videoFrameCount)
+                    videoCities, videoStates, videoCountries, videoLocationNames, videoEmbeddingMatrix, videoFrameCount,
+                    gpuSearch, gpuVideoSearch)
         }()
 
         guard count + vCount > 0 else { return SearchResponse(results: [], fallbackResults: [], filtersApplied: nil) }
@@ -379,7 +398,7 @@ class SearchEngine {
         // Empty candidate set with active filters → provide fallback
         if candidateCount == 0 && videoCandidateCount == 0 && filtersActive {
             let fallbackResults = hints.hasVisualQuery
-                ? computeFallbackResults(text: hints.textQuery, ids: ids, localIds: localIds, dates: photoDates, matrix: matrix, count: count)
+                ? computeFallbackResults(text: hints.textQuery, ids: ids, localIds: localIds, dates: photoDates, matrix: matrix, count: count, gpuSearch: photoGPU)
                 : []
             let summary = FilterSummary(
                 dateDescription: hints.dateRange.map { formatDateRange($0) },
@@ -411,7 +430,7 @@ class SearchEngine {
         let queryEmbedding = try encodeQuery(text: hints.textQuery)
         let negativeEmbeddings = try hints.negativeTerms.map { try textEncoder.encode(text: $0) }
 
-        var scores = scoreEmbeddings(queryEmbedding: queryEmbedding, matrix: matrix, count: count, gpuSearch: gpuSearch)
+        var scores = scoreEmbeddings(queryEmbedding: queryEmbedding, matrix: matrix, count: count, gpuSearch: photoGPU)
 
         // Zero out non-candidates
         for i in 0..<count {
@@ -559,7 +578,7 @@ class SearchEngine {
         var videoScoreMap: [String: (score: Float, localId: String, date: Date?, framePosition: Double)] = [:]
 
         if vCount > 0 {
-            let videoScores = scoreEmbeddings(queryEmbedding: queryEmbedding, matrix: vMatrix, count: vCount, gpuSearch: gpuVideoSearch)
+            let videoScores = scoreEmbeddings(queryEmbedding: queryEmbedding, matrix: vMatrix, count: vCount, gpuSearch: videoGPU)
             var negativeVideoRowBuffer = [Float](repeating: 0, count: embeddingDim)
 
             #if DEBUG
@@ -845,7 +864,8 @@ class SearchEngine {
 
     private func computeFallbackResults(
         text: String, ids: [String], localIds: [String],
-        dates: [Date?], matrix: [Float16], count: Int
+        dates: [Date?], matrix: [Float16], count: Int,
+        gpuSearch: GPUSimilaritySearch?
     ) -> [SearchResult] {
         guard let queryEmbedding = try? encodeQuery(text: text) else { return [] }
         let scores = scoreEmbeddings(queryEmbedding: queryEmbedding, matrix: matrix, count: count, gpuSearch: gpuSearch)
@@ -862,10 +882,10 @@ class SearchEngine {
     // MARK: - Similar Photos
 
     func findSimilar(photoId: String, topK: Int = 50) -> [SearchResult] {
-        let (ids, localIds, photoDates, matrix, count) = {
+        let (ids, localIds, photoDates, matrix, count, photoGPU) = {
             lock.lock()
             defer { lock.unlock() }
-            return (photoIds, localIdentifiers, dates, embeddingMatrix, photoCount)
+            return (photoIds, localIdentifiers, dates, embeddingMatrix, photoCount, gpuSearch)
         }()
 
         guard let sourceIndex = ids.firstIndex(of: photoId) else { return [] }
@@ -877,7 +897,7 @@ class SearchEngine {
 
         // GPU search with CPU fallback
         var scores: [Float]
-        if let gpuScores = gpuSearch?.search(queryEmbedding: sourceEmbedding), gpuScores.count == count {
+        if let gpuScores = photoGPU?.search(queryEmbedding: sourceEmbedding), gpuScores.count == count {
             scores = gpuScores
             scores[sourceIndex] = 0 // exclude self
         } else {

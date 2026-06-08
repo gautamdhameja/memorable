@@ -36,7 +36,7 @@ struct DuplicateFinderView: View {
                         List {
                             Section {
                                 ForEach(duplicates) { pair in
-                                    DuplicatePairRow(pair: pair) { deletedPair in
+                                    DuplicatePairRow(pair: pair, searchEngine: searchEngine) { deletedPair in
                                         duplicates.removeAll { $0.id == deletedPair.id }
                                     }
                                     .listRowBackground(Celestial.Colors.surfaceContainerHigh)
@@ -106,7 +106,9 @@ struct DuplicateFinderView: View {
 
 struct DuplicatePairRow: View {
     let pair: DuplicatePair
+    let searchEngine: SearchEngine
     var onDelete: ((DuplicatePair) -> Void)?
+    @Environment(\.database) private var database
     @State private var image1: UIImage?
     @State private var image2: UIImage?
     @State private var showDeleteConfirm = false
@@ -198,7 +200,18 @@ struct DuplicatePairRow: View {
             DispatchQueue.main.async {
                 isDeleting = false
                 if success {
-                    onDelete?(pair)
+                    let db = database
+                    let engine = searchEngine
+                    Task.detached(priority: .userInitiated) {
+                        do {
+                            try db.deletePhoto(localIdentifier: localIdentifier)
+                            try engine.loadIndex()
+                            await MainActor.run { onDelete?(pair) }
+                        } catch {
+                            logger.error("Failed to update duplicate index after deletion: \(error.localizedDescription)")
+                            await MainActor.run { onDelete?(pair) }
+                        }
+                    }
                 } else if let error {
                     logger.error("Failed to delete photo: \(error.localizedDescription)")
                 }

@@ -1,7 +1,28 @@
 import Photos
 import UIKit
+import AVFoundation
 
 class PhotoLibrary {
+    private final class PhotoKitRequestToken: @unchecked Sendable {
+        private let lock = NSLock()
+        private var requestID: PHImageRequestID = PHInvalidImageRequestID
+
+        func set(_ requestID: PHImageRequestID) {
+            lock.lock()
+            self.requestID = requestID
+            lock.unlock()
+        }
+
+        func cancel() {
+            lock.lock()
+            let id = requestID
+            requestID = PHInvalidImageRequestID
+            lock.unlock()
+            if id != PHInvalidImageRequestID {
+                PHImageManager.default().cancelImageRequest(id)
+            }
+        }
+    }
 
     // Request authorization to access the photo library
     static func requestAuthorization() async -> PHAuthorizationStatus {
@@ -44,18 +65,20 @@ class PhotoLibrary {
         contentMode: PHImageContentMode,
         options: PHImageRequestOptions
     ) async -> UIImage? {
-        await withTimeout(seconds: TimeoutConfig.imageLoad) { completion in
-            PHImageManager.default().requestImage(
+        await withPhotoKitTimeout(seconds: TimeoutConfig.imageLoad) { completion in
+            return PHImageManager.default().requestImage(
                 for: asset,
                 targetSize: targetSize,
                 contentMode: contentMode,
                 options: options
             ) { image, info in
+                if photoKitRequestDidFail(info) {
+                    completion(nil)
+                    return
+                }
                 let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
                 if !isDegraded {
                     completion(image)
-                } else if image == nil {
-                    completion(nil)
                 }
             }
         }
@@ -75,19 +98,23 @@ class PhotoLibrary {
             targetSize = CGSize(width: assetWidth * scale, height: maxDimension)
         }
 
-        return await withTimeout(seconds: TimeoutConfig.imageLoad) { completion in
+        return await withPhotoKitTimeout(seconds: TimeoutConfig.imageLoad) { completion in
             let options = PHImageRequestOptions()
             options.deliveryMode = .highQualityFormat
             options.isSynchronous = false
             options.isNetworkAccessAllowed = false
             options.resizeMode = .fast
 
-            PHImageManager.default().requestImage(
+            return PHImageManager.default().requestImage(
                 for: asset,
                 targetSize: targetSize,
                 contentMode: .aspectFit,
                 options: options
             ) { image, info in
+                if photoKitRequestDidFail(info) {
+                    completion(nil)
+                    return
+                }
                 let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
                 if !isDegraded {
                     completion(image)
@@ -110,6 +137,22 @@ class PhotoLibrary {
         return result.firstObject
     }
 
+    static func loadAVAsset(for asset: PHAsset) async -> AVAsset? {
+        await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
+            let options = PHVideoRequestOptions()
+            options.isNetworkAccessAllowed = false
+            options.deliveryMode = .highQualityFormat
+
+            return PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
+                if photoKitRequestDidFail(info) {
+                    completion(nil)
+                    return
+                }
+                completion(avAsset)
+            }
+        }
+    }
+
     // MARK: - Quick Look Support
 
     private static var quickLookCacheDir: URL = {
@@ -124,22 +167,19 @@ class PhotoLibrary {
 
     static func getQuickLookURL(for asset: PHAsset) async -> URL? {
         if asset.mediaType == .video {
-            return await withTimeout(seconds: TimeoutConfig.videoLoad) { completion in
-                let options = PHVideoRequestOptions()
-                options.isNetworkAccessAllowed = false
-                options.deliveryMode = .highQualityFormat
-
-                PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
-                    completion((avAsset as? AVURLAsset)?.url)
-                }
-            }
+            let avAsset = await loadAVAsset(for: asset)
+            return (avAsset as? AVURLAsset)?.url
         } else {
-            return await withTimeout(seconds: TimeoutConfig.videoLoad) { completion in
+            return await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
                 let options = PHImageRequestOptions()
                 options.isNetworkAccessAllowed = false
                 options.deliveryMode = .highQualityFormat
 
-                PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, uti, _, _ in
+                return PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, uti, _, info in
+                    if photoKitRequestDidFail(info) {
+                        completion(nil)
+                        return
+                    }
                     guard let data else {
                         completion(nil)
                         return
@@ -167,6 +207,37 @@ class PhotoLibrary {
                 }
             }
         }
+    }
+
+    private static func withPhotoKitTimeout<T: Sendable>(
+        seconds: Double,
+        operation: @escaping (@escaping (T?) -> Void) -> PHImageRequestID
+    ) async -> T? {
+        let token = PhotoKitRequestToken()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let guard_ = ContinuationGuard(continuation)
+                let timeoutTask = Task {
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    token.cancel()
+                    guard_.resume(returning: nil)
+                }
+                let requestID = operation { value in
+                    timeoutTask.cancel()
+                    guard_.resume(returning: value)
+                }
+                token.set(requestID)
+            }
+        } onCancel: {
+            token.cancel()
+        }
+    }
+
+    private static func photoKitRequestDidFail(_ info: [AnyHashable: Any]?) -> Bool {
+        if (info?[PHImageCancelledKey] as? Bool) == true { return true }
+        if info?[PHImageErrorKey] != nil { return true }
+        if (info?[PHImageResultIsInCloudKey] as? Bool) == true { return true }
+        return false
     }
 
     static func cleanupQuickLookFile(at url: URL) {

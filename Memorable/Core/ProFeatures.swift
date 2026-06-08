@@ -99,6 +99,14 @@ class ProManager: ObservableObject {
         restoreMessage = nil
         purchaseError = nil
 
+        do {
+            try await AppStore.sync()
+        } catch {
+            isRestoring = false
+            purchaseError = "Restore failed: \(error.localizedDescription)"
+            return
+        }
+
         var found = false
         for await result in Transaction.currentEntitlements {
             if let transaction = try? checkVerified(result),

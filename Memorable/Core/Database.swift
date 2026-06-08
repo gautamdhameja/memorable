@@ -32,6 +32,7 @@ protocol DatabaseProtocol {
     func indexedCount() throws -> Int
     func loadAllEmbeddings() throws -> EmbeddingIndex
     func deleteAll() throws
+    func deletePhoto(localIdentifier: String) throws
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws
     func fetchRandomPhoto(sharp: Bool) throws -> IndexedPhoto?
     func photosNeedingEnrichment(limit: Int) throws -> [PhotoEnrichmentCandidate]
@@ -123,19 +124,30 @@ class AppDatabase: DatabaseProtocol {
 
         let dbDir = appSupport.appendingPathComponent("Memorable", isDirectory: true)
         try fileManager.createDirectory(at: dbDir, withIntermediateDirectories: true)
-        let dbPath = dbDir.appendingPathComponent("photos.sqlite").path
+        try setCompleteUnlessOpenProtection(at: dbDir)
+
+        let dbURL = dbDir.appendingPathComponent("photos.sqlite")
+        let dbPath = dbURL.path
 
         let config = Configuration()
         let queue = try DatabaseQueue(path: dbPath, configuration: config)
-
-        if fileManager.fileExists(atPath: dbPath) {
-            try fileManager.setAttributes(
-                [.protectionKey: FileProtectionType.completeUnlessOpen],
-                ofItemAtPath: dbPath
-            )
-        }
+        try protectSQLiteFiles(for: dbURL)
 
         return queue
+    }
+
+    private static func protectSQLiteFiles(for dbURL: URL) throws {
+        try setCompleteUnlessOpenProtection(at: dbURL)
+        try setCompleteUnlessOpenProtection(at: URL(fileURLWithPath: dbURL.path + "-wal"))
+        try setCompleteUnlessOpenProtection(at: URL(fileURLWithPath: dbURL.path + "-shm"))
+    }
+
+    private static func setCompleteUnlessOpenProtection(at url: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUnlessOpen],
+            ofItemAtPath: url.path
+        )
     }
 
     private static func inMemoryFallbackQueue(migrate: (DatabaseQueue) throws -> Void) -> DatabaseQueue {
@@ -389,6 +401,12 @@ class AppDatabase: DatabaseProtocol {
         }
     }
 
+    func deletePhoto(localIdentifier: String) throws {
+        try dbQueue.write { db in
+            _ = try IndexedPhoto.filter(Column("localIdentifier") == localIdentifier).deleteAll(db)
+        }
+    }
+
     func photosNeedingEnrichment(limit: Int = IndexingConfig.enrichmentBatchSize) throws -> [PhotoEnrichmentCandidate] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql: """
@@ -455,6 +473,7 @@ class AppDatabase: DatabaseProtocol {
             _ = try IndexedPhoto.filter(Column("sourceId") == id).deleteAll(db)
             _ = try PhotoSource.filter(Column("id") == id).deleteAll(db)
         }
+        UserDefaults.standard.removeObject(forKey: AppKeys.folderBookmark(sourceId: id))
     }
 
     func updateSourceStats(_ id: String, photoCount: Int) throws {
