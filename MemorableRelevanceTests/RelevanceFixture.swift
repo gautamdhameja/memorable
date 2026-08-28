@@ -203,30 +203,33 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func indexedCount() throws -> Int { manifest.entries.count }
     func videoIndexedCount() throws -> Int { 0 }
 
-    func loadAllEmbeddings() throws -> EmbeddingIndex {
-        let count = manifest.entries.count
-        return EmbeddingIndex(
-            ids: manifest.entries.map { $0.expectedAssetIds[0] },
-            localIdentifiers: manifest.entries.map(\.questionId),
-            dates: Array(repeating: nil, count: count),
-            latitudes: Array(repeating: nil, count: count),
-            longitudes: Array(repeating: nil, count: count),
-            ocrTexts: Array(repeating: nil, count: count),
-            locationCities: Array(repeating: nil, count: count),
-            locationStates: Array(repeating: nil, count: count),
-            locationCountries: Array(repeating: nil, count: count),
-            locationNames: Array(repeating: nil, count: count),
-            sceneLabels: Array(repeating: nil, count: count),
-            embeddings: embeddings.flatMap { $0 }
-        )
+    func loadAllEmbeddings() throws -> MediaIndex {
+        guard manifest.entries.count == embeddings.count else {
+            throw SearchEngineError.corruptedIndex
+        }
+        var index = MediaIndex(kind: .photo)
+        for (entry, embedding) in zip(manifest.entries, embeddings) {
+            try index.append(
+                MediaIndex.Row(
+                    id: entry.expectedAssetIds[0],
+                    localIdentifier: entry.questionId,
+                    date: nil,
+                    latitude: nil,
+                    longitude: nil,
+                    city: nil,
+                    state: nil,
+                    country: nil,
+                    locationName: nil,
+                    details: .photo(ocrText: nil, sceneLabels: nil)
+                ),
+                embedding: embedding
+            )
+        }
+        return index
     }
 
-    func loadAllVideoEmbeddings() throws -> VideoEmbeddingIndex {
-        (
-            videoIds: [], localIdentifiers: [], dates: [], latitudes: [], longitudes: [],
-            framePositions: [], locationCities: [], locationStates: [], locationCountries: [],
-            locationNames: [], embeddings: []
-        )
+    func loadAllVideoEmbeddings() throws -> MediaIndex {
+        MediaIndex(kind: .videoFrame)
     }
 
     func insertPhoto(_ photo: IndexedPhoto) throws {}

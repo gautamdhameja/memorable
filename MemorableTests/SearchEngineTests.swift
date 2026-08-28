@@ -3,6 +3,64 @@ import XCTest
 
 final class SearchEngineTests: XCTestCase {
 
+    func testMediaIndexRejectsMismatchedColumnLengths() throws {
+        XCTAssertThrowsError(
+            try MediaIndex(
+                kind: .photo,
+                ids: ["photo-1"],
+                localIdentifiers: [],
+                dates: [nil],
+                latitudes: [nil],
+                longitudes: [nil],
+                ocrTexts: [nil],
+                locationCities: [nil],
+                locationStates: [nil],
+                locationCountries: [nil],
+                locationNames: [nil],
+                sceneLabels: [nil],
+                framePositions: [nil],
+                embeddings: float16Vector(first: 1)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SearchEngineError, .corruptedIndex)
+        }
+    }
+
+    func testMediaIndexCompleteAppendKeepsEveryColumnAligned() throws {
+        var index = MediaIndex(kind: .photo)
+        try index.append(
+            MediaIndex.Row(
+                id: "photo-1",
+                localIdentifier: "local-photo-1",
+                date: Date(timeIntervalSince1970: 100),
+                latitude: 1,
+                longitude: 2,
+                city: "Paris",
+                state: "Ile-de-France",
+                country: "France",
+                locationName: "Eiffel Tower",
+                details: .photo(ocrText: "sign", sceneLabels: "tower")
+            ),
+            embedding: float16Vector(first: 1)
+        )
+
+        XCTAssertEqual(index.count, 1)
+        XCTAssertEqual(index.ids, ["photo-1"])
+        XCTAssertEqual(index.localIdentifiers, ["local-photo-1"])
+        XCTAssertEqual(index.dates.count, index.count)
+        XCTAssertEqual(index.latitudes, [1])
+        XCTAssertEqual(index.longitudes, [2])
+        XCTAssertEqual(index.ocrTexts, ["sign"])
+        XCTAssertEqual(index.locationCities, ["Paris"])
+        XCTAssertEqual(index.locationStates, ["Ile-de-France"])
+        XCTAssertEqual(index.locationCountries, ["France"])
+        XCTAssertEqual(index.locationNames, ["Eiffel Tower"])
+        XCTAssertEqual(index.sceneLabels, ["tower"])
+        XCTAssertEqual(index.framePositions, [nil])
+        XCTAssertEqual(index.embeddings.count, EmbeddingConfig.dimensions)
+        XCTAssertEqual(index.embeddings[0], 1)
+    }
+
     func testVideoOnlyIndexIsLoadedAndSearchable() throws {
         let database = SearchFixtureDatabase(
             videos: [
@@ -325,37 +383,48 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func indexedCount() throws -> Int { photos.count }
     func videoIndexedCount() throws -> Int { Set(videos.map(\.id)).count }
 
-    func loadAllEmbeddings() throws -> EmbeddingIndex {
-        EmbeddingIndex(
-            ids: photos.map(\.id),
-            localIdentifiers: photos.map(\.localIdentifier),
-            dates: photos.map(\.date),
-            latitudes: Array<Double?>(repeating: nil, count: photos.count),
-            longitudes: Array<Double?>(repeating: nil, count: photos.count),
-            ocrTexts: Array<String?>(repeating: nil, count: photos.count),
-            locationCities: photos.map(\.city),
-            locationStates: Array<String?>(repeating: nil, count: photos.count),
-            locationCountries: Array<String?>(repeating: nil, count: photos.count),
-            locationNames: Array<String?>(repeating: nil, count: photos.count),
-            sceneLabels: photos.map(\.sceneLabels),
-            embeddings: photos.flatMap(\.embedding)
-        )
+    func loadAllEmbeddings() throws -> MediaIndex {
+        var index = MediaIndex(kind: .photo)
+        for photo in photos {
+            try index.append(
+                MediaIndex.Row(
+                    id: photo.id,
+                    localIdentifier: photo.localIdentifier,
+                    date: photo.date,
+                    latitude: nil,
+                    longitude: nil,
+                    city: photo.city,
+                    state: nil,
+                    country: nil,
+                    locationName: nil,
+                    details: .photo(ocrText: nil, sceneLabels: photo.sceneLabels)
+                ),
+                embedding: photo.embedding
+            )
+        }
+        return index
     }
 
-    func loadAllVideoEmbeddings() throws -> VideoEmbeddingIndex {
-        (
-            videoIds: videos.map(\.id),
-            localIdentifiers: videos.map(\.localIdentifier),
-            dates: videos.map(\.date),
-            latitudes: videos.map(\.latitude),
-            longitudes: videos.map(\.longitude),
-            framePositions: Array(repeating: 0.5, count: videos.count),
-            locationCities: videos.map(\.city),
-            locationStates: Array<String?>(repeating: nil, count: videos.count),
-            locationCountries: Array<String?>(repeating: nil, count: videos.count),
-            locationNames: Array<String?>(repeating: nil, count: videos.count),
-            embeddings: videos.flatMap(\.embedding)
-        )
+    func loadAllVideoEmbeddings() throws -> MediaIndex {
+        var index = MediaIndex(kind: .videoFrame)
+        for video in videos {
+            try index.append(
+                MediaIndex.Row(
+                    id: video.id,
+                    localIdentifier: video.localIdentifier,
+                    date: video.date,
+                    latitude: video.latitude,
+                    longitude: video.longitude,
+                    city: video.city,
+                    state: nil,
+                    country: nil,
+                    locationName: nil,
+                    details: .videoFrame(position: 0.5)
+                ),
+                embedding: video.embedding
+            )
+        }
+        return index
     }
 
     func insertPhoto(_ photo: IndexedPhoto) throws {}

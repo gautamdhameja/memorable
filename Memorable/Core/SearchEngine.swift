@@ -14,49 +14,22 @@ struct FilterSummary {
     let visualQuery: String
 }
 
-enum SearchEngineError: Error, Equatable {
-    /// Embedding matrix rows do not match metadata count. Refuse to load.
-    case corruptedIndex
+private struct SearchIndexSnapshot {
+    var photos = MediaIndex(kind: .photo)
+    var videos = MediaIndex(kind: .videoFrame)
+    var uniqueVideoCount = 0
+    var photoSimilaritySearch: SimilaritySearching?
+    var videoSimilaritySearch: SimilaritySearching?
 }
 
 class SearchEngine {
-    private var photoIds: [String] = []
-    private var localIdentifiers: [String] = []
-    private var dates: [Date?] = []
-    private var latitudes: [Double?] = []
-    private var longitudes: [Double?] = []
-    private var ocrTexts: [String?] = []
-    private var photoCities: [String?] = []
-    private var photoStates: [String?] = []
-    private var photoCountries: [String?] = []
-    private var photoLocationNames: [String?] = []
-    private var photoSceneLabels: [String?] = []
-    private var embeddingMatrix: [Float16] = []
-    private var photoCount: Int = 0
-
-    // Video frame embeddings
-    private var videoIds: [String] = []
-    private var videoLocalIds: [String] = []
-    private var videoDates: [Date?] = []
-    private var videoLatitudes: [Double?] = []
-    private var videoLongitudes: [Double?] = []
-    private var videoFramePositions: [Double] = []
-    private var videoCities: [String?] = []
-    private var videoStates: [String?] = []
-    private var videoCountries: [String?] = []
-    private var videoLocationNames: [String?] = []
-    private var videoEmbeddingMatrix: [Float16] = []
-    private var videoFrameCount: Int = 0
-    private var uniqueVideoCount: Int = 0
+    private var indexSnapshot = SearchIndexSnapshot()
 
     private let embeddingDim = EmbeddingConfig.dimensions
     private let minimumScoreThreshold = SearchConfig.minimumScoreThreshold
 
     static let maxRecommendedPhotos = IndexingConfig.largeLibraryThreshold
 
-    // GPU-accelerated search
-    private var gpuSearch: SimilaritySearching?
-    private var gpuVideoSearch: SimilaritySearching?
     private let injectedPhotoSimilaritySearch: SimilaritySearching?
     private let injectedVideoSimilaritySearch: SimilaritySearching?
 
@@ -74,8 +47,8 @@ class SearchEngine {
         self.database = database
         self.injectedPhotoSimilaritySearch = photoSimilaritySearch
         self.injectedVideoSimilaritySearch = videoSimilaritySearch
-        self.gpuSearch = photoSimilaritySearch
-        self.gpuVideoSearch = videoSimilaritySearch
+        self.indexSnapshot.photoSimilaritySearch = photoSimilaritySearch
+        self.indexSnapshot.videoSimilaritySearch = videoSimilaritySearch
     }
 
     func loadIndex() throws {
@@ -83,21 +56,10 @@ class SearchEngine {
         let loadStart = CFAbsoluteTimeGetCurrent()
         #endif
 
-        let data = try database.loadAllEmbeddings()
-        let videoData = try database.loadAllVideoEmbeddings()
-
-        // Invariant: the embedding matrix must contain exactly one row per id
-        // (count * embeddingDim floats). If this ever fails we refuse to load
-        // the index rather than let the downstream pointer arithmetic walk off
-        // the end of the buffer. Same check for videos.
-        let expectedPhotoMatrix = data.ids.count * embeddingDim
-        let expectedVideoMatrix = videoData.videoIds.count * embeddingDim
-        guard data.embeddings.count == expectedPhotoMatrix else {
-            logger.error("[SearchEngine] Photo embedding matrix size mismatch: have \(data.embeddings.count), expected \(expectedPhotoMatrix)")
-            throw SearchEngineError.corruptedIndex
-        }
-        guard videoData.embeddings.count == expectedVideoMatrix else {
-            logger.error("[SearchEngine] Video embedding matrix size mismatch: have \(videoData.embeddings.count), expected \(expectedVideoMatrix)")
+        let photoIndex = try database.loadAllEmbeddings()
+        let videoIndex = try database.loadAllVideoEmbeddings()
+        guard photoIndex.kind == .photo, videoIndex.kind == .videoFrame else {
+            logger.error("[SearchEngine] Persisted index has unexpected media kinds")
             throw SearchEngineError.corruptedIndex
         }
 
@@ -112,45 +74,23 @@ class SearchEngine {
         newGPUSearch = injectedPhotoSimilaritySearch ?? GPUSimilaritySearch()
         newGPUVideoSearch = injectedVideoSimilaritySearch ?? GPUSimilaritySearch()
         #endif
-        newGPUSearch?.buildIndex(embeddings: data.embeddings, count: data.ids.count)
-        if videoData.videoIds.count > 0 {
-            newGPUVideoSearch?.buildIndex(embeddings: videoData.embeddings, count: videoData.videoIds.count)
+        newGPUSearch?.buildIndex(embeddings: photoIndex.embeddings, count: photoIndex.count)
+        if videoIndex.count > 0 {
+            newGPUVideoSearch?.buildIndex(embeddings: videoIndex.embeddings, count: videoIndex.count)
         }
 
         lock.lock()
         defer { lock.unlock() }
-        self.photoIds = data.ids
-        self.localIdentifiers = data.localIdentifiers
-        self.dates = data.dates
-        self.latitudes = data.latitudes
-        self.longitudes = data.longitudes
-        self.ocrTexts = data.ocrTexts
-        self.photoCities = data.locationCities
-        self.photoStates = data.locationStates
-        self.photoCountries = data.locationCountries
-        self.photoLocationNames = data.locationNames
-        self.photoSceneLabels = data.sceneLabels
-        self.embeddingMatrix = data.embeddings
-        self.photoCount = data.ids.count
+        self.indexSnapshot = SearchIndexSnapshot(
+            photos: photoIndex,
+            videos: videoIndex,
+            uniqueVideoCount: videoIndex.uniqueIDCount,
+            photoSimilaritySearch: newGPUSearch,
+            videoSimilaritySearch: videoIndex.count == 0 ? nil : newGPUVideoSearch
+        )
 
-        self.videoIds = videoData.videoIds
-        self.videoLocalIds = videoData.localIdentifiers
-        self.videoDates = videoData.dates
-        self.videoLatitudes = videoData.latitudes
-        self.videoLongitudes = videoData.longitudes
-        self.videoFramePositions = videoData.framePositions
-        self.videoCities = videoData.locationCities
-        self.videoStates = videoData.locationStates
-        self.videoCountries = videoData.locationCountries
-        self.videoLocationNames = videoData.locationNames
-        self.videoEmbeddingMatrix = videoData.embeddings
-        self.videoFrameCount = videoData.videoIds.count
-        self.uniqueVideoCount = Set(videoData.videoIds).count
-
-        self.gpuSearch = newGPUSearch
-        self.gpuVideoSearch = videoData.videoIds.isEmpty ? nil : newGPUVideoSearch
-
-        let count = data.ids.count
+        let count = photoIndex.count
+        let videoFrameCount = videoIndex.count
         let memoryMB = (count + videoFrameCount) * embeddingDim * MemoryLayout<Float16>.size / 1_048_576
         #if DEBUG
         if count > Self.maxRecommendedPhotos {
@@ -159,7 +99,7 @@ class SearchEngine {
         #endif
 
         #if DEBUG
-        let vFrameCount = self.videoFrameCount
+        let vFrameCount = videoFrameCount
         logger.info("[SearchEngine] Index loaded: \(count) photos, \(vFrameCount) video frames, ~\(memoryMB)MB in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - loadStart))s")
         #endif
     }
@@ -167,70 +107,43 @@ class SearchEngine {
     var estimatedMemoryUsage: Int {
         lock.lock()
         defer { lock.unlock() }
-        return (photoCount + videoFrameCount) * embeddingDim * MemoryLayout<Float16>.size
+        return (indexSnapshot.photos.count + indexSnapshot.videos.count) * embeddingDim * MemoryLayout<Float16>.size
     }
 
     var isLargeLibrary: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return (photoCount + videoFrameCount) > Self.maxRecommendedPhotos
+        return (indexSnapshot.photos.count + indexSnapshot.videos.count) > Self.maxRecommendedPhotos
     }
 
     var indexSize: Int {
         lock.lock()
         defer { lock.unlock() }
-        return photoCount
+        return indexSnapshot.photos.count
     }
 
     var videoSize: Int {
         lock.lock()
         defer { lock.unlock() }
-        return uniqueVideoCount
+        return indexSnapshot.uniqueVideoCount
     }
 
     var totalSize: Int {
         lock.lock()
         defer { lock.unlock() }
-        return photoCount + uniqueVideoCount
+        return indexSnapshot.photos.count + indexSnapshot.uniqueVideoCount
     }
 
     var isIndexLoaded: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return photoCount + videoFrameCount > 0
+        return indexSnapshot.photos.count + indexSnapshot.videos.count > 0
     }
 
     func dropIndex() {
         lock.lock()
         defer { lock.unlock() }
-        photoIds.removeAll()
-        localIdentifiers.removeAll()
-        dates.removeAll()
-        latitudes.removeAll()
-        longitudes.removeAll()
-        ocrTexts.removeAll()
-        photoCities.removeAll()
-        photoStates.removeAll()
-        photoCountries.removeAll()
-        photoLocationNames.removeAll()
-        photoSceneLabels.removeAll()
-        embeddingMatrix.removeAll()
-        photoCount = 0
-        videoIds.removeAll()
-        videoLocalIds.removeAll()
-        videoDates.removeAll()
-        videoLatitudes.removeAll()
-        videoLongitudes.removeAll()
-        videoFramePositions.removeAll()
-        videoCities.removeAll()
-        videoStates.removeAll()
-        videoCountries.removeAll()
-        videoLocationNames.removeAll()
-        videoEmbeddingMatrix.removeAll()
-        videoFrameCount = 0
-        uniqueVideoCount = 0
-        gpuSearch = nil
-        gpuVideoSearch = nil
+        indexSnapshot = SearchIndexSnapshot()
         #if DEBUG
         logger.info("[SearchEngine] Index dropped due to memory pressure")
         #endif
@@ -276,24 +189,41 @@ class SearchEngine {
     }
 
     func hybridSearch(hints: QueryHints) throws -> SearchResponse {
-        let (ids, localIds, photoDates, photoLats, photoLons, photoOcrTexts,
-             pCities, pStates, pCountries, pLocNames, photoLabels, matrix, count,
-             vIds, vLocalIds, vDates, vLats, vLons, vPositions,
-             vCities, vStates, vCountries, vLocNames, vMatrix, vCount,
-             photoGPU, videoGPU):
-            ([String], [String], [Date?], [Double?], [Double?], [String?],
-             [String?], [String?], [String?], [String?], [String?], [Float16], Int,
-             [String], [String], [Date?], [Double?], [Double?], [Double],
-             [String?], [String?], [String?], [String?], [Float16], Int,
-             SimilaritySearching?, SimilaritySearching?) = {
+        let snapshot: SearchIndexSnapshot = {
             lock.lock()
             defer { lock.unlock() }
-            return (photoIds, localIdentifiers, dates, latitudes, longitudes, ocrTexts,
-                    photoCities, photoStates, photoCountries, photoLocationNames, photoSceneLabels, embeddingMatrix, photoCount,
-                    videoIds, videoLocalIds, videoDates, videoLatitudes, videoLongitudes, videoFramePositions,
-                    videoCities, videoStates, videoCountries, videoLocationNames, videoEmbeddingMatrix, videoFrameCount,
-                    gpuSearch, gpuVideoSearch)
+            return indexSnapshot
         }()
+        let photos = snapshot.photos
+        let videos = snapshot.videos
+
+        let ids = photos.ids
+        let localIds = photos.localIdentifiers
+        let photoDates = photos.dates
+        let photoLats = photos.latitudes
+        let photoLons = photos.longitudes
+        let photoOcrTexts = photos.ocrTexts
+        let pCities = photos.locationCities
+        let pStates = photos.locationStates
+        let pCountries = photos.locationCountries
+        let pLocNames = photos.locationNames
+        let photoLabels = photos.sceneLabels
+        let matrix = photos.embeddings
+        let count = photos.count
+        let vIds = videos.ids
+        let vLocalIds = videos.localIdentifiers
+        let vDates = videos.dates
+        let vLats = videos.latitudes
+        let vLons = videos.longitudes
+        let vPositions = videos.framePositions
+        let vCities = videos.locationCities
+        let vStates = videos.locationStates
+        let vCountries = videos.locationCountries
+        let vLocNames = videos.locationNames
+        let vMatrix = videos.embeddings
+        let vCount = videos.count
+        let photoGPU = snapshot.photoSimilaritySearch
+        let videoGPU = snapshot.videoSimilaritySearch
 
         guard count + vCount > 0 else { return SearchResponse(results: [], fallbackResults: [], filtersApplied: nil) }
 
@@ -611,13 +541,16 @@ class SearchEngine {
 
                 let vid = vIds[i]
                 guard frameScore >= minimumScoreThreshold else { continue }
+                guard let framePosition = vPositions[i] else {
+                    throw SearchEngineError.corruptedIndex
+                }
 
                 if let existing = videoScoreMap[vid] {
                     if frameScore > existing.score {
-                        videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], vPositions[i])
+                        videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], framePosition)
                     }
                 } else {
-                    videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], vPositions[i])
+                    videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], framePosition)
                 }
             }
 
@@ -803,7 +736,7 @@ class SearchEngine {
         candidateMask: [Bool], ids: [String], localIds: [String],
         dates: [Date?], count: Int,
         vIds: [String], vLocalIds: [String], vDates: [Date?],
-        vLats: [Double?], vLons: [Double?], vPositions: [Double],
+        vLats: [Double?], vLons: [Double?], vPositions: [Double?],
         vCities: [String?], vStates: [String?], vCountries: [String?], vLocNames: [String?],
         vCount: Int,
         hints: QueryHints, targetLoc: CLLocation?
@@ -872,11 +805,18 @@ class SearchEngine {
     // MARK: - Similar Photos
 
     func findSimilar(photoId: String, topK: Int = 50) -> [SearchResult] {
-        let (ids, localIds, photoDates, matrix, count, photoGPU) = {
+        let snapshot: SearchIndexSnapshot = {
             lock.lock()
             defer { lock.unlock() }
-            return (photoIds, localIdentifiers, dates, embeddingMatrix, photoCount, gpuSearch)
+            return indexSnapshot
         }()
+        let photos = snapshot.photos
+        let ids = photos.ids
+        let localIds = photos.localIdentifiers
+        let photoDates = photos.dates
+        let matrix = photos.embeddings
+        let count = photos.count
+        let photoGPU = snapshot.photoSimilaritySearch
 
         guard let sourceIndex = ids.firstIndex(of: photoId) else { return [] }
 

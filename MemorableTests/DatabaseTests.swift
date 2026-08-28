@@ -45,6 +45,24 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(try database.photosNeedingEnrichmentCount(), 1)
     }
 
+    func testPersistedMalformedPhotoEmbeddingThrowsCorruptedIndex() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.insertPhoto(makePhoto(localIdentifier: "malformed-photo"))
+        try database.dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE indexed_photos SET embedding = ? WHERE localIdentifier = ?",
+                arguments: [Data([0]), "malformed-photo"]
+            )
+        }
+
+        XCTAssertThrowsError(try database.loadAllEmbeddings()) { error in
+            XCTAssertEqual(error as? SearchEngineError, .corruptedIndex)
+        }
+    }
+
     func testPhotoEnrichmentUpdateMarksRowCompleteEvenWithoutOcr() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },

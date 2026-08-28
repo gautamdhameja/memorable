@@ -3,22 +3,192 @@ import GRDB
 
 // MARK: - Embedding Index
 
-struct EmbeddingIndex {
-    var ids: [String]
-    var localIdentifiers: [String]
-    var dates: [Date?]
-    var latitudes: [Double?]
-    var longitudes: [Double?]
-    var ocrTexts: [String?]
-    var locationCities: [String?]
-    var locationStates: [String?]
-    var locationCountries: [String?]
-    var locationNames: [String?]
-    var sceneLabels: [String?]
-    var embeddings: [Float16]
+enum SearchEngineError: Error, Equatable {
+    /// Persisted index columns or embedding rows are malformed. Refuse to load.
+    case corruptedIndex
 }
 
-typealias VideoEmbeddingIndex = (videoIds: [String], localIdentifiers: [String], dates: [Date?], latitudes: [Double?], longitudes: [Double?], framePositions: [Double], locationCities: [String?], locationStates: [String?], locationCountries: [String?], locationNames: [String?], embeddings: [Float16])
+/// Columnar searchable media with a single mutation boundary. The embedding
+/// matrix stays flat for the scoring hot path; every append supplies one
+/// complete metadata row plus exactly one embedding row.
+struct MediaIndex {
+    enum Kind: Equatable {
+        case photo
+        case videoFrame
+    }
+
+    enum RowDetails {
+        case photo(ocrText: String?, sceneLabels: String?)
+        case videoFrame(position: Double)
+    }
+
+    struct Row {
+        let id: String
+        let localIdentifier: String
+        let date: Date?
+        let latitude: Double?
+        let longitude: Double?
+        let city: String?
+        let state: String?
+        let country: String?
+        let locationName: String?
+        let details: RowDetails
+    }
+
+    let kind: Kind
+    private(set) var ids: [String]
+    private(set) var localIdentifiers: [String]
+    private(set) var dates: [Date?]
+    private(set) var latitudes: [Double?]
+    private(set) var longitudes: [Double?]
+    private(set) var ocrTexts: [String?]
+    private(set) var locationCities: [String?]
+    private(set) var locationStates: [String?]
+    private(set) var locationCountries: [String?]
+    private(set) var locationNames: [String?]
+    private(set) var sceneLabels: [String?]
+    private(set) var framePositions: [Double?]
+    private(set) var embeddings: [Float16]
+
+    var count: Int { ids.count }
+    var uniqueIDCount: Int { Set(ids).count }
+
+    init(kind: Kind) {
+        self.kind = kind
+        ids = []
+        localIdentifiers = []
+        dates = []
+        latitudes = []
+        longitudes = []
+        ocrTexts = []
+        locationCities = []
+        locationStates = []
+        locationCountries = []
+        locationNames = []
+        sceneLabels = []
+        framePositions = []
+        embeddings = []
+    }
+
+    init(
+        kind: Kind,
+        ids: [String],
+        localIdentifiers: [String],
+        dates: [Date?],
+        latitudes: [Double?],
+        longitudes: [Double?],
+        ocrTexts: [String?],
+        locationCities: [String?],
+        locationStates: [String?],
+        locationCountries: [String?],
+        locationNames: [String?],
+        sceneLabels: [String?],
+        framePositions: [Double?],
+        embeddings: [Float16]
+    ) throws {
+        let count = ids.count
+        let metadataCounts = [
+            localIdentifiers.count, dates.count, latitudes.count,
+            longitudes.count, ocrTexts.count, locationCities.count,
+            locationStates.count, locationCountries.count, locationNames.count,
+            sceneLabels.count, framePositions.count
+        ]
+        let (expectedEmbeddingCount, overflow) = count.multipliedReportingOverflow(
+            by: EmbeddingConfig.dimensions
+        )
+        guard !overflow,
+              metadataCounts.allSatisfy({ $0 == count }),
+              embeddings.count == expectedEmbeddingCount else {
+            throw SearchEngineError.corruptedIndex
+        }
+
+        switch kind {
+        case .photo:
+            guard framePositions.allSatisfy({ $0 == nil }) else {
+                throw SearchEngineError.corruptedIndex
+            }
+        case .videoFrame:
+            guard framePositions.allSatisfy({ $0 != nil }),
+                  ocrTexts.allSatisfy({ $0 == nil }),
+                  sceneLabels.allSatisfy({ $0 == nil }) else {
+                throw SearchEngineError.corruptedIndex
+            }
+        }
+
+        self.kind = kind
+        self.ids = ids
+        self.localIdentifiers = localIdentifiers
+        self.dates = dates
+        self.latitudes = latitudes
+        self.longitudes = longitudes
+        self.ocrTexts = ocrTexts
+        self.locationCities = locationCities
+        self.locationStates = locationStates
+        self.locationCountries = locationCountries
+        self.locationNames = locationNames
+        self.sceneLabels = sceneLabels
+        self.framePositions = framePositions
+        self.embeddings = embeddings
+    }
+
+    mutating func append(_ row: Row, embedding: UnsafeBufferPointer<Float16>) throws {
+        guard embedding.count == EmbeddingConfig.dimensions else {
+            throw SearchEngineError.corruptedIndex
+        }
+
+        let ocrText: String?
+        let sceneLabel: String?
+        let framePosition: Double?
+        switch (kind, row.details) {
+        case let (.photo, .photo(rowOCRText, rowSceneLabels)):
+            ocrText = rowOCRText
+            sceneLabel = rowSceneLabels
+            framePosition = nil
+        case let (.videoFrame, .videoFrame(position)):
+            ocrText = nil
+            sceneLabel = nil
+            framePosition = position
+        default:
+            throw SearchEngineError.corruptedIndex
+        }
+
+        ids.append(row.id)
+        localIdentifiers.append(row.localIdentifier)
+        dates.append(row.date)
+        latitudes.append(row.latitude)
+        longitudes.append(row.longitude)
+        ocrTexts.append(ocrText)
+        locationCities.append(row.city)
+        locationStates.append(row.state)
+        locationCountries.append(row.country)
+        locationNames.append(row.locationName)
+        sceneLabels.append(sceneLabel)
+        framePositions.append(framePosition)
+        embeddings.append(contentsOf: embedding)
+    }
+
+    mutating func append(_ row: Row, embedding: [Float16]) throws {
+        try embedding.withUnsafeBufferPointer { buffer in
+            try append(row, embedding: buffer)
+        }
+    }
+
+    mutating func reserveCapacity(_ rowCount: Int) {
+        ids.reserveCapacity(rowCount)
+        localIdentifiers.reserveCapacity(rowCount)
+        dates.reserveCapacity(rowCount)
+        latitudes.reserveCapacity(rowCount)
+        longitudes.reserveCapacity(rowCount)
+        ocrTexts.reserveCapacity(rowCount)
+        locationCities.reserveCapacity(rowCount)
+        locationStates.reserveCapacity(rowCount)
+        locationCountries.reserveCapacity(rowCount)
+        locationNames.reserveCapacity(rowCount)
+        sceneLabels.reserveCapacity(rowCount)
+        framePositions.reserveCapacity(rowCount)
+        embeddings.reserveCapacity(rowCount * EmbeddingConfig.dimensions)
+    }
+}
 
 // MARK: - Database Protocol
 
@@ -35,7 +205,7 @@ protocol DatabaseProtocol {
     func allIndexedIdentifiers() throws -> Set<String>
     func allIndexedFilePaths() throws -> Set<String>
     func indexedCount() throws -> Int
-    func loadAllEmbeddings() throws -> EmbeddingIndex
+    func loadAllEmbeddings() throws -> MediaIndex
     func deleteAll() throws
     func deletePhoto(localIdentifier: String) throws
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws
@@ -58,7 +228,7 @@ protocol DatabaseProtocol {
     func isVideoIndexed(localIdentifier: String) throws -> Bool
     func videoIndexedCount() throws -> Int
     func allIndexedVideoIdentifiers() throws -> Set<String>
-    func loadAllVideoEmbeddings() throws -> VideoEmbeddingIndex
+    func loadAllVideoEmbeddings() throws -> MediaIndex
     func deleteOrphanedVideos(localIdentifiers: Set<String>) throws
     func trimToLimit(_ limit: Int) throws
 
@@ -486,56 +656,36 @@ class AppDatabase: DatabaseProtocol {
         }
     }
 
-    func loadAllEmbeddings() throws -> EmbeddingIndex {
+    func loadAllEmbeddings() throws -> MediaIndex {
         #if DEBUG
         let loadStart = CFAbsoluteTimeGetCurrent()
         #endif
         let result = try dbQueue.read { db in
             let photos = try IndexedPhoto.order(Column("creationDate").desc).fetchAll(db)
 
-            var allIds: [String] = []
-            var allLocalIds: [String] = []
-            var allDates: [Date?] = []
-            var allLats: [Double?] = []
-            var allLons: [Double?] = []
-            var allOcrTexts: [String?] = []
-            var allCities: [String?] = []
-            var allStates: [String?] = []
-            var allCountries: [String?] = []
-            var allLocNames: [String?] = []
-            var allSceneLabels: [String?] = []
-            var allEmbeddings: [Float16] = []
-            allEmbeddings.reserveCapacity(photos.count * EmbeddingConfig.dimensions)
+            var index = MediaIndex(kind: .photo)
+            index.reserveCapacity(photos.count)
 
             for photo in photos {
-                guard photo.embedding.count == EmbeddingConfig.bytesPerEmbedding else { continue }
-
-                allIds.append(photo.id)
-                allLocalIds.append(photo.localIdentifier)
-                allDates.append(photo.creationDate)
-                allLats.append(photo.latitude)
-                allLons.append(photo.longitude)
-                allOcrTexts.append(photo.ocrText)
-                allCities.append(photo.locationCity)
-                allStates.append(photo.locationState)
-                allCountries.append(photo.locationCountry)
-                allLocNames.append(photo.locationName)
-                allSceneLabels.append(photo.sceneLabels)
-
-                photo.embedding.withUnsafeBytes { rawBuffer in
+                let row = MediaIndex.Row(
+                    id: photo.id,
+                    localIdentifier: photo.localIdentifier,
+                    date: photo.creationDate,
+                    latitude: photo.latitude,
+                    longitude: photo.longitude,
+                    city: photo.locationCity,
+                    state: photo.locationState,
+                    country: photo.locationCountry,
+                    locationName: photo.locationName,
+                    details: .photo(ocrText: photo.ocrText, sceneLabels: photo.sceneLabels)
+                )
+                try photo.embedding.withUnsafeBytes { rawBuffer in
                     let ptr = rawBuffer.bindMemory(to: Float16.self)
-                    allEmbeddings.append(contentsOf: UnsafeBufferPointer(start: ptr.baseAddress, count: ptr.count))
+                    try index.append(row, embedding: ptr)
                 }
             }
 
-            return EmbeddingIndex(
-                ids: allIds, localIdentifiers: allLocalIds, dates: allDates,
-                latitudes: allLats, longitudes: allLons, ocrTexts: allOcrTexts,
-                locationCities: allCities, locationStates: allStates,
-                locationCountries: allCountries, locationNames: allLocNames,
-                sceneLabels: allSceneLabels,
-                embeddings: allEmbeddings
-            )
+            return index
         }
 
         #if DEBUG
@@ -693,7 +843,7 @@ class AppDatabase: DatabaseProtocol {
         }
     }
 
-    func loadAllVideoEmbeddings() throws -> VideoEmbeddingIndex {
+    func loadAllVideoEmbeddings() throws -> MediaIndex {
         try dbQueue.read { db in
             let sql = """
                 SELECT v.id, v.localIdentifier, v.creationDate, v.latitude, v.longitude,
@@ -705,41 +855,30 @@ class AppDatabase: DatabaseProtocol {
             """
             let rows = try Row.fetchAll(db, sql: sql)
 
-            var allVideoIds: [String] = []
-            var allLocalIds: [String] = []
-            var allDates: [Date?] = []
-            var allLats: [Double?] = []
-            var allLons: [Double?] = []
-            var allPositions: [Double] = []
-            var allCities: [String?] = []
-            var allStates: [String?] = []
-            var allCountries: [String?] = []
-            var allLocNames: [String?] = []
-            var allEmbeddings: [Float16] = []
+            var index = MediaIndex(kind: .videoFrame)
+            index.reserveCapacity(rows.count)
 
             for row in rows {
                 let embeddingData: Data = row["embedding"]
-                guard embeddingData.count == EmbeddingConfig.bytesPerEmbedding else { continue }
-
-                allVideoIds.append(row["id"] as String)
-                allLocalIds.append(row["localIdentifier"] as String)
-                allDates.append(row["creationDate"] as Date?)
-                allLats.append(row["latitude"] as Double?)
-                allLons.append(row["longitude"] as Double?)
-                allPositions.append(row["framePosition"] as Double)
-                allCities.append(row["locationCity"] as String?)
-                allStates.append(row["locationState"] as String?)
-                allCountries.append(row["locationCountry"] as String?)
-                allLocNames.append(row["locationName"] as String?)
-
-                embeddingData.withUnsafeBytes { rawBuffer in
+                let indexRow = MediaIndex.Row(
+                    id: row["id"],
+                    localIdentifier: row["localIdentifier"],
+                    date: row["creationDate"],
+                    latitude: row["latitude"],
+                    longitude: row["longitude"],
+                    city: row["locationCity"],
+                    state: row["locationState"],
+                    country: row["locationCountry"],
+                    locationName: row["locationName"],
+                    details: .videoFrame(position: row["framePosition"])
+                )
+                try embeddingData.withUnsafeBytes { rawBuffer in
                     let ptr = rawBuffer.bindMemory(to: Float16.self)
-                    allEmbeddings.append(contentsOf: UnsafeBufferPointer(start: ptr.baseAddress, count: ptr.count))
+                    try index.append(indexRow, embedding: ptr)
                 }
             }
 
-            return (allVideoIds, allLocalIds, allDates, allLats, allLons, allPositions,
-                    allCities, allStates, allCountries, allLocNames, allEmbeddings)
+            return index
         }
     }
 
