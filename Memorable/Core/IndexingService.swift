@@ -1,6 +1,5 @@
 import Foundation
 import Photos
-import AVFoundation
 import UIKit
 
 private let hitFreeLimitKey = "indexing.hitFreeLimit"
@@ -90,26 +89,45 @@ class IndexingService: ObservableObject {
     private let imageEncoder: ImageEncoder
     let searchEngine: SearchEngine
     private let database: DatabaseProtocol
-    private var indexingTask: Task<Void, Never>?
     private let changeObserver = PhotoChangeObserver()
     private let batchSize = IndexingConfig.batchInsertSize
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
-    private var surpriseValidationTask: Task<Void, Never>?
-    private var autoResumeTask: Task<Void, Never>?
-    private var enrichmentTask: Task<Void, Never>?
-    private var enrichmentTaskGeneration = 0
     private let reverseGeocoder = ReverseGeocoder()
-    private var geocodingTask: Task<Void, Never>?
+    private let jobQueue = IndexingJobQueue()
+    private var librarySession: PhotoLibraryIndexingWorker.Session?
     private var isObservingPhotoChanges = false
     private var launchLibraryCountSnapshot: Int?
 
     var onIndexReady: (() -> Void)?
     var onIndexUnavailable: (() -> Void)?
 
-    private struct LoadedPhotoBatch {
-        let assets: [PHAsset]
-        let loadedImages: [(asset: PHAsset, image: UIImage)]
-    }
+    private lazy var libraryWorker = PhotoLibraryIndexingWorker(
+        imageEncoder: imageEncoder,
+        database: database,
+        batchSize: batchSize,
+        callbacks: PhotoLibraryIndexingWorker.Callbacks(
+            searchableCount: { [weak self] in self?.searchEngine.totalSize ?? 0 },
+            rebuildRequired: { [weak self] in self?.indexRebuildRequired == true },
+            completeRequiredRebuild: { [weak self] in self?.indexRebuildRequired = false },
+            currentProgress: { [weak self] in
+                self?.progress ?? IndexingProgress(total: 0, completed: 0, isRunning: false)
+            },
+            setProgress: { [weak self] in self?.progress = $0 },
+            setHitFreeLimit: { [weak self] in self?.hitFreeLimit = $0 },
+            reloadSearchIndex: { [weak self] in await self?.reloadSearchIndex() == true }
+        )
+    )
+
+    private lazy var folderWorker = FolderIndexingWorker(
+        imageEncoder: imageEncoder,
+        database: database,
+        batchSize: batchSize,
+        callbacks: FolderIndexingWorker.Callbacks(
+            searchableCount: { [weak self] in self?.searchEngine.totalSize ?? 0 },
+            setProgress: { [weak self] in self?.progress = $0 },
+            reloadSearchIndex: { [weak self] in _ = await self?.reloadSearchIndex() }
+        )
+    )
 
     init(imageEncoder: ImageEncoder, searchEngine: SearchEngine, database: DatabaseProtocol = AppDatabase.shared) {
         self.imageEncoder = imageEncoder
@@ -129,10 +147,11 @@ class IndexingService: ObservableObject {
         let loaded = await loadExistingIndexIfAvailable(cleanOrphans: cleanOrphans, loadPriority: loadPriority)
         startObservingPhotoChanges()
         if scheduleAutoResume && loaded {
-            scheduleDeferredAutoResume(totalInLibrary: launchLibraryCountSnapshot)
-            scheduleDeferredEnrichment(
-                delaySeconds: IndexingConfig.postLaunchAutoResumeDelaySeconds
-                    + IndexingConfig.surpriseValidationDelaySeconds
+            enqueueLibraryIndexing(
+                autoResumeLibraryCount: launchLibraryCountSnapshot,
+                isAutoResume: true,
+                delayAfterDependencies: IndexingConfig.postLaunchAutoResumeDelaySeconds,
+                enqueueLaunchEnrichment: true
             )
         }
         #if DEBUG
@@ -177,7 +196,7 @@ class IndexingService: ObservableObject {
                         PhotoLibrary.fetchAllMedia()
                     }.value
                     launchLibraryCountSnapshot = allMedia.count
-                    await cleanOrphanedEmbeddings(allMedia: allMedia)
+                    await enqueueAndWaitForOrphanCleanup(allMedia: allMedia)
                 }
 
                 let didLoad = try await Task.detached(priority: loadPriority) { [searchEngine] in
@@ -218,14 +237,14 @@ class IndexingService: ObservableObject {
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         SurpriseQueries.clearValidated()
-        indexingTask = Task { await performIndexing() }
+        enqueueLibraryIndexing()
     }
 
     func indexNewPhotosOnly() {
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         newPhotosAvailable = false
-        indexingTask = Task { await performIndexing() }
+        enqueueLibraryIndexing()
     }
 
     func rebuildRequiredIndex() {
@@ -237,53 +256,23 @@ class IndexingService: ObservableObject {
         stopIndexing()
         guard markRunningIfIdle() else { return }
         SurpriseQueries.clearValidated()
-        indexingTask = Task {
-            do {
-                let db = database
-                try await Task.detached(priority: .utility) {
-                    try db.deleteAll()
-                }.value
-            } catch {
-                logger.error("Failed to clear incompatible index before rebuild: \(error.localizedDescription)")
-                progress.isRunning = false
-                return
-            }
-
-            searchEngine.dropIndex()
-            isReady = false
-            await performIndexing()
-            guard !Task.isCancelled, indexRebuildRequired else { return }
-
-            do {
-                let db = database
-                try await Task.detached(priority: .utility) {
-                    try db.clearIndexRebuildRequired()
-                }.value
-                indexRebuildRequired = false
-            } catch {
-                logger.error("Failed to complete empty index rebuild: \(error.localizedDescription)")
-            }
-        }
+        enqueueLibraryIndexing(rebuildRequired: true)
     }
 
     func stopIndexing() {
-        indexingTask?.cancel()
-        indexingTask = nil
-        surpriseValidationTask?.cancel()
-        surpriseValidationTask = nil
-        autoResumeTask?.cancel()
-        autoResumeTask = nil
-        cancelEnrichmentTask()
-        geocodingTask?.cancel()
-        geocodingTask = nil
+        jobQueue.cancelAll()
+        librarySession = nil
         geocodingProgress = nil
         progress.isRunning = false
     }
 
     func deferEnrichmentForUserSearch() {
-        guard enrichmentTask != nil else { return }
-        cancelEnrichmentWork()
-        scheduleDeferredEnrichment(delaySeconds: IndexingConfig.surpriseValidationDelaySeconds)
+        guard jobQueue.contains(.enrichPhotos) else { return }
+        jobQueue.cancel(.enrichPhotos)
+        enqueueEnrichment(
+            workflowID: UUID(),
+            delayAfterDependencies: IndexingConfig.surpriseValidationDelaySeconds
+        )
     }
 
     func cancelEnrichmentForMemoryPressure() {
@@ -293,7 +282,27 @@ class IndexingService: ObservableObject {
     func indexFolder(url: URL, name: String) {
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
-        indexingTask = Task { await performFolderIndexing(url: url, name: name) }
+        let workflowID = UUID()
+        let shouldResumeGeocoding = jobQueue.contains(.geocodeMedia)
+        jobQueue.enqueue(IndexingJob(
+            workflowID: workflowID,
+            kind: .indexFolder,
+            priority: .userInitiated
+        ) { [weak self] in
+            guard let self else { return .cancelled }
+            self.beginBackgroundTask()
+            defer {
+                self.endBackgroundTask()
+                self.progress.isRunning = false
+            }
+            await self.folderWorker.index(url: url, name: name)
+            guard !Task.isCancelled else { return .cancelled }
+            self.enqueueEnrichment(workflowID: workflowID)
+            if shouldResumeGeocoding {
+                self.enqueueGeocoding(workflowID: workflowID)
+            }
+            return .completed
+        })
     }
 
     // MARK: - Private
@@ -347,490 +356,19 @@ class IndexingService: ObservableObject {
                     let indexedPhotoIds = try db.allIndexedIdentifiers()
                     let orphaned = indexedPhotoIds.subtracting(currentIds)
                     if !orphaned.isEmpty && orphaned.count < indexedPhotoIds.count / 2 {
-                        try db.deleteOrphanedPhotos(localIdentifiers: orphaned)
-                        try engine.loadIndex()
-                        await MainActor.run { self.indexVersion += 1 }
+                        await MainActor.run {
+                            self.enqueueLightweightOrphanCleanup(
+                                orphanedPhotoIDs: orphaned,
+                                database: db,
+                                searchEngine: engine
+                            )
+                        }
                     }
                 }
             } catch {
                 logger.error("Error checking for photo changes: \(error.localizedDescription)")
             }
         }
-    }
-
-    private func persistPhotoBatch(_ photos: [IndexedPhoto]) async {
-        do {
-            let db = database
-            let shouldCompleteRequiredRebuild = indexRebuildRequired
-            let completedRequiredRebuild = try await Task.detached(priority: .utility) {
-                try db.insertPhotos(
-                    photos,
-                    completingRequiredRebuild: shouldCompleteRequiredRebuild
-                )
-            }.value
-            if completedRequiredRebuild {
-                indexRebuildRequired = false
-            }
-        } catch {
-            logger.error("Failed to insert photo batch: \(error.localizedDescription), retrying individually")
-            for photo in photos {
-                do {
-                    let db = database
-                    let shouldCompleteRequiredRebuild = indexRebuildRequired
-                    let completedRequiredRebuild = try await Task.detached(priority: .utility) {
-                        try db.insertPhotos(
-                            [photo],
-                            completingRequiredRebuild: shouldCompleteRequiredRebuild
-                        )
-                    }.value
-                    if completedRequiredRebuild {
-                        indexRebuildRequired = false
-                    }
-                } catch {
-                    logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    private func performIndexing() async {
-        // Request background execution time so indexing continues when app is backgrounded
-        beginBackgroundTask()
-        defer { endBackgroundTask() }
-
-        let allAssets = await Task.detached(priority: .userInitiated) {
-            PhotoLibrary.fetchAllMedia()
-        }.value
-        let total = allAssets.count
-        hitFreeLimit = false
-
-        #if DEBUG
-        logger.info("[IndexingService] Starting indexing: \(total) total assets in library")
-        let indexingStart = CFAbsoluteTimeGetCurrent()
-        #endif
-
-        let indexedIdentifiers: IndexedMediaIdentifiers
-        do {
-            let db = database
-            indexedIdentifiers = try await Task.detached(priority: .userInitiated) {
-                try db.allIndexedMediaIdentifiers()
-            }.value
-        } catch {
-            logger.error("Failed to load indexed media identifiers: \(error.localizedDescription)")
-            indexedIdentifiers = IndexedMediaIdentifiers(photos: [], videos: [])
-        }
-        let alreadyIndexed = indexedIdentifiers.photos
-        let alreadyIndexedVideos = indexedIdentifiers.videos
-        let isPro = ProManager.shared.isPro
-        var indexed = 0
-        var newlyIndexed = alreadyIndexed.count + alreadyIndexedVideos.count
-        var batch: [IndexedPhoto] = []
-
-        // Separate photos and videos
-        var photoAssets: [PHAsset] = []
-        var videoAssets: [PHAsset] = []
-        for i in 0..<total {
-            let asset = allAssets[i]
-            if asset.mediaType == .video {
-                videoAssets.append(asset)
-            } else {
-                photoAssets.append(asset)
-            }
-        }
-
-        #if DEBUG
-        logger.info("[IndexingService] Library breakdown: \(photoAssets.count) photos, \(videoAssets.count) videos, \(alreadyIndexed.count) photos and \(alreadyIndexedVideos.count) videos already indexed")
-        #endif
-
-        // Pass 1: Index all photos first with only base embeddings and metadata.
-        // OCR, blur scoring, and scene labels run later as deferred enrichment.
-        let encodeBatchSize = IndexingConfig.batchEncodeSize
-        progress = IndexingProgress(
-            total: photoAssets.count,
-            completed: 0,
-            isRunning: true,
-            phase: .photos,
-            searchableCount: searchEngine.totalSize
-        )
-
-        // Collect assets to index (skip already indexed)
-        var assetsToIndex: [PHAsset] = []
-        for asset in photoAssets {
-            if alreadyIndexed.contains(asset.localIdentifier) {
-                indexed += 1
-                progress.completed = indexed
-            } else {
-                assetsToIndex.append(asset)
-            }
-        }
-        progress.rateBaselineCompleted = indexed
-        progress.phaseStartedAt = Date()
-
-        let checkpointInterval = searchableCheckpointInterval(forLibrarySize: total)
-        var nextSearchableReloadCount = nextSearchableCheckpoint(
-            after: alreadyIndexed.count + alreadyIndexedVideos.count,
-            isPro: isPro,
-            interval: checkpointInterval
-        )
-        var lastProgressiveReloadAt: Date?
-        var batchCursor = IndexingBatchCursor(items: assetsToIndex, batchSize: encodeBatchSize)
-        var nextLoadTask: Task<LoadedPhotoBatch, Never>?
-        let prefetchEnabled = isPro && IndexingConfig.prefetchBatchCapacity > 0
-
-        func makeBatch() -> [PHAsset] {
-            guard !isPro else { return batchCursor.nextBatch() }
-            let remainingAllowed = max(0, FreeTier.maxIndexedMedia - newlyIndexed)
-            return batchCursor.nextBatch(maxCount: remainingAllowed)
-        }
-
-        let firstBatch = makeBatch()
-        if !firstBatch.isEmpty {
-            nextLoadTask = loadPhotoBatchTask(assets: firstBatch)
-        }
-
-        // Process in batches with one bounded prefetch task ahead of encoding.
-        while nextLoadTask != nil || batchCursor.hasRemaining {
-            if Task.isCancelled { break }
-            if !FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) {
-                hitFreeLimit = true
-                break
-            }
-
-            let loadTask: Task<LoadedPhotoBatch, Never>
-            if let prefetchedTask = nextLoadTask {
-                loadTask = prefetchedTask
-                nextLoadTask = nil
-            } else {
-                let batchToLoad = makeBatch()
-                guard !batchToLoad.isEmpty else { break }
-                loadTask = loadPhotoBatchTask(assets: batchToLoad)
-            }
-
-            if prefetchEnabled {
-                let nextBatch = makeBatch()
-                nextLoadTask = nextBatch.isEmpty ? nil : loadPhotoBatchTask(assets: nextBatch)
-            }
-
-            let loadedBatch = await loadTask.value
-            let batchAssets = loadedBatch.assets
-            let loadedImages = loadedBatch.loadedImages
-
-            guard !loadedImages.isEmpty else {
-                indexed += batchAssets.count
-                progress.completed = indexed
-                continue
-            }
-
-            // Phase 2: Batch Core ML encoding
-            do {
-                let images = loadedImages.map { $0.image }
-                let encoder = imageEncoder
-                let embeddings = try await Task.detached(priority: .userInitiated) {
-                    if images.count > 1 {
-                        return try encoder.encodeBatch(images: images)
-                    }
-                    return [try encoder.encode(image: images[0])]
-                }.value
-
-                for (i, (asset, _)) in loadedImages.enumerated() {
-                    guard i < embeddings.count else { break }
-                    guard FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) else {
-                        hitFreeLimit = true
-                        break
-                    }
-
-                    batch.append(IndexedPhoto(
-                        id: UUID().uuidString,
-                        localIdentifier: asset.localIdentifier,
-                        creationDate: asset.creationDate,
-                        latitude: asset.location?.coordinate.latitude,
-                        longitude: asset.location?.coordinate.longitude,
-                        pixelWidth: asset.pixelWidth,
-                        pixelHeight: asset.pixelHeight,
-                        embedding: embeddings[i].toFloat16Data(),
-                        indexedAt: Date()
-                    ))
-
-                    newlyIndexed += 1
-                }
-            } catch {
-                logger.error("Batch encoding failed: \(error.localizedDescription)")
-                // Fallback: encode individually
-                for (asset, image) in loadedImages {
-                    guard FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) else {
-                        hitFreeLimit = true
-                        break
-                    }
-                    do {
-                        let encoder = imageEncoder
-                        let embedding = try await Task.detached(priority: .userInitiated) {
-                            try encoder.encode(image: image)
-                        }.value
-
-                        batch.append(IndexedPhoto(
-                            id: UUID().uuidString,
-                            localIdentifier: asset.localIdentifier,
-                            creationDate: asset.creationDate,
-                            latitude: asset.location?.coordinate.latitude,
-                            longitude: asset.location?.coordinate.longitude,
-                            pixelWidth: asset.pixelWidth,
-                            pixelHeight: asset.pixelHeight,
-                            embedding: embedding.toFloat16Data(),
-                            indexedAt: Date()
-                        ))
-                        newlyIndexed += 1
-                    } catch {
-                        logger.error("Single encode fallback failed for \(asset.localIdentifier): \(error.localizedDescription)")
-                    }
-                }
-            }
-
-            // Flush DB batches (outside encoding try block)
-            if batch.count >= batchSize {
-                await persistPhotoBatch(batch)
-                batch.removeAll(keepingCapacity: true)
-                let checkpoint = await reloadSearchIndexIfNeeded(
-                    indexedMediaCount: newlyIndexed,
-                    nextCheckpoint: nextSearchableReloadCount,
-                    lastReloadAt: lastProgressiveReloadAt,
-                    interval: checkpointInterval
-                )
-                nextSearchableReloadCount = checkpoint.nextCheckpoint
-                lastProgressiveReloadAt = checkpoint.lastReloadAt
-            }
-
-            indexed += batchAssets.count
-            progress.completed = indexed
-            await Task.yield()
-        }
-
-        if !batch.isEmpty {
-            await persistPhotoBatch(batch)
-        }
-
-        // Photos done; ensure the final photo checkpoint is searchable.
-        await reloadSearchIndex()
-        progress.photosComplete = true
-
-        #if DEBUG
-        logger.info("[IndexingService] Photo indexing complete: \(newlyIndexed) newly indexed")
-        #endif
-
-        // Pass 2: Index videos in background
-        let videoAssetsToIndex = videoAssets.filter {
-            !alreadyIndexedVideos.contains($0.localIdentifier)
-        }
-        if !videoAssets.isEmpty && !Task.isCancelled && !hitFreeLimit {
-            indexed = videoAssets.count - videoAssetsToIndex.count
-            progress = IndexingProgress(
-                total: videoAssets.count,
-                completed: indexed,
-                isRunning: true,
-                phase: .videos,
-                photosComplete: true,
-                searchableCount: searchEngine.totalSize,
-                rateBaselineCompleted: indexed,
-                phaseStartedAt: Date()
-            )
-        }
-        for asset in videoAssetsToIndex {
-            if Task.isCancelled { break }
-            if !FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) {
-                hitFreeLimit = true
-                break
-            }
-
-            if await indexVideo(asset: asset) {
-                indexRebuildRequired = false
-            }
-            newlyIndexed += 1
-            indexed += 1
-            progress.completed = indexed
-            if indexed % 10 == 0 { await Task.yield() }
-        }
-
-        // Reload again to include videos
-        if !videoAssets.isEmpty {
-            await reloadSearchIndex()
-        }
-        progress.isRunning = false
-
-        #if DEBUG
-        logger.info("[IndexingService] Indexing complete in \(String(format: "%.1f", CFAbsoluteTimeGetCurrent() - indexingStart))s")
-        #endif
-
-        // Geocode location strings in background (doesn't block search)
-        if !Task.isCancelled {
-            scheduleDeferredEnrichment()
-            scheduleSurpriseValidation()
-            launchGeocoding()
-        }
-    }
-
-    private func performFolderIndexing(url: URL, name: String) async {
-        beginBackgroundTask()
-        defer { endBackgroundTask() }
-        defer { progress.isRunning = false }
-
-        // Bail out if we can't acquire the security-scoped resource. Continuing
-        // without access would fail later with confusing permission errors.
-        let hasAccess = url.startAccessingSecurityScopedResource()
-        guard hasAccess else {
-            logger.error("[IndexingService] Could not acquire security-scoped access for folder: \(url.lastPathComponent)")
-            return
-        }
-        defer { url.stopAccessingSecurityScopedResource() }
-
-        let sourceId = UUID().uuidString
-
-        if let bookmarkData = try? url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil) {
-            UserDefaults.standard.set(bookmarkData, forKey: AppKeys.folderBookmark(sourceId: sourceId))
-        }
-
-        let source = PhotoSource(
-            id: sourceId, type: PhotoSourceType.folder.rawValue, path: url.path, name: name,
-            addedAt: Date(), lastIndexedAt: nil, photoCount: 0
-        )
-        do {
-            let db = database
-            try await Task.detached(priority: .utility) {
-                try db.insertSource(source)
-            }.value
-        }
-        catch { logger.error("Failed to create source: \(error.localizedDescription)"); return }
-
-        let imageURLs = await Task.detached(priority: .utility) {
-            FolderScanner.scanFolder(at: url)
-        }.value
-        progress = IndexingProgress(
-            total: imageURLs.count,
-            completed: 0,
-            isRunning: true,
-            searchableCount: searchEngine.totalSize
-        )
-
-        let db = database
-        let alreadyIndexed = await Task.detached(priority: .utility) {
-            (try? db.allIndexedFilePaths()) ?? []
-        }.value
-        var indexed = 0
-        var batch: [IndexedPhoto] = []
-
-        for imageURL in imageURLs {
-            if Task.isCancelled { break }
-
-            if alreadyIndexed.contains(imageURL.path) {
-                indexed += 1
-                progress.completed = indexed
-                continue
-            }
-
-            let loadedImage = await Task.detached(priority: .utility) {
-                FolderScanner.loadImage(from: imageURL)
-            }.value
-            guard let image = loadedImage else {
-                indexed += 1
-                progress.completed = indexed
-                continue
-            }
-
-            do {
-                let encoder = imageEncoder
-                let embedding = try await Task.detached(priority: .userInitiated) {
-                    try encoder.encode(image: image)
-                }.value
-                let metadata = await Task.detached(priority: .utility) {
-                    FolderScanner.extractMetadata(from: imageURL)
-                }.value
-
-                // Use original image dimensions from the file, not the resized 224x224 image
-                var (originalWidth, originalHeight) = await Task.detached(priority: .utility) {
-                    var width = 0
-                    var height = 0
-                    if let imageSource = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
-                       let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any] {
-                        width = properties[kCGImagePropertyPixelWidth] as? Int ?? 0
-                        height = properties[kCGImagePropertyPixelHeight] as? Int ?? 0
-                    }
-                    return (width, height)
-                }.value
-                if originalWidth == 0 || originalHeight == 0 {
-                    // Fallback to UIImage size (may still be resized, but better than nothing)
-                    if originalWidth == 0 { originalWidth = Int(image.size.width) }
-                    if originalHeight == 0 { originalHeight = Int(image.size.height) }
-                }
-
-                batch.append(IndexedPhoto(
-                    id: UUID().uuidString,
-                    localIdentifier: FolderScanner.localIdentifier(for: imageURL, within: url, sourceId: sourceId),
-                    creationDate: metadata.date,
-                    latitude: metadata.latitude,
-                    longitude: metadata.longitude,
-                    pixelWidth: originalWidth,
-                    pixelHeight: originalHeight,
-                    embedding: embedding.toFloat16Data(),
-                    indexedAt: Date(),
-                    sourceId: sourceId,
-                    filePath: imageURL.path
-                ))
-
-                if batch.count >= batchSize {
-                    let db = database
-                    let photosToInsert = batch
-                    try await Task.detached(priority: .utility) {
-                        _ = try db.insertPhotos(
-                            photosToInsert,
-                            completingRequiredRebuild: false
-                        )
-                    }.value
-                    batch.removeAll(keepingCapacity: true)
-                }
-            } catch {
-                logger.error("Failed to index \(imageURL.lastPathComponent): \(error.localizedDescription)")
-            }
-
-            indexed += 1
-            progress.completed = indexed
-            if indexed % 10 == 0 { await Task.yield() }
-        }
-
-        if !batch.isEmpty {
-            do {
-                let db = database
-                let photosToInsert = batch
-                try await Task.detached(priority: .utility) {
-                    _ = try db.insertPhotos(
-                        photosToInsert,
-                        completingRequiredRebuild: false
-                    )
-                }.value
-            } catch {
-                logger.error("Failed to flush folder batch: \(error.localizedDescription), retrying individually")
-                for photo in batch {
-                    do {
-                        let db = database
-                        try await Task.detached(priority: .utility) {
-                            _ = try db.insertPhotos(
-                                [photo],
-                                completingRequiredRebuild: false
-                            )
-                        }.value
-                    }
-                    catch { logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)") }
-                }
-            }
-        }
-
-        do {
-            let db = database
-            try await Task.detached(priority: .utility) {
-                try db.updateSourceStats(sourceId, photoCount: indexed)
-            }.value
-        }
-        catch { logger.error("Failed to update source stats: \(error.localizedDescription)") }
-
-        await reloadSearchIndex()
-        scheduleDeferredEnrichment()
     }
 
     @discardableResult
@@ -866,121 +404,211 @@ class IndexingService: ObservableObject {
         return false
     }
 
-    private func loadPhotoBatchTask(assets: [PHAsset]) -> Task<LoadedPhotoBatch, Never> {
-        Task {
-            let loadedImages = await loadImagesForIndexing(assets: assets)
-            return LoadedPhotoBatch(assets: assets, loadedImages: loadedImages)
-        }
+    private enum AutoResumeDecision {
+        case noIndex
+        case complete
+        case resume
     }
 
-    private func loadImagesForIndexing(assets: [PHAsset]) async -> [(asset: PHAsset, image: UIImage)] {
-        var loadedImages: [(asset: PHAsset, image: UIImage)] = []
-        await withTaskGroup(of: (PHAsset, UIImage?).self) { group in
-            for asset in assets {
-                group.addTask {
-                    let image = await PhotoLibrary.loadImageForIndexing(for: asset)
-                    return (asset, image)
+    private func enqueueLibraryIndexing(
+        rebuildRequired: Bool = false,
+        autoResumeLibraryCount: Int? = nil,
+        isAutoResume: Bool = false,
+        delayAfterDependencies: TimeInterval = 0,
+        enqueueLaunchEnrichment: Bool = false
+    ) {
+        let workflowID = UUID()
+        jobQueue.enqueue(IndexingJob(
+            workflowID: workflowID,
+            kind: .indexPhotos,
+            priority: .userInitiated,
+            delayAfterDependencies: delayAfterDependencies
+        ) { [weak self] in
+            guard let self else { return .cancelled }
+            if isAutoResume {
+                switch await self.autoResumeDecision(totalInLibrary: autoResumeLibraryCount) {
+                case .noIndex:
+                    return .completed
+                case .complete:
+                    self.enqueueGeocoding(workflowID: workflowID)
+                    return .completed
+                case .resume:
+                    self.cancelEnrichmentWork()
+                    guard self.markRunningIfIdle() else { return .cancelled }
+                    self.newPhotosAvailable = false
                 }
             }
-            for await (asset, image) in group {
-                if let image {
-                    loadedImages.append((asset, image))
+
+            if rebuildRequired {
+                do {
+                    let db = self.database
+                    try await Task.detached(priority: .utility) {
+                        try db.deleteAll()
+                    }.value
+                } catch {
+                    logger.error("Failed to clear incompatible index before rebuild: \(error.localizedDescription)")
+                    self.progress.isRunning = false
+                    return .cancelled
+                }
+                self.searchEngine.dropIndex()
+                self.isReady = false
+            }
+
+            self.beginBackgroundTask()
+            self.librarySession = await self.libraryWorker.indexPhotos()
+            if Task.isCancelled {
+                self.librarySession = nil
+                self.endBackgroundTask()
+                self.progress.isRunning = false
+                return .cancelled
+            }
+            return .completed
+        })
+
+        jobQueue.enqueue(IndexingJob(
+            workflowID: workflowID,
+            kind: .indexVideos,
+            priority: .userInitiated,
+            dependencies: [.indexPhotos]
+        ) { [weak self] in
+            guard let self else { return .cancelled }
+            guard let session = self.librarySession else { return .completed }
+            defer {
+                self.librarySession = nil
+                self.endBackgroundTask()
+            }
+            await self.libraryWorker.indexVideos(session: session)
+            guard !Task.isCancelled else {
+                self.progress.isRunning = false
+                return .cancelled
+            }
+            if self.indexRebuildRequired {
+                do {
+                    let db = self.database
+                    try await Task.detached(priority: .utility) {
+                        try db.clearIndexRebuildRequired()
+                    }.value
+                    self.indexRebuildRequired = false
+                } catch {
+                    logger.error("Failed to complete empty index rebuild: \(error.localizedDescription)")
                 }
             }
+            self.enqueuePostIndexingJobs(workflowID: workflowID)
+            return .completed
+        })
+
+        if enqueueLaunchEnrichment {
+            enqueueEnrichment(
+                workflowID: workflowID,
+                dependencies: [.indexPhotos],
+                delayAfterDependencies: IndexingConfig.surpriseValidationDelaySeconds
+            )
         }
-        return loadedImages
     }
 
-    private func firstSearchableCheckpoint(isPro: Bool) -> Int {
-        if isPro { return IndexingConfig.firstSearchableCheckpoint }
-        return min(IndexingConfig.firstSearchableCheckpoint, FreeTier.maxIndexedMedia)
+    private func enqueuePostIndexingJobs(workflowID: UUID) {
+        jobQueue.cancel(.enrichPhotos)
+        enqueueEnrichment(workflowID: workflowID, dependencies: [.indexVideos])
+        jobQueue.enqueue(IndexingJob(
+            workflowID: workflowID,
+            kind: .validateSurpriseQueries,
+            priority: .maintenance,
+            dependencies: [.indexVideos],
+            delayAfterDependencies: IndexingConfig.surpriseValidationDelaySeconds
+        ) { [weak self] in
+            guard let self, self.searchEngine.isIndexLoaded else { return .cancelled }
+            await SurpriseQueries.validateQueries(using: self.searchEngine)
+            return Task.isCancelled ? .cancelled : .completed
+        })
+        enqueueGeocoding(workflowID: workflowID, dependencies: [.indexVideos])
     }
 
-    private func searchableCheckpointInterval(forLibrarySize librarySize: Int) -> Int {
-        if librarySize >= IndexingConfig.largeLibraryProgressiveReloadThreshold {
-            return IndexingConfig.largeLibrarySearchableCheckpointInterval
-        }
-        return IndexingConfig.searchableCheckpointInterval
-    }
-
-    private func nextSearchableCheckpoint(after indexedMediaCount: Int, isPro: Bool, interval: Int) -> Int {
-        let first = firstSearchableCheckpoint(isPro: isPro)
-        guard indexedMediaCount >= first else { return first }
-        return indexedMediaCount + interval
-    }
-
-    private func reloadSearchIndexIfNeeded(
-        indexedMediaCount: Int,
-        nextCheckpoint: Int,
-        lastReloadAt: Date?,
-        interval: Int
-    ) async -> (nextCheckpoint: Int, lastReloadAt: Date?) {
-        guard indexedMediaCount >= nextCheckpoint else {
-            return (nextCheckpoint, lastReloadAt)
-        }
-        if let lastReloadAt {
-            let elapsed = Date().timeIntervalSince(lastReloadAt)
-            guard elapsed >= IndexingConfig.minSearchReloadIntervalSeconds else {
-                return (nextCheckpoint, lastReloadAt)
+    private func enqueueEnrichment(
+        workflowID: UUID,
+        dependencies: Set<IndexingJobKind> = [],
+        delayAfterDependencies: TimeInterval = 0
+    ) {
+        jobQueue.enqueue(IndexingJob(
+            workflowID: workflowID,
+            kind: .enrichPhotos,
+            priority: .enrichment,
+            dependencies: dependencies,
+            delayAfterDependencies: delayAfterDependencies
+        ) { [weak self] in
+            guard let self, !self.progress.isRunning else { return .cancelled }
+            await self.performPhotoEnrichment()
+            if self.progress.phase == .enrichment {
+                self.progress.isRunning = false
             }
-        }
-        let didLoad = await reloadSearchIndex()
-        let reloadDate = didLoad ? Date() : lastReloadAt
-        let followingCheckpoint = indexedMediaCount + interval
-        return (followingCheckpoint, reloadDate)
+            return Task.isCancelled ? .cancelled : .completed
+        })
     }
 
-    private func scheduleDeferredAutoResume(totalInLibrary: Int?) {
-        autoResumeTask?.cancel()
-        autoResumeTask = Task { [weak self] in
-            let delay = UInt64(IndexingConfig.postLaunchAutoResumeDelaySeconds * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: delay)
-            guard !Task.isCancelled else { return }
-            await self?.checkForIncompleteIndex(totalInLibrary: totalInLibrary)
-            self?.autoResumeTask = nil
-        }
+    private func enqueueGeocoding(
+        workflowID: UUID,
+        dependencies: Set<IndexingJobKind> = []
+    ) {
+        guard !jobQueue.contains(.geocodeMedia) else { return }
+        jobQueue.enqueue(IndexingJob(
+            workflowID: workflowID,
+            kind: .geocodeMedia,
+            priority: .background,
+            dependencies: dependencies
+        ) { [weak self] in
+            guard let self else { return .cancelled }
+            await self.geocodeIndexedMedia()
+            return Task.isCancelled ? .cancelled : .completed
+        })
     }
 
-    private func scheduleDeferredEnrichment(delaySeconds: TimeInterval = 0) {
-        cancelEnrichmentTask()
-        enrichmentTaskGeneration += 1
-        let generation = enrichmentTaskGeneration
-        enrichmentTask = Task { [weak self] in
-            if delaySeconds > 0 {
-                let delay = UInt64(delaySeconds * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: delay)
+    private func enqueueAndWaitForOrphanCleanup(allMedia: PHFetchResult<PHAsset>) async {
+        let workflowID = UUID()
+        jobQueue.enqueue(IndexingJob(
+            workflowID: workflowID,
+            kind: .cleanOrphans,
+            priority: .maintenance
+        ) { [weak self] in
+            guard let self else { return .cancelled }
+            await self.cleanOrphanedEmbeddings(allMedia: allMedia)
+            return Task.isCancelled ? .cancelled : .completed
+        })
+        await jobQueue.waitUntilIdle()
+    }
+
+    private func enqueueLightweightOrphanCleanup(
+        orphanedPhotoIDs: Set<String>,
+        database: DatabaseProtocol,
+        searchEngine: SearchEngine
+    ) {
+        jobQueue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .cleanOrphans,
+            priority: .maintenance
+        ) { [weak self] in
+            guard let self else { return .cancelled }
+            do {
+                try await Task.detached(priority: .utility) {
+                    try database.deleteOrphanedPhotos(localIdentifiers: orphanedPhotoIDs)
+                    try searchEngine.loadIndex()
+                }.value
+                self.indexVersion += 1
+                return Task.isCancelled ? .cancelled : .completed
+            } catch {
+                logger.error("Error cleaning orphaned photos: \(error.localizedDescription)")
+                return .cancelled
             }
-            guard !Task.isCancelled, let self, !self.progress.isRunning else { return }
-            await self.performPhotoEnrichment(generation: generation)
-        }
-    }
-
-    private func cancelEnrichmentTask() {
-        enrichmentTaskGeneration += 1
-        enrichmentTask?.cancel()
-        enrichmentTask = nil
+        })
     }
 
     private func cancelEnrichmentWork() {
-        cancelEnrichmentTask()
+        jobQueue.cancel(.enrichPhotos)
         if progress.phase == .enrichment {
             progress.isRunning = false
         }
     }
 
-    private func scheduleSurpriseValidation() {
-        surpriseValidationTask?.cancel()
-        surpriseValidationTask = Task.detached(priority: .utility) { [searchEngine] in
-            let delay = UInt64(IndexingConfig.surpriseValidationDelaySeconds * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: delay)
-            guard !Task.isCancelled, searchEngine.isIndexLoaded else { return }
-            await SurpriseQueries.validateQueries(using: searchEngine)
-        }
-    }
-
-    /// Check if there are unindexed photos/videos remaining from an interrupted indexing session.
-    /// If found, automatically resume indexing in the background.
-    private func checkForIncompleteIndex(totalInLibrary providedTotal: Int? = nil) async {
+    /// Checks whether interrupted indexing should resume after launch.
+    private func autoResumeDecision(totalInLibrary providedTotal: Int? = nil) async -> AutoResumeDecision {
         let totalInLibrary = providedTotal ?? PhotoLibrary.fetchAllMedia().count
 
         let counts: IndexedMediaCounts
@@ -991,45 +619,27 @@ class IndexingService: ObservableObject {
             }.value
         } catch {
             logger.error("Failed to check index completeness: \(error.localizedDescription)")
-            return
+            return .noIndex
         }
 
         let totalIndexed = counts.total
-        guard totalIndexed > 0 else { return }
+        guard totalIndexed > 0 else { return .noIndex }
         let unindexedCount = totalInLibrary - totalIndexed
 
         if unindexedCount <= 0 {
-            // Everything indexed — launch geocoding directly
-            launchGeocoding()
-            return
+            return .complete
         }
 
         #if DEBUG
         logger.info("[IndexingService] Incomplete index detected: \(totalIndexed)/\(totalInLibrary) indexed, \(unindexedCount) remaining. Auto-resuming.")
         #endif
 
-        // Auto-resume indexing for the remaining items
-        // performIndexing will launch geocoding when it finishes
-        if progress.phase == .enrichment {
-            cancelEnrichmentWork()
-        }
-        guard markRunningIfIdle() else { return }
-        newPhotosAvailable = false
-        indexingTask = Task { await performIndexing() }
+        return .resume
     }
 
     // MARK: - Photo Enrichment
 
-    private func performPhotoEnrichment(generation: Int) async {
-        defer {
-            if enrichmentTaskGeneration == generation {
-                enrichmentTask = nil
-                if progress.phase == .enrichment {
-                    progress.isRunning = false
-                }
-            }
-        }
-
+    private func performPhotoEnrichment() async {
         let remaining: Int
         do {
             let db = database
@@ -1086,8 +696,8 @@ class IndexingService: ObservableObject {
             }
         }
 
-        if completed > 0, !Task.isCancelled, enrichmentTaskGeneration == generation {
-            await reloadSearchIndex()
+        if completed > 0, !Task.isCancelled {
+            _ = await reloadSearchIndex()
         }
     }
 
@@ -1257,21 +867,6 @@ class IndexingService: ObservableObject {
 
     // MARK: - Background Location Geocoding
 
-    private func launchGeocoding() {
-        guard geocodingTask == nil else { return }
-        // Strong [self] capture is safe here because IndexingService is
-        // @MainActor-isolated (implicitly Sendable), and the retain cycle
-        // (self → task → self) is broken at the end when we nil the task.
-        // Strong capture also avoids Swift 6's ban on capturing a mutable
-        // `weak var self` across a @Sendable concurrency boundary.
-        geocodingTask = Task.detached(priority: .utility) { [self] in
-            await geocodeIndexedMedia()
-            await MainActor.run {
-                self.geocodingTask = nil
-            }
-        }
-    }
-
     /// Reverse-geocodes indexed photos and videos that have GPS but no location strings yet.
     /// Runs in the background after indexing completes without blocking search.
     private func geocodeIndexedMedia() async {
@@ -1430,79 +1025,4 @@ class IndexingService: ObservableObject {
         return (completed, false)
     }
 
-    // MARK: - Video Indexing
-
-    /// Returns whether the first persisted video embeddings completed a required rebuild.
-    private func indexVideo(asset: PHAsset) async -> Bool {
-        let db = database
-        let localIdentifier = asset.localIdentifier
-        let alreadyIndexed = await Task.detached(priority: .utility) {
-            (try? db.isVideoIndexed(localIdentifier: localIdentifier)) == true
-        }.value
-        guard !alreadyIndexed else { return false }
-
-        guard let avAsset = await VideoFrameExtractor.loadAVAsset(from: asset) else { return false }
-
-        guard let duration = try? await avAsset.load(.duration) else { return false }
-        let durationSeconds = CMTimeGetSeconds(duration)
-        guard durationSeconds > 0 else { return false }
-
-        let numFrames = VideoFrameExtractor.frameCount(forDuration: durationSeconds)
-        let positions = VideoFrameExtractor.framePositions(count: numFrames)
-
-        let frames = await VideoFrameExtractor.extractFrames(from: avAsset, positions: positions)
-        guard !frames.isEmpty else { return false }
-
-        // Reverse geocode video location
-        let videoId = UUID().uuidString
-        let video = IndexedVideo(
-            id: videoId,
-            localIdentifier: asset.localIdentifier,
-            creationDate: asset.creationDate,
-            latitude: asset.location?.coordinate.latitude,
-            longitude: asset.location?.coordinate.longitude,
-            duration: durationSeconds,
-            pixelWidth: asset.pixelWidth,
-            pixelHeight: asset.pixelHeight,
-            frameCount: frames.count,
-            indexedAt: Date()
-        )
-
-        // Batch-encode all frames at once
-        do {
-            let images = frames.map { $0.image }
-            let encoder = imageEncoder
-            let embeddings = try await Task.detached(priority: .userInitiated) {
-                if images.count > 1 {
-                    return try encoder.encodeBatch(images: images)
-                }
-                return [try encoder.encode(image: images[0])]
-            }.value
-
-            // Batch-insert all frames in one transaction
-            var frameRecords: [IndexedVideoFrame] = []
-            for (i, (position, _)) in frames.enumerated() {
-                guard i < embeddings.count else { break }
-                frameRecords.append(IndexedVideoFrame(
-                    id: UUID().uuidString,
-                    videoId: videoId,
-                    framePosition: position,
-                    embedding: embeddings[i].toFloat16Data(),
-                    indexedAt: Date()
-                ))
-            }
-            let db = database
-            let shouldCompleteRequiredRebuild = indexRebuildRequired
-            return try await Task.detached(priority: .utility) {
-                try db.insertVideo(
-                    video,
-                    frameRecords,
-                    completingRequiredRebuild: shouldCompleteRequiredRebuild
-                )
-            }.value
-        } catch {
-            logger.error("Failed to persist indexed video: \(error.localizedDescription)")
-            return false
-        }
-    }
 }
