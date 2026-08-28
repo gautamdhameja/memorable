@@ -1,4 +1,5 @@
 import XCTest
+import os
 @testable import Memorable
 
 final class SearchEngineTests: XCTestCase {
@@ -425,20 +426,30 @@ final class FakeTextEncoder: TextEmbeddingEncoding {
 }
 
 final class RecordingSimilaritySearch: SimilaritySearching {
-    private var count = 0
-    private(set) var queries: [[Float]] = []
+    private struct State: Sendable {
+        var count = 0
+        var queries: [[Float]] = []
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    var queries: [[Float]] {
+        state.withLock { $0.queries }
+    }
 
     func buildIndex(embeddings: [Float16], count: Int) {
-        self.count = count
+        state.withLock { $0.count = count }
     }
 
     func search(queryEmbedding: [Float]) -> [Float]? {
-        queries.append(queryEmbedding)
-        return Array(repeating: queryEmbedding.first ?? 0, count: count)
+        state.withLock {
+            $0.queries.append(queryEmbedding)
+            return Array(repeating: queryEmbedding.first ?? 0, count: $0.count)
+        }
     }
 }
 
-struct FixturePhoto {
+struct FixturePhoto: Sendable {
     let id: String
     let localIdentifier: String
     let date: Date?
@@ -447,7 +458,7 @@ struct FixturePhoto {
     let embedding: [Float16]
 }
 
-struct FixtureVideo {
+struct FixtureVideo: Sendable {
     let id: String
     let localIdentifier: String
     let date: Date?
@@ -459,28 +470,49 @@ struct FixtureVideo {
 }
 
 final class SearchFixtureDatabase: DatabaseProtocol {
-    var photos: [FixturePhoto]
-    var videos: [FixtureVideo]
+    private struct State: Sendable {
+        var photos: [FixturePhoto]
+        var videos: [FixtureVideo]
+    }
+
+    private let state: OSAllocatedUnfairLock<State>
+
+    var photos: [FixturePhoto] {
+        get { state.withLock { $0.photos } }
+        set { state.withLock { $0.photos = newValue } }
+    }
+
+    var videos: [FixtureVideo] {
+        get { state.withLock { $0.videos } }
+        set { state.withLock { $0.videos = newValue } }
+    }
 
     init(photos: [FixturePhoto] = [], videos: [FixtureVideo] = []) {
-        self.photos = photos
-        self.videos = videos
+        self.state = OSAllocatedUnfairLock(
+            initialState: State(photos: photos, videos: videos)
+        )
     }
 
     func indexedCount() throws -> Int { photos.count }
     func videoIndexedCount() throws -> Int { Set(videos.map(\.id)).count }
     func indexedMediaCounts() throws -> IndexedMediaCounts {
-        IndexedMediaCounts(photos: photos.count, videos: Set(videos.map(\.id)).count)
+        let snapshot = state.withLock { $0 }
+        return IndexedMediaCounts(
+            photos: snapshot.photos.count,
+            videos: Set(snapshot.videos.map(\.id)).count
+        )
     }
     func allIndexedMediaIdentifiers() throws -> IndexedMediaIdentifiers {
-        IndexedMediaIdentifiers(
-            photos: Set(photos.map(\.localIdentifier)),
-            videos: Set(videos.map(\.localIdentifier))
+        let snapshot = state.withLock { $0 }
+        return IndexedMediaIdentifiers(
+            photos: Set(snapshot.photos.map(\.localIdentifier)),
+            videos: Set(snapshot.videos.map(\.localIdentifier))
         )
     }
 
     func loadAllEmbeddings() throws -> MediaIndex {
         var index = MediaIndex(kind: .photo)
+        let photos = state.withLock { $0.photos }
         for photo in photos {
             try index.append(
                 MediaIndex.Row(
@@ -503,6 +535,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
 
     func loadAllVideoEmbeddings() throws -> MediaIndex {
         var index = MediaIndex(kind: .videoFrame)
+        let videos = state.withLock { $0.videos }
         for video in videos {
             try index.append(
                 MediaIndex.Row(
@@ -552,7 +585,13 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func geocodingCounts() throws -> GeocodingCounts {
-        GeocodingCounts(totalWithGPS: 0, remaining: 0, indexedPhotos: photos.count, indexedVideos: videos.count)
+        let snapshot = state.withLock { $0 }
+        return GeocodingCounts(
+            totalWithGPS: 0,
+            remaining: 0,
+            indexedPhotos: snapshot.photos.count,
+            indexedVideos: snapshot.videos.count
+        )
     }
     func updatePhotoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws {}
     func updateVideoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws {}

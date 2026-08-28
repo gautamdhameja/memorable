@@ -2,22 +2,27 @@ import Foundation
 import Metal
 import MetalPerformanceShadersGraph
 import Accelerate
+import os
 
-protocol SimilaritySearching: AnyObject {
+protocol SimilaritySearching: AnyObject, Sendable {
     func buildIndex(embeddings: [Float16], count: Int)
     func search(queryEmbedding: [Float]) -> [Float]?
 }
 
 /// GPU-accelerated similarity search using MPSGraph matrix multiplication.
 /// Replaces per-embedding CPU dot products with a single [N, 768] × [768, 1] GPU matmul.
-class GPUSimilaritySearch: SimilaritySearching {
+final class GPUSimilaritySearch: SimilaritySearching {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let embeddingDim: Int
 
-    private var matrixBuffer: MTLBuffer?
-    private var cachedGraph: CachedGraph?
-    private var count: Int = 0
+    private let indexState = OSAllocatedUnfairLock(uncheckedState: IndexState())
+
+    private struct IndexState {
+        var matrixBuffer: MTLBuffer?
+        var cachedGraph: CachedGraph?
+        var count = 0
+    }
 
     private struct CachedGraph {
         let graph: MPSGraph
@@ -43,15 +48,13 @@ class GPUSimilaritySearch: SimilaritySearching {
         let buildStart = CFAbsoluteTimeGetCurrent()
         #endif
 
-        self.count = count
         guard count > 0, embeddings.count >= count * embeddingDim else {
-            matrixBuffer = nil
-            cachedGraph = nil
+            indexState.withLockUnchecked { $0 = IndexState(count: count) }
             return
         }
 
         let byteCount = count * embeddingDim * MemoryLayout<Float16>.size
-        matrixBuffer = embeddings.withUnsafeBufferPointer { ptr -> MTLBuffer? in
+        let matrixBuffer = embeddings.withUnsafeBufferPointer { ptr -> MTLBuffer? in
             guard let baseAddress = ptr.baseAddress else { return nil }
             return device.makeBuffer(bytes: baseAddress, length: byteCount, options: .storageModeShared)
         }
@@ -69,13 +72,16 @@ class GPUSimilaritySearch: SimilaritySearching {
             name: "similarity"
         )
 
-        cachedGraph = CachedGraph(
+        let cachedGraph = CachedGraph(
             graph: graph,
             matrixPlaceholder: matrixPlaceholder,
             queryPlaceholder: queryPlaceholder,
             resultTensor: resultTensor,
             n: count
         )
+        indexState.withLockUnchecked {
+            $0 = IndexState(matrixBuffer: matrixBuffer, cachedGraph: cachedGraph, count: count)
+        }
 
         #if DEBUG
         logger.info("[GPUSimilaritySearch] Index built: \(count) embeddings in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - buildStart))s")
@@ -86,12 +92,14 @@ class GPUSimilaritySearch: SimilaritySearching {
     /// Query should be L2-normalized Float array of embeddingDim length.
     /// Returns Float array of length N with similarity scores, or nil if GPU unavailable.
     func search(queryEmbedding: [Float]) -> [Float]? {
-        guard count > 0,
-              let cached = cachedGraph,
-              let matBuf = matrixBuffer,
-              cached.n == count else {
+        let index = indexState.withLockUnchecked { $0 }
+        guard index.count > 0,
+              let cached = index.cachedGraph,
+              let matBuf = index.matrixBuffer,
+              cached.n == index.count else {
             return nil
         }
+        let count = index.count
 
         #if DEBUG
         let searchStart = CFAbsoluteTimeGetCurrent()
@@ -139,7 +147,7 @@ class GPUSimilaritySearch: SimilaritySearching {
         }
 
         #if DEBUG
-        let n = self.count
+        let n = count
         logger.info("[GPUSimilaritySearch] Search over \(n) embeddings in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - searchStart))s")
         #endif
 
@@ -150,7 +158,12 @@ class GPUSimilaritySearch: SimilaritySearching {
     /// Returns an array of (rowIndex, colIndex, score) triples above the threshold.
     /// Only the upper triangle (colIndex > rowIndex) is returned to avoid duplicates.
     func findDuplicates(embeddings: [Float16], count: Int, threshold: Float, batchSize: Int = 500) -> [(Int, Int, Float)] {
-        guard count > 0, let matBuf = matrixBuffer, let cached = cachedGraph, cached.n == count else {
+        let index = indexState.withLockUnchecked { $0 }
+        guard count > 0,
+              let matBuf = index.matrixBuffer,
+              let cached = index.cachedGraph,
+              cached.n == count,
+              index.count == count else {
             return []
         }
 

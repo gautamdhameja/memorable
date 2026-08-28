@@ -1,56 +1,100 @@
 import XCTest
+import os
 @testable import Memorable
 
 @MainActor
 final class IndexingJobQueueTests: XCTestCase {
-    private final class Gate {
-        private var continuation: CheckedContinuation<Void, Never>?
-        private var isOpen = false
+    private final class Gate: Sendable {
+        private struct State {
+            var continuation: CheckedContinuation<Void, Never>?
+            var isOpen = false
+        }
+
+        private let state = OSAllocatedUnfairLock(uncheckedState: State())
 
         func wait() async {
-            guard !isOpen else { return }
-            await withCheckedContinuation { continuation = $0 }
+            await withCheckedContinuation { continuation in
+                let isOpen = state.withLockUnchecked { state in
+                    guard !state.isOpen else { return true }
+                    state.continuation = continuation
+                    return false
+                }
+                if isOpen {
+                    continuation.resume()
+                }
+            }
         }
 
         func open() {
-            isOpen = true
+            let continuation = state.withLockUnchecked { state in
+                state.isOpen = true
+                defer { state.continuation = nil }
+                return state.continuation
+            }
             continuation?.resume()
-            continuation = nil
         }
     }
 
-    private final class ManualClock {
-        var date = Date(timeIntervalSince1970: 1_000)
-        var requestedSleeps: [UInt64] = []
+    private final class ManualClock: Sendable {
+        private struct State: Sendable {
+            var date = Date(timeIntervalSince1970: 1_000)
+            var requestedSleeps: [UInt64] = []
+        }
+
+        private let state = OSAllocatedUnfairLock(initialState: State())
+
+        var date: Date {
+            get { state.withLock { $0.date } }
+            set { state.withLock { $0.date = newValue } }
+        }
+
+        var requestedSleeps: [UInt64] {
+            state.withLock { $0.requestedSleeps }
+        }
 
         func sleep(nanoseconds: UInt64) async throws {
-            requestedSleeps.append(nanoseconds)
-            date = date.addingTimeInterval(Double(nanoseconds) / 1_000_000_000)
+            state.withLock {
+                $0.requestedSleeps.append(nanoseconds)
+                $0.date = $0.date.addingTimeInterval(Double(nanoseconds) / 1_000_000_000)
+            }
             await Task.yield()
         }
     }
 
-    private final class ControlledClock {
+    private final class ControlledClock: Sendable {
         private struct Waiter {
             let deadline: Date
             let continuation: CheckedContinuation<Void, Never>
         }
 
-        var date = Date(timeIntervalSince1970: 2_000)
-        private var waiters: [Waiter] = []
-        var pendingWaiterCount: Int { waiters.count }
+        private struct State {
+            var date = Date(timeIntervalSince1970: 2_000)
+            var waiters: [Waiter] = []
+        }
+
+        private let state = OSAllocatedUnfairLock(uncheckedState: State())
+
+        var date: Date { state.withLockUnchecked { $0.date } }
+        var pendingWaiterCount: Int { state.withLockUnchecked { $0.waiters.count } }
 
         func sleep(nanoseconds: UInt64) async throws {
-            let deadline = date.addingTimeInterval(Double(nanoseconds) / 1_000_000_000)
             await withCheckedContinuation { continuation in
-                waiters.append(Waiter(deadline: deadline, continuation: continuation))
+                state.withLockUnchecked { state in
+                    let deadline = state.date.addingTimeInterval(
+                        Double(nanoseconds) / 1_000_000_000
+                    )
+                    state.waiters.append(Waiter(deadline: deadline, continuation: continuation))
+                }
             }
         }
 
         func advance(by seconds: TimeInterval) {
-            date = date.addingTimeInterval(seconds)
-            let ready = waiters.filter { $0.deadline <= date }
-            waiters.removeAll { $0.deadline <= date }
+            let ready = state.withLockUnchecked { state in
+                state.date = state.date.addingTimeInterval(seconds)
+                let ready = state.waiters.filter { $0.deadline <= state.date }
+                state.waiters.removeAll { $0.deadline <= state.date }
+                return ready
+            }
             ready.forEach { $0.continuation.resume() }
         }
     }

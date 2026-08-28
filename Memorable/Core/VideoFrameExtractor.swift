@@ -1,8 +1,7 @@
-import AVFoundation
 import UIKit
 import Photos
 
-class VideoFrameExtractor {
+enum VideoFrameExtractor {
 
     static func frameCount(forDuration duration: Double) -> Int {
         VideoFrameConfig.frameCount(forDuration: duration)
@@ -20,59 +19,11 @@ class VideoFrameExtractor {
         return positions
     }
 
-    static func extractFrames(from asset: AVAsset, positions: [Double], targetSize: CGSize = CGSize(width: 224, height: 224)) async -> [(position: Double, image: UIImage)] {
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = targetSize
-        generator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
-        generator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
-
-        let duration: CMTime
-        do {
-            duration = try await asset.load(.duration)
-        } catch {
-            logger.error("[VideoFrameExtractor] Failed to load asset duration: \(error.localizedDescription)")
-            return []
-        }
-        let durationSeconds = CMTimeGetSeconds(duration)
-        guard durationSeconds > 0 else { return [] }
-
-        var results: [(position: Double, image: UIImage)] = []
-
-        for position in positions {
-            let timeSeconds = durationSeconds * position
-            let time = CMTime(seconds: timeSeconds, preferredTimescale: 600)
-
-            do {
-                let (cgImage, _) = try await generator.image(at: time)
-                let image = UIImage(cgImage: cgImage)
-                results.append((position: position, image: image))
-            } catch {
-                #if DEBUG
-                logger.error("[VideoFrameExtractor] Failed to extract frame at \(position): \(error.localizedDescription)")
-                #endif
-                continue
-            }
-        }
-
-        return results
-    }
-
-    static func loadAVAsset(from phAsset: PHAsset) async -> AVAsset? {
-        await PhotoLibrary.loadAVAsset(for: phAsset)
-    }
-
     static func thumbnail(from phAsset: PHAsset, atPosition position: Double, targetSize: CGSize = CGSize(width: 400, height: 400)) async -> UIImage? {
-        guard let avAsset = await loadAVAsset(from: phAsset) else { return nil }
-
-        let generator = AVAssetImageGenerator(asset: avAsset)
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = targetSize
-
-        guard let duration = try? await avAsset.load(.duration) else { return nil }
-        let time = CMTime(seconds: CMTimeGetSeconds(duration) * position, preferredTimescale: 600)
-
-        guard let (cgImage, _) = try? await generator.image(at: time) else { return nil }
-        return UIImage(cgImage: cgImage)
+        await PhotoLibrary.loadVideoFrames(
+            for: phAsset,
+            positions: [position],
+            targetSize: targetSize
+        )?.first?.image
     }
 }

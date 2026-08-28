@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import os
 
 // MARK: - Embedding Index
 
@@ -11,18 +12,18 @@ enum SearchEngineError: Error, Equatable {
 /// Columnar searchable media with a single mutation boundary. The embedding
 /// matrix stays flat for the scoring hot path; every append supplies one
 /// complete metadata row plus exactly one embedding row.
-struct MediaIndex {
-    enum Kind: Equatable {
+struct MediaIndex: Sendable {
+    enum Kind: Equatable, Sendable {
         case photo
         case videoFrame
     }
 
-    enum RowDetails {
+    enum RowDetails: Sendable {
         case photo(ocrText: String?, sceneLabels: String?)
         case videoFrame(position: Double)
     }
 
-    struct Row {
+    struct Row: Sendable {
         let id: String
         let localIdentifier: String
         let date: Date?
@@ -211,7 +212,7 @@ struct GeocodingCounts {
     let indexedVideos: Int
 }
 
-protocol DatabaseProtocol {
+protocol DatabaseProtocol: Sendable {
     // Photos
     func insertPhoto(_ photo: IndexedPhoto) throws
     /// Returns true when the write atomically completes a pending required rebuild.
@@ -283,9 +284,13 @@ protocol DatabaseProtocol {
 
 // MARK: - AppDatabase
 
-class AppDatabase: DatabaseProtocol {
+final class AppDatabase: DatabaseProtocol, Sendable {
     static let shared = AppDatabase()
-    static var isInMemoryFallback: Bool = false
+    private static let fallbackState = OSAllocatedUnfairLock(initialState: false)
+    static var isInMemoryFallback: Bool {
+        get { fallbackState.withLock { $0 } }
+        set { fallbackState.withLock { $0 = newValue } }
+    }
     private static let orientationMigrationID = "v3-orientation-normalized-embeddings"
     private static let indexRebuildStateKey = "indexRebuildRequired"
     private static let embeddingFormatStateKey = "embeddingFormatVersion"

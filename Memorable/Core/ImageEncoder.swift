@@ -1,26 +1,26 @@
 import CoreML
 import UIKit
 import Accelerate
+import os
 
-class ImageEncoder {
-    private var model: CoreMLModelPredicting
-    private let modelLoader: () throws -> CoreMLModelPredicting
-    private let modelLock = NSLock()
+final class ImageEncoder: Sendable {
+    private let model: OSAllocatedUnfairLock<any CoreMLModelPredicting>
+    private let modelLoader: @Sendable () throws -> any CoreMLModelPredicting
 
     init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) throws {
-        let loader = {
+        let loader: @Sendable () throws -> any CoreMLModelPredicting = {
             let modelURL = try resourceManager.url(for: .imageEncoder)
             return try MLModel(contentsOf: modelURL, configuration: Self.modelConfiguration())
         }
         self.modelLoader = loader
-        self.model = try loader()
+        self.model = OSAllocatedUnfairLock(initialState: try loader())
     }
 
     init(
-        model: CoreMLModelPredicting,
-        modelLoader: @escaping () throws -> CoreMLModelPredicting
+        model: any CoreMLModelPredicting,
+        modelLoader: @escaping @Sendable () throws -> any CoreMLModelPredicting
     ) {
-        self.model = model
+        self.model = OSAllocatedUnfairLock(initialState: model)
         self.modelLoader = modelLoader
     }
 
@@ -57,18 +57,14 @@ class ImageEncoder {
         return embedding
     }
 
-    private func currentModel() -> CoreMLModelPredicting {
-        modelLock.lock()
-        defer { modelLock.unlock() }
-        return model
+    private func currentModel() -> any CoreMLModelPredicting {
+        model.withLock { $0 }
     }
 
     @discardableResult
-    private func reloadModel() throws -> CoreMLModelPredicting {
+    private func reloadModel() throws -> any CoreMLModelPredicting {
         let reloadedModel = try modelLoader()
-        modelLock.lock()
-        model = reloadedModel
-        modelLock.unlock()
+        model.withLock { $0 = reloadedModel }
         return reloadedModel
     }
 

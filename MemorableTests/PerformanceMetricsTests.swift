@@ -1,6 +1,7 @@
 import XCTest
 @testable import Memorable
 
+@MainActor
 final class PerformanceMetricsTests: XCTestCase {
 
     func testCompletedDurationIsRecorded() {

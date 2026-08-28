@@ -1,11 +1,64 @@
 import Photos
 import UIKit
 import AVFoundation
+import os
 
 class PhotoLibrary {
-    private final class PhotoKitRequestToken: @unchecked Sendable {
+    struct VideoFrame: Sendable {
+        let position: Double
+        let image: UIImage
+    }
+
+    private final class VideoFrameAccumulator: Sendable {
+        private struct State {
+            var remaining: Int
+            var frames: [VideoFrame]
+            var generator: AVAssetImageGenerator?
+            let completion: @Sendable ([VideoFrame]?) -> Void
+        }
+
+        private let state: OSAllocatedUnfairLock<State>
+
+        init(
+            count: Int,
+            generator: AVAssetImageGenerator,
+            completion: @escaping @Sendable ([VideoFrame]?) -> Void
+        ) {
+            state = OSAllocatedUnfairLock(
+                uncheckedState: State(
+                    remaining: count,
+                    frames: [],
+                    generator: generator,
+                    completion: completion
+                )
+            )
+        }
+
+        func receive(position: Double, image: UIImage?) {
+            let finished: (completion: @Sendable ([VideoFrame]?) -> Void, frames: [VideoFrame]?)? = state.withLockUnchecked { state in
+                guard state.remaining > 0 else { return nil }
+                state.remaining -= 1
+                if let image {
+                    state.frames.append(VideoFrame(position: position, image: image))
+                }
+                guard state.remaining == 0 else { return nil }
+                state.generator = nil
+                let frames = state.frames.sorted { $0.position < $1.position }
+                return (state.completion, frames.isEmpty ? nil : frames)
+            }
+            if let finished {
+                finished.completion(finished.frames)
+            }
+        }
+    }
+
+    /// PhotoKit owns request callbacks and may invoke them from arbitrary queues.
+    /// Every mutable field is accessed under `lock`; stored video assets are only
+    /// exposed through a synchronous closure while that same lock is held.
+    fileprivate final class PhotoKitRequestToken: @unchecked Sendable {
         private let lock = NSLock()
         private var requestID: PHImageRequestID = PHInvalidImageRequestID
+        private var videoAsset: AVAsset?
 
         func set(_ requestID: PHImageRequestID) {
             lock.lock()
@@ -21,6 +74,32 @@ class PhotoLibrary {
             if id != PHInvalidImageRequestID {
                 PHImageManager.default().cancelImageRequest(id)
             }
+        }
+
+        func storeVideoAsset(_ asset: AVAsset) {
+            lock.lock()
+            videoAsset = asset
+            lock.unlock()
+        }
+
+        func withVideoAsset<Result>(_ operation: (AVAsset) -> Result) -> Result? {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let videoAsset else { return nil }
+            return operation(videoAsset)
+        }
+    }
+
+    struct VideoPlaybackAsset: Sendable {
+        private let storage: PhotoKitRequestToken
+
+        fileprivate init(storage: PhotoKitRequestToken) {
+            self.storage = storage
+        }
+
+        @MainActor
+        func makePlayer() -> AVPlayer? {
+            storage.withVideoAsset { AVPlayer(playerItem: AVPlayerItem(asset: $0)) }
         }
     }
 
@@ -128,25 +207,90 @@ class PhotoLibrary {
         return result.firstObject
     }
 
-    static func loadAVAsset(for asset: PHAsset) async -> AVAsset? {
+    static func loadVideoFrames(
+        for asset: PHAsset,
+        positions: [Double],
+        targetSize: CGSize = CGSize(width: 224, height: 224)
+    ) async -> [VideoFrame]? {
+        let duration = asset.duration
+        guard duration > 0, !positions.isEmpty else { return nil }
+
+        return await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
+            let options = PHVideoRequestOptions()
+            options.isNetworkAccessAllowed = false
+            options.deliveryMode = .highQualityFormat
+
+            return PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
+                guard !photoKitRequestDidFail(info), let avAsset else {
+                    completion(nil)
+                    return
+                }
+
+                let generator = AVAssetImageGenerator(asset: avAsset)
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = targetSize
+                generator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
+                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
+
+                let requestedTimes = positions.map {
+                    NSValue(time: CMTime(seconds: duration * $0, preferredTimescale: 600))
+                }
+                let accumulator = VideoFrameAccumulator(
+                    count: requestedTimes.count,
+                    generator: generator,
+                    completion: completion
+                )
+                generator.generateCGImagesAsynchronously(forTimes: requestedTimes) { requestedTime, cgImage, _, _, _ in
+                    let requestedSeconds = CMTimeGetSeconds(requestedTime)
+                    let position = positions.min {
+                        abs(duration * $0 - requestedSeconds) < abs(duration * $1 - requestedSeconds)
+                    } ?? (requestedSeconds / duration)
+                    accumulator.receive(
+                        position: position,
+                        image: cgImage.map(UIImage.init(cgImage:))
+                    )
+                }
+            }
+        }
+    }
+
+    static func loadVideoURL(for asset: PHAsset) async -> URL? {
         await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
             let options = PHVideoRequestOptions()
             options.isNetworkAccessAllowed = false
             options.deliveryMode = .highQualityFormat
 
             return PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
-                if photoKitRequestDidFail(info) {
+                guard !photoKitRequestDidFail(info) else {
                     completion(nil)
                     return
                 }
-                completion(avAsset)
+                completion((avAsset as? AVURLAsset)?.url)
+            }
+        }
+    }
+
+    static func loadVideoPlaybackAsset(for asset: PHAsset) async -> VideoPlaybackAsset? {
+        let storage = PhotoKitRequestToken()
+        return await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
+            let options = PHVideoRequestOptions()
+            options.isNetworkAccessAllowed = false
+            options.deliveryMode = .highQualityFormat
+
+            return PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
+                guard !photoKitRequestDidFail(info), let avAsset else {
+                    completion(nil)
+                    return
+                }
+                storage.storeVideoAsset(avAsset)
+                completion(VideoPlaybackAsset(storage: storage))
             }
         }
     }
 
     // MARK: - Quick Look Support
 
-    private static var quickLookCacheDir: URL = {
+    private static let quickLookCacheDir: URL = {
         // The iOS sandbox always provides a caches directory, but fall back to
         // the temp directory instead of crashing if the system somehow doesn't.
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
@@ -158,8 +302,7 @@ class PhotoLibrary {
 
     static func getQuickLookURL(for asset: PHAsset) async -> URL? {
         if asset.mediaType == .video {
-            let avAsset = await loadAVAsset(for: asset)
-            return (avAsset as? AVURLAsset)?.url
+            return await loadVideoURL(for: asset)
         } else {
             return await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
                 let options = PHImageRequestOptions()
@@ -202,7 +345,7 @@ class PhotoLibrary {
 
     private static func withPhotoKitTimeout<T: Sendable>(
         seconds: Double,
-        operation: @escaping (@escaping (T?) -> Void) -> PHImageRequestID
+        operation: @escaping (@escaping @Sendable (T?) -> Void) -> PHImageRequestID
     ) async -> T? {
         let token = PhotoKitRequestToken()
         return await withTaskCancellationHandler {

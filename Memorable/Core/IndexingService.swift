@@ -1,19 +1,28 @@
 import Foundation
 import Photos
 import UIKit
+import os
 
 private let hitFreeLimitKey = "indexing.hitFreeLimit"
 
-class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver {
-    var onNewPhotosDetected: (() -> Void)?
+final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, Sendable {
+    private let callback = OSAllocatedUnfairLock<(@MainActor @Sendable () -> Void)?>(
+        initialState: nil
+    )
+
+    var onNewPhotosDetected: (@MainActor @Sendable () -> Void)? {
+        get { callback.withLock { $0 } }
+        set { callback.withLock { $0 = newValue } }
+    }
 
     func startObserving() {
         PHPhotoLibrary.shared().register(self)
     }
 
     func photoLibraryDidChange(_ changeInstance: PHChange) {
+        let callback = callback.withLock { $0 }
         DispatchQueue.main.async {
-            self.onNewPhotosDetected?()
+            callback?()
         }
     }
 }
@@ -326,13 +335,7 @@ class IndexingService: ObservableObject {
         guard !progress.isRunning else { return }
         let db = database
         let engine = searchEngine
-        // Strong [self] capture is safe because IndexingService is
-        // @MainActor-isolated (implicitly Sendable in Swift 6). The task is
-        // short-lived (single library fetch + DB query) so there is no
-        // lifetime concern; explicit capture silences Swift 6 strict
-        // concurrency diagnostics about implicit self across a detached
-        // task boundary.
-        Task.detached { [self] in
+        Task.detached {
             let allMedia = PhotoLibrary.fetchAllMedia()
             let totalInLibrary = allMedia.count
 
@@ -695,10 +698,11 @@ class IndexingService: ObservableObject {
 
             do {
                 let db = database
+                let batchUpdates = updates
                 try await Task.detached(priority: .utility) {
-                    try db.updatePhotoEnrichment(updates)
+                    try db.updatePhotoEnrichment(batchUpdates)
                 }.value
-                completed += updates.count
+                completed += batchUpdates.count
                 progress.completed = min(completed, progress.total)
             } catch {
                 logger.error("Failed to update photo enrichment batch: \(error.localizedDescription)")

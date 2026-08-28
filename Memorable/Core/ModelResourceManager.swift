@@ -1,7 +1,7 @@
 import CoreML
 import Foundation
 
-protocol CoreMLModelPredicting: AnyObject {
+protocol CoreMLModelPredicting: AnyObject, Sendable {
     func prediction(from input: MLFeatureProvider) throws -> MLFeatureProvider
     func predictions(
         from inputBatch: MLBatchProvider,
@@ -45,13 +45,13 @@ enum ModelResourceError: LocalizedError, Equatable {
     }
 }
 
-protocol ModelResourceManaging {
+protocol ModelResourceManaging: Sendable {
     var activeStrategy: ModelPackagingStrategy { get }
     func availability(for resource: ModelResource) -> ModelResourceAvailability
     func url(for resource: ModelResource) throws -> URL
 }
 
-final class ModelResourceManager: ModelResourceManaging {
+final class ModelResourceManager: ModelResourceManaging, Sendable {
     static let shared = ModelResourceManager()
 
     let activeStrategy: ModelPackagingStrategy = .bundled

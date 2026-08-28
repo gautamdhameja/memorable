@@ -166,9 +166,9 @@ final class SemanticSearchRuntime: ObservableObject {
         Task { [weak self] in
             do {
                 try await task.value
-                await self?.finishWarmup()
+                self?.finishWarmup()
             } catch {
-                await self?.failWarmup(error)
+                self?.failWarmup(error)
             }
         }
 

@@ -173,12 +173,7 @@ class ProManager: ObservableObject {
     }
 
     private func listenForTransactions() -> Task<Void, Never> {
-        // Strong [self] capture is safe and correct here: ProManager is a
-        // singleton with an infinite Transaction.updates loop, and is
-        // @MainActor-isolated (implicitly Sendable in Swift 6). Explicit
-        // capture silences strict-concurrency diagnostics about mutable
-        // self crossing a @Sendable detached-task boundary.
-        Task.detached { [self] in
+        Task.detached {
             let entitlementProductIds = await Self.entitlementProductIds
             for await result in Transaction.updates {
                 switch result {

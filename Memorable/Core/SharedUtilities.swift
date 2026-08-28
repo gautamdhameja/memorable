@@ -72,13 +72,15 @@ extension DateFormatter {
 /// Present a native AVPlayerViewController from anywhere in the app.
 func presentVideoPlayer(for phAsset: PHAsset) {
     Task {
-        guard let avAsset = await VideoFrameExtractor.loadAVAsset(from: phAsset) else { return }
+        guard let playbackAsset = await PhotoLibrary.loadVideoPlaybackAsset(for: phAsset) else {
+            return
+        }
 
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
 
         await MainActor.run {
-            let player = AVPlayer(playerItem: AVPlayerItem(asset: avAsset))
+            guard let player = playbackAsset.makePlayer() else { return }
             let controller = AVPlayerViewController()
             controller.player = player
 
@@ -98,6 +100,7 @@ func presentVideoPlayer(for phAsset: PHAsset) {
 
 // MARK: - Haptics
 
+@MainActor
 enum Haptics {
     static func light() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()

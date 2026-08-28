@@ -1,18 +1,18 @@
 import Foundation
+import os
 
 /// SentencePiece BPE tokenizer for SigLIP2 (Gemma tokenizer).
 /// Loads a standard SentencePiece .model protobuf and performs BPE tokenization
 /// with byte fallback for unknown characters.
-class CLIPTokenizer {
+final class CLIPTokenizer: Sendable {
     private let contextLength: Int
     private let vocab: [String: Int]
     private let scores: [String: Float]
     private let byteFallbackTokens: [UInt8: Int]
     private let eosId: Int32
     private let padId: Int32
-    private var cache: [String: [Int]] = [:]
+    private let cache = OSAllocatedUnfairLock(initialState: [String: [Int]]())
     private let maxCacheSize = 1000
-    private let cacheLock = NSLock()
 
     enum TokenizerError: Error {
         case filesNotFound
@@ -104,19 +104,14 @@ class CLIPTokenizer {
     // MARK: - BPE Encoding
 
     private func encode(_ word: String) -> [Int] {
-        cacheLock.lock()
-        if cache.count > maxCacheSize { cache.removeAll() }
-        let cached = cache[word]
-        cacheLock.unlock()
+        let cached = cache.withLock { $0[word] }
         if let cached { return cached }
 
         // Start with individual characters (or byte fallback for unknowns)
         var symbols = initialTokens(for: word)
         if symbols.count <= 1 {
             let ids = symbols.map { tokenId(for: $0) }
-            cacheLock.lock()
-            cache[word] = ids
-            cacheLock.unlock()
+            store(ids, for: word)
             return ids
         }
 
@@ -152,10 +147,15 @@ class CLIPTokenizer {
         }
 
         let ids = symbols.map { tokenId(for: $0) }
-        cacheLock.lock()
-        cache[word] = ids
-        cacheLock.unlock()
+        store(ids, for: word)
         return ids
+    }
+
+    private func store(_ ids: [Int], for word: String) {
+        cache.withLock { cache in
+            if cache.count > maxCacheSize { cache.removeAll() }
+            cache[word] = ids
+        }
     }
 
     /// Break a word into its initial character tokens. For characters that exist

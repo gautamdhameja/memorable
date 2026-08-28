@@ -432,15 +432,15 @@ final class PhotoLibraryIndexingWorker {
             (try? db.isVideoIndexed(localIdentifier: localIdentifier)) == true
         }.value
         guard !alreadyIndexed else { return false }
-        guard let avAsset = await VideoFrameExtractor.loadAVAsset(from: asset) else { return false }
-        guard let duration = try? await avAsset.load(.duration) else { return false }
-        let durationSeconds = CMTimeGetSeconds(duration)
+        let durationSeconds = asset.duration
         guard durationSeconds > 0 else { return false }
 
         let positions = VideoFrameExtractor.framePositions(
             count: VideoFrameExtractor.frameCount(forDuration: durationSeconds)
         )
-        let frames = await VideoFrameExtractor.extractFrames(from: avAsset, positions: positions)
+        guard let frames = await PhotoLibrary.loadVideoFrames(for: asset, positions: positions) else {
+            return false
+        }
         guard !frames.isEmpty else { return false }
 
         let videoId = UUID().uuidString

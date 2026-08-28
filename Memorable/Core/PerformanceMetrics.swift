@@ -5,6 +5,7 @@ struct PerformanceMetric: Equatable {
     let durationSeconds: TimeInterval
 }
 
+@MainActor
 final class PerformanceMetrics {
     static let shared = PerformanceMetrics()
 

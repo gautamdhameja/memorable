@@ -1,6 +1,7 @@
 import Foundation
 import Accelerate
 import CoreLocation
+import os
 
 struct SearchResponse {
     let results: [SearchResult]
@@ -14,7 +15,7 @@ struct FilterSummary {
     let visualQuery: String
 }
 
-private struct SearchIndexSnapshot {
+private struct SearchIndexSnapshot: Sendable {
     var photos = MediaIndex(kind: .photo)
     var videos = MediaIndex(kind: .videoFrame)
     var uniqueVideoCount = 0
@@ -27,8 +28,8 @@ private struct ScoredMedia {
     let scores: [Float]
 }
 
-class SearchEngine {
-    private var indexSnapshot = SearchIndexSnapshot()
+final class SearchEngine: Sendable {
+    private let indexSnapshot: OSAllocatedUnfairLock<SearchIndexSnapshot>
 
     private let embeddingDim = EmbeddingConfig.dimensions
     private let minimumScoreThreshold = SearchConfig.minimumScoreThreshold
@@ -40,8 +41,6 @@ class SearchEngine {
 
     private let textEncoder: TextEmbeddingEncoding
     private let database: DatabaseProtocol
-    private let lock = NSLock()
-
     init(
         textEncoder: TextEmbeddingEncoding,
         database: DatabaseProtocol = AppDatabase.shared,
@@ -52,8 +51,12 @@ class SearchEngine {
         self.database = database
         self.injectedPhotoSimilaritySearch = photoSimilaritySearch
         self.injectedVideoSimilaritySearch = videoSimilaritySearch
-        self.indexSnapshot.photoSimilaritySearch = photoSimilaritySearch
-        self.indexSnapshot.videoSimilaritySearch = videoSimilaritySearch
+        self.indexSnapshot = OSAllocatedUnfairLock(
+            initialState: SearchIndexSnapshot(
+                photoSimilaritySearch: photoSimilaritySearch,
+                videoSimilaritySearch: videoSimilaritySearch
+            )
+        )
     }
 
     func loadIndex() throws {
@@ -84,15 +87,15 @@ class SearchEngine {
             newGPUVideoSearch?.buildIndex(embeddings: videoIndex.embeddings, count: videoIndex.count)
         }
 
-        lock.lock()
-        defer { lock.unlock() }
-        self.indexSnapshot = SearchIndexSnapshot(
-            photos: photoIndex,
-            videos: videoIndex,
-            uniqueVideoCount: videoIndex.uniqueIDCount,
-            photoSimilaritySearch: newGPUSearch,
-            videoSimilaritySearch: videoIndex.count == 0 ? nil : newGPUVideoSearch
-        )
+        indexSnapshot.withLock {
+            $0 = SearchIndexSnapshot(
+                photos: photoIndex,
+                videos: videoIndex,
+                uniqueVideoCount: videoIndex.uniqueIDCount,
+                photoSimilaritySearch: newGPUSearch,
+                videoSimilaritySearch: videoIndex.count == 0 ? nil : newGPUVideoSearch
+            )
+        }
 
         let count = photoIndex.count
         let videoFrameCount = videoIndex.count
@@ -110,45 +113,35 @@ class SearchEngine {
     }
 
     var estimatedMemoryUsage: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return (indexSnapshot.photos.count + indexSnapshot.videos.count) * embeddingDim * MemoryLayout<Float16>.size
+        indexSnapshot.withLock {
+            ($0.photos.count + $0.videos.count) * embeddingDim * MemoryLayout<Float16>.size
+        }
     }
 
     var isLargeLibrary: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return (indexSnapshot.photos.count + indexSnapshot.videos.count) > Self.maxRecommendedPhotos
+        indexSnapshot.withLock {
+            ($0.photos.count + $0.videos.count) > Self.maxRecommendedPhotos
+        }
     }
 
     var indexSize: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return indexSnapshot.photos.count
+        indexSnapshot.withLock { $0.photos.count }
     }
 
     var videoSize: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return indexSnapshot.uniqueVideoCount
+        indexSnapshot.withLock { $0.uniqueVideoCount }
     }
 
     var totalSize: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return indexSnapshot.photos.count + indexSnapshot.uniqueVideoCount
+        indexSnapshot.withLock { $0.photos.count + $0.uniqueVideoCount }
     }
 
     var isIndexLoaded: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return indexSnapshot.photos.count + indexSnapshot.videos.count > 0
+        indexSnapshot.withLock { $0.photos.count + $0.videos.count > 0 }
     }
 
     func dropIndex() {
-        lock.lock()
-        defer { lock.unlock() }
-        indexSnapshot = SearchIndexSnapshot()
+        indexSnapshot.withLock { $0 = SearchIndexSnapshot() }
         #if DEBUG
         logger.info("[SearchEngine] Index dropped due to memory pressure")
         #endif
@@ -194,11 +187,7 @@ class SearchEngine {
     }
 
     func hybridSearch(hints: QueryHints) throws -> SearchResponse {
-        let snapshot: SearchIndexSnapshot = {
-            lock.lock()
-            defer { lock.unlock() }
-            return indexSnapshot
-        }()
+        let snapshot = indexSnapshot.withLock { $0 }
         let photos = snapshot.photos
         let videos = snapshot.videos
 
@@ -592,11 +581,7 @@ class SearchEngine {
     // MARK: - Similar Photos
 
     func findSimilar(photoId: String, topK: Int = 50) -> [SearchResult] {
-        let snapshot: SearchIndexSnapshot = {
-            lock.lock()
-            defer { lock.unlock() }
-            return indexSnapshot
-        }()
+        let snapshot = indexSnapshot.withLock { $0 }
         let photos = snapshot.photos
         let ids = photos.ids
         let localIds = photos.localIdentifiers

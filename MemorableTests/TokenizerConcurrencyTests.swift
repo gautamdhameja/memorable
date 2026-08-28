@@ -1,25 +1,21 @@
 import XCTest
+import os
 @testable import Memorable
 
 final class TokenizerConcurrencyTests: XCTestCase {
-    private final class ResultStore {
-        private let lock = NSLock()
-        private var values: [[Int32]?]
+    private final class ResultStore: Sendable {
+        private let values: OSAllocatedUnfairLock<[[Int32]?]>
 
         init(count: Int) {
-            values = Array(repeating: nil, count: count)
+            values = OSAllocatedUnfairLock(initialState: Array(repeating: nil, count: count))
         }
 
         func set(_ value: [Int32], at index: Int) {
-            lock.lock()
-            values[index] = value
-            lock.unlock()
+            values.withLock { $0[index] = value }
         }
 
         func snapshot() -> [[Int32]?] {
-            lock.lock()
-            defer { lock.unlock() }
-            return values
+            values.withLock { $0 }
         }
     }
 

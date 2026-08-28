@@ -1,6 +1,7 @@
 import CoreML
 import UIKit
 import XCTest
+import os
 @testable import Memorable
 
 final class EncoderConcurrencyTests: XCTestCase {
@@ -8,51 +9,50 @@ final class EncoderConcurrencyTests: XCTestCase {
         case forcedPredictionFailure
     }
 
-    private final class LockedCounter {
-        private let lock = NSLock()
-        private var count = 0
+    private final class LockedCounter: Sendable {
+        private let count = OSAllocatedUnfairLock(initialState: 0)
 
         func increment() {
-            lock.lock()
-            count += 1
-            lock.unlock()
+            count.withLock { $0 += 1 }
         }
 
         func value() -> Int {
-            lock.lock()
-            defer { lock.unlock() }
-            return count
+            count.withLock { $0 }
         }
     }
 
-    private final class EncodeResults {
-        private let lock = NSLock()
-        private var embeddings: [[Float]] = []
-        private var errors: [Error] = []
+    private final class EncodeResults: Sendable {
+        private struct State {
+            var embeddings: [[Float]] = []
+            var errors: [Error] = []
+        }
+
+        private let state = OSAllocatedUnfairLock(uncheckedState: State())
 
         func record(_ result: Result<[Float], Error>) {
-            lock.lock()
-            defer { lock.unlock() }
-            switch result {
-            case .success(let embedding):
-                embeddings.append(embedding)
-            case .failure(let error):
-                errors.append(error)
+            state.withLockUnchecked { state in
+                switch result {
+                case .success(let embedding):
+                    state.embeddings.append(embedding)
+                case .failure(let error):
+                    state.errors.append(error)
+                }
             }
         }
 
         func snapshot() -> (embeddings: [[Float]], errors: [Error]) {
-            lock.lock()
-            defer { lock.unlock() }
-            return (embeddings, errors)
+            state.withLockUnchecked { ($0.embeddings, $0.errors) }
         }
     }
 
     private final class ControlledPredictionModel: CoreMLModelPredicting {
-        private let lock = NSLock()
+        private struct FailureState: Sendable {
+            var remainingPredictions: Int
+            var remainingBatches: Int
+        }
+
         private let embeddingKey: String
-        private var remainingPredictionFailures: Int
-        private var remainingBatchFailures: Int
+        private let failures: OSAllocatedUnfairLock<FailureState>
 
         init(
             embeddingKey: String,
@@ -60,8 +60,12 @@ final class EncoderConcurrencyTests: XCTestCase {
             batchFailures: Int = 0
         ) {
             self.embeddingKey = embeddingKey
-            self.remainingPredictionFailures = predictionFailures
-            self.remainingBatchFailures = batchFailures
+            self.failures = OSAllocatedUnfairLock(
+                initialState: FailureState(
+                    remainingPredictions: predictionFailures,
+                    remainingBatches: batchFailures
+                )
+            )
         }
 
         func prediction(from input: MLFeatureProvider) throws -> MLFeatureProvider {
@@ -85,19 +89,19 @@ final class EncoderConcurrencyTests: XCTestCase {
         }
 
         private func consumePredictionFailure() -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            guard remainingPredictionFailures > 0 else { return false }
-            remainingPredictionFailures -= 1
-            return true
+            failures.withLock {
+                guard $0.remainingPredictions > 0 else { return false }
+                $0.remainingPredictions -= 1
+                return true
+            }
         }
 
         private func consumeBatchFailure() -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            guard remainingBatchFailures > 0 else { return false }
-            remainingBatchFailures -= 1
-            return true
+            failures.withLock {
+                guard $0.remainingBatches > 0 else { return false }
+                $0.remainingBatches -= 1
+                return true
+            }
         }
 
         private func makeOutputProvider() throws -> MLFeatureProvider {

@@ -34,7 +34,7 @@ struct IndexedPhoto: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "indexed_photos"
 }
 
-struct PhotoEnrichmentCandidate: Equatable {
+struct PhotoEnrichmentCandidate: Equatable, Sendable {
     let localIdentifier: String
     let pixelWidth: Int
     let pixelHeight: Int
@@ -42,7 +42,7 @@ struct PhotoEnrichmentCandidate: Equatable {
     let filePath: String?
 }
 
-struct PhotoEnrichmentUpdate: Equatable {
+struct PhotoEnrichmentUpdate: Equatable, Sendable {
     let localIdentifier: String
     let ocrText: String?
     let sharpnessScore: Double?
@@ -50,7 +50,7 @@ struct PhotoEnrichmentUpdate: Equatable {
     var outcome: PhotoEnrichmentOutcome = .completed
 }
 
-enum PhotoEnrichmentOutcome: Equatable {
+enum PhotoEnrichmentOutcome: Equatable, Sendable {
     case completed
     case loadFailed(at: Date)
 }
