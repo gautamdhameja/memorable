@@ -152,9 +152,10 @@ def prepare() -> None:
 
     for entry, viewer_row in zip(manifest["entries"], rows):
         image_path = IMAGES / entry["localFilename"]
-        if not image_path.exists() or sha256(image_path) != entry["imageSha256"]:
+        actual_hash = sha256(image_path) if image_path.exists() else None
+        if actual_hash != entry["imageSha256"]:
             download(viewer_row["row"]["image"]["src"], image_path)
-        actual_hash = sha256(image_path)
+            actual_hash = sha256(image_path)
         if actual_hash != entry["imageSha256"]:
             raise RelevanceError(
                 f"image integrity failure for {entry['localFilename']}: "
@@ -199,13 +200,11 @@ def xcodebuild(environment: dict[str, str] | None = None) -> None:
     print("Relevance gate passed.")
 
 
-def run(perturbation: str | None = None, skip_baseline: bool = False) -> None:
+def run(perturbation: str | None = None) -> None:
     prepare()
     environment = {}
     if perturbation:
         environment["MEMORABLE_RELEVANCE_PERTURBATION"] = perturbation
-    if skip_baseline:
-        environment["MEMORABLE_RELEVANCE_SKIP_BASELINE"] = "1"
     xcodebuild(environment)
 
 

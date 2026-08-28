@@ -177,14 +177,10 @@ def migration_deletes(source: str) -> list[MigrationDelete]:
 
 
 def newly_introduced_deletes(baseline_source: str, current_source: str) -> list[MigrationDelete]:
-    historical = Counter(migration_deletes(baseline_source))
-    introduced: list[MigrationDelete] = []
-    for deletion in migration_deletes(current_source):
-        if historical[deletion] > 0:
-            historical[deletion] -= 1
-        else:
-            introduced.append(deletion)
-    return introduced
+    return introduced_from_approved_baseline(
+        migration_deletes(baseline_source),
+        current_source,
+    )
 
 
 def load_delete_baseline(payload: str) -> list[MigrationDelete]:

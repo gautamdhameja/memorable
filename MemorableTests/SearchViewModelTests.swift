@@ -58,7 +58,7 @@ final class SearchViewModelTests: XCTestCase {
         model.submitSearch()
         await model.waitForCurrentSearch()
 
-        model.handleIndexVersionChange()
+        model.validateVisibleResults(reason: "indexVersion changed")
         await validator.waitUntilCalled()
 
         XCTAssertEqual(model.results.map(\.id), ["kept", "removed"])
@@ -80,7 +80,7 @@ final class SearchViewModelTests: XCTestCase {
         model.setQueryText("first")
         model.submitSearch()
         await model.waitForCurrentSearch()
-        model.handleIndexVersionChange()
+        model.validateVisibleResults(reason: "indexVersion changed")
         await validator.waitUntilCalled()
 
         model.setQueryText("second")

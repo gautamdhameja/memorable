@@ -291,7 +291,7 @@ struct SearchView: View {
                 // search can safely finish against its snapshot. Do not clear
                 // visible results here: background enrichment/reloads can advance
                 // indexVersion without invalidating the user's current UI.
-                viewModel.handleIndexVersionChange()
+                viewModel.validateVisibleResults(reason: "indexVersion changed")
             }
             .onChange(of: scenePhase) {
                 if scenePhase == .active {

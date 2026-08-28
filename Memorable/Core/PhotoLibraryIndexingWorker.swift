@@ -10,7 +10,7 @@ final class PhotoLibraryIndexingWorker {
         let alreadyIndexedVideos: Set<String>
         let isPro: Bool
         let startedAt: CFAbsoluteTime
-        var newlyIndexed: Int
+        var indexedMediaCount: Int
         var hitFreeLimit: Bool
 
         init(
@@ -18,14 +18,14 @@ final class PhotoLibraryIndexingWorker {
             alreadyIndexedVideos: Set<String>,
             isPro: Bool,
             startedAt: CFAbsoluteTime,
-            newlyIndexed: Int,
+            indexedMediaCount: Int,
             hitFreeLimit: Bool = false
         ) {
             self.videoAssets = videoAssets
             self.alreadyIndexedVideos = alreadyIndexedVideos
             self.isPro = isPro
             self.startedAt = startedAt
-            self.newlyIndexed = newlyIndexed
+            self.indexedMediaCount = indexedMediaCount
             self.hitFreeLimit = hitFreeLimit
         }
     }
@@ -104,7 +104,7 @@ final class PhotoLibraryIndexingWorker {
             alreadyIndexedVideos: alreadyIndexedVideos,
             isPro: isPro,
             startedAt: startedAt,
-            newlyIndexed: alreadyIndexed.count + alreadyIndexedVideos.count
+            indexedMediaCount: alreadyIndexed.count + alreadyIndexedVideos.count
         )
 
         #if DEBUG
@@ -148,7 +148,7 @@ final class PhotoLibraryIndexingWorker {
 
         func makeBatch() -> [PHAsset] {
             guard !isPro else { return batchCursor.nextBatch() }
-            let remainingAllowed = max(0, FreeTier.maxIndexedMedia - populatedSession.newlyIndexed)
+            let remainingAllowed = max(0, FreeTier.maxIndexedMedia - populatedSession.indexedMediaCount)
             return batchCursor.nextBatch(maxCount: remainingAllowed)
         }
 
@@ -159,7 +159,7 @@ final class PhotoLibraryIndexingWorker {
 
         while nextLoadTask != nil || batchCursor.hasRemaining {
             if Task.isCancelled { break }
-            if !FreeTier.canIndexMore(indexedMediaCount: populatedSession.newlyIndexed, isPro: isPro) {
+            if !FreeTier.canIndexMore(indexedMediaCount: populatedSession.indexedMediaCount, isPro: isPro) {
                 populatedSession.hitFreeLimit = true
                 callbacks.setHitFreeLimit(true)
                 break
@@ -203,19 +203,19 @@ final class PhotoLibraryIndexingWorker {
 
                 for (i, loadedImage) in loadedImages.enumerated() {
                     guard i < embeddings.count else { break }
-                    guard FreeTier.canIndexMore(indexedMediaCount: populatedSession.newlyIndexed, isPro: isPro) else {
+                    guard FreeTier.canIndexMore(indexedMediaCount: populatedSession.indexedMediaCount, isPro: isPro) else {
                         populatedSession.hitFreeLimit = true
                         callbacks.setHitFreeLimit(true)
                         break
                     }
                     let asset = loadedImage.asset
                     batch.append(makeIndexedPhoto(asset: asset, embedding: embeddings[i]))
-                    populatedSession.newlyIndexed += 1
+                    populatedSession.indexedMediaCount += 1
                 }
             } catch {
                 logger.error("Batch encoding failed: \(error.localizedDescription)")
                 for loadedImage in loadedImages {
-                    guard FreeTier.canIndexMore(indexedMediaCount: populatedSession.newlyIndexed, isPro: isPro) else {
+                    guard FreeTier.canIndexMore(indexedMediaCount: populatedSession.indexedMediaCount, isPro: isPro) else {
                         populatedSession.hitFreeLimit = true
                         callbacks.setHitFreeLimit(true)
                         break
@@ -226,7 +226,7 @@ final class PhotoLibraryIndexingWorker {
                             try encoder.encode(image: loadedImage.image)
                         }.value
                         batch.append(makeIndexedPhoto(asset: loadedImage.asset, embedding: embedding))
-                        populatedSession.newlyIndexed += 1
+                        populatedSession.indexedMediaCount += 1
                     } catch {
                         logger.error("Single encode fallback failed for \(loadedImage.asset.localIdentifier): \(error.localizedDescription)")
                     }
@@ -237,7 +237,7 @@ final class PhotoLibraryIndexingWorker {
                 await persistPhotoBatch(batch)
                 batch.removeAll(keepingCapacity: true)
                 let checkpoint = await reloadSearchIndexIfNeeded(
-                    indexedMediaCount: populatedSession.newlyIndexed,
+                    indexedMediaCount: populatedSession.indexedMediaCount,
                     nextCheckpoint: nextSearchableReloadCount,
                     lastReloadAt: lastProgressiveReloadAt,
                     interval: checkpointInterval
@@ -262,7 +262,7 @@ final class PhotoLibraryIndexingWorker {
         callbacks.setProgress(currentProgress)
 
         #if DEBUG
-        logger.info("[IndexingService] Photo indexing complete: \(populatedSession.newlyIndexed) newly indexed")
+        logger.info("[IndexingService] Photo indexing complete: \(populatedSession.indexedMediaCount) total indexed media")
         #endif
         return populatedSession
     }
@@ -289,7 +289,7 @@ final class PhotoLibraryIndexingWorker {
 
         for asset in videoAssetsToIndex {
             if Task.isCancelled { break }
-            if !FreeTier.canIndexMore(indexedMediaCount: session.newlyIndexed, isPro: session.isPro) {
+            if !FreeTier.canIndexMore(indexedMediaCount: session.indexedMediaCount, isPro: session.isPro) {
                 session.hitFreeLimit = true
                 callbacks.setHitFreeLimit(true)
                 break
@@ -297,7 +297,7 @@ final class PhotoLibraryIndexingWorker {
             if await indexVideo(asset: asset) {
                 callbacks.completeRequiredRebuild()
             }
-            session.newlyIndexed += 1
+            session.indexedMediaCount += 1
             indexed += 1
             currentProgress.completed = indexed
             callbacks.setProgress(currentProgress)

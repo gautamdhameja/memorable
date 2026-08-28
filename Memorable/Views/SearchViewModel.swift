@@ -220,10 +220,6 @@ final class SearchViewModel: ObservableObject {
         }
     }
 
-    func handleIndexVersionChange(reason: String = "indexVersion changed") {
-        validateVisibleResults(reason: reason)
-    }
-
     func validateVisibleResults(reason: String) {
         let currentResults = results
         let currentLastResults = lastResults
