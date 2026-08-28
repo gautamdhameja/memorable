@@ -55,20 +55,27 @@ class SearchEngine {
     static let maxRecommendedPhotos = IndexingConfig.largeLibraryThreshold
 
     // GPU-accelerated search
-    private var gpuSearch: GPUSimilaritySearch?
-    private var gpuVideoSearch: GPUSimilaritySearch?
+    private var gpuSearch: SimilaritySearching?
+    private var gpuVideoSearch: SimilaritySearching?
+    private let injectedPhotoSimilaritySearch: SimilaritySearching?
+    private let injectedVideoSimilaritySearch: SimilaritySearching?
 
     private let textEncoder: TextEmbeddingEncoding
     private let database: DatabaseProtocol
     private let lock = NSLock()
 
-    init(textEncoder: TextEmbeddingEncoding, database: DatabaseProtocol = AppDatabase.shared) {
+    init(
+        textEncoder: TextEmbeddingEncoding,
+        database: DatabaseProtocol = AppDatabase.shared,
+        photoSimilaritySearch: SimilaritySearching? = nil,
+        videoSimilaritySearch: SimilaritySearching? = nil
+    ) {
         self.textEncoder = textEncoder
         self.database = database
-        #if !targetEnvironment(simulator)
-        self.gpuSearch = GPUSimilaritySearch()
-        self.gpuVideoSearch = GPUSimilaritySearch()
-        #endif
+        self.injectedPhotoSimilaritySearch = photoSimilaritySearch
+        self.injectedVideoSimilaritySearch = videoSimilaritySearch
+        self.gpuSearch = photoSimilaritySearch
+        self.gpuVideoSearch = videoSimilaritySearch
     }
 
     func loadIndex() throws {
@@ -94,14 +101,21 @@ class SearchEngine {
             throw SearchEngineError.corruptedIndex
         }
 
-        #if !targetEnvironment(simulator)
-        let newGPUSearch = GPUSimilaritySearch()
+        let newGPUSearch: SimilaritySearching?
+        let newGPUVideoSearch: SimilaritySearching?
+        #if targetEnvironment(simulator)
+        newGPUSearch = injectedPhotoSimilaritySearch
+        newGPUVideoSearch = injectedVideoSimilaritySearch
+        #else
+        // Build into fresh production scorers so an in-flight search can keep
+        // using the previous immutable index until the locked swap below.
+        newGPUSearch = injectedPhotoSimilaritySearch ?? GPUSimilaritySearch()
+        newGPUVideoSearch = injectedVideoSimilaritySearch ?? GPUSimilaritySearch()
+        #endif
         newGPUSearch?.buildIndex(embeddings: data.embeddings, count: data.ids.count)
-        let newGPUVideoSearch = GPUSimilaritySearch()
         if videoData.videoIds.count > 0 {
             newGPUVideoSearch?.buildIndex(embeddings: videoData.embeddings, count: videoData.videoIds.count)
         }
-        #endif
 
         lock.lock()
         defer { lock.unlock() }
@@ -133,10 +147,8 @@ class SearchEngine {
         self.videoFrameCount = videoData.videoIds.count
         self.uniqueVideoCount = Set(videoData.videoIds).count
 
-        #if !targetEnvironment(simulator)
         self.gpuSearch = newGPUSearch
         self.gpuVideoSearch = videoData.videoIds.isEmpty ? nil : newGPUVideoSearch
-        #endif
 
         let count = data.ids.count
         let memoryMB = (count + videoFrameCount) * embeddingDim * MemoryLayout<Float16>.size / 1_048_576
@@ -273,7 +285,7 @@ class SearchEngine {
              [String?], [String?], [String?], [String?], [String?], [Float16], Int,
              [String], [String], [Date?], [Double?], [Double?], [Double],
              [String?], [String?], [String?], [String?], [Float16], Int,
-             GPUSimilaritySearch?, GPUSimilaritySearch?) = {
+             SimilaritySearching?, SimilaritySearching?) = {
             lock.lock()
             defer { lock.unlock() }
             return (photoIds, localIdentifiers, dates, latitudes, longitudes, ocrTexts,
@@ -326,60 +338,30 @@ class SearchEngine {
 
             for i in 0..<count {
                 guard candidateMask[i] else { continue }
-
-                // Tier 1: canonical/substring match on reverse-geocoded strings
-                if let city = pCities[i], !city.isEmpty {
-                    if let match = locationMatcher, match(pCities[i], pStates[i], pCountries[i], pLocNames[i]) {
-                        continue // Matched by name, skip GPS check
-                    }
-                    // Tier 1 failed. Try GPS proximity with a tight
-                    // city-level cap (50 km) to rescue cross-language
-                    // mismatches (stored "Praha" vs query "Prague")
-                    // without pulling in distant cities that happen to
-                    // sit inside a large admin radius.
-                    if let target = targetLoc,
-                       let lat = photoLats[i], let lon = photoLons[i] {
-                        let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
-                        if distKm > 50.0 {
-                            candidateMask[i] = false
-                        }
-                    } else {
-                        candidateMask[i] = false
-                    }
-                    continue
-                }
-
-                // Tier 2: GPS distance fallback (photo has GPS but no location strings yet)
-                if let target = targetLoc, let radiusKm = hints.locationRadiusKm {
-                    if let lat = photoLats[i], let lon = photoLons[i] {
-                        let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
-                        if distKm > radiusKm {
-                            candidateMask[i] = false
-                        }
-                    } else {
-                        // We have a target coord but the photo has no GPS —
-                        // can't verify, drop.
-                        candidateMask[i] = false
-                    }
-                }
-                // Else: targetLoc is nil. We can't verify GPS-only media by
-                // coordinate without forwarding query text, so leave it in the
-                // candidate pool and let SigLIP rank it. Tier 1 already kept
-                // media whose stored city/state/country matched locally.
+                candidateMask[i] = mediaPassesLocationFilter(
+                    hints: hints,
+                    locationMatcher: locationMatcher,
+                    targetLoc: targetLoc,
+                    latitude: photoLats[i],
+                    longitude: photoLons[i],
+                    city: pCities[i],
+                    state: pStates[i],
+                    country: pCountries[i],
+                    name: pLocNames[i]
+                )
             }
         }
 
         let candidateCount = candidateMask.filter { $0 }.count
-        var videoCandidateCount = 0
+        var videoCandidateMask = [Bool](repeating: false, count: vCount)
         for i in 0..<vCount {
-            if videoPassesHardFilters(
+            videoCandidateMask[i] = videoPassesHardFilters(
                 index: i, hints: hints, locationMatcher: locationMatcher, targetLoc: targetLoc,
                 dates: vDates, latitudes: vLats, longitudes: vLons,
                 cities: vCities, states: vStates, countries: vCountries, names: vLocNames
-            ) {
-                videoCandidateCount += 1
-            }
+            )
         }
+        let videoCandidateCount = videoCandidateMask.filter { $0 }.count
 
         #if DEBUG
         logger.info("[SearchEngine] Filter: \(candidateCount)/\(count) photos passed hard filters")
@@ -491,12 +473,17 @@ class SearchEngine {
         }
 
         // Negative term penalty
-        var negativeRowBuffer = [Float](repeating: 0, count: embeddingDim)
         for negEmbedding in negativeEmbeddings {
+            let negativeScores = scoreEmbeddings(
+                queryEmbedding: negEmbedding,
+                matrix: matrix,
+                count: count,
+                gpuSearch: photoGPU,
+                candidateMask: candidateMask
+            )
             for i in 0..<count {
                 guard candidateMask[i] else { continue }
-                let negScore = scoreEmbedding(queryEmbedding: negEmbedding, matrix: matrix, row: i, rowBuffer: &negativeRowBuffer)
-                scores[i] -= negScore * SearchConfig.negativeTermWeight
+                scores[i] -= negativeScores[i] * SearchConfig.negativeTermWeight
             }
         }
 
@@ -579,7 +566,15 @@ class SearchEngine {
 
         if vCount > 0 {
             let videoScores = scoreEmbeddings(queryEmbedding: queryEmbedding, matrix: vMatrix, count: vCount, gpuSearch: videoGPU)
-            var negativeVideoRowBuffer = [Float](repeating: 0, count: embeddingDim)
+            let negativeVideoScores = negativeEmbeddings.map {
+                scoreEmbeddings(
+                    queryEmbedding: $0,
+                    matrix: vMatrix,
+                    count: vCount,
+                    gpuSearch: videoGPU,
+                    candidateMask: videoCandidateMask
+                )
+            }
 
             #if DEBUG
             let sortedVS = videoScores.enumerated().sorted { $0.element > $1.element }
@@ -593,15 +588,10 @@ class SearchEngine {
             for i in 0..<vCount {
                 var frameScore = videoScores[i]
                 guard frameScore > 0 else { continue }
-                guard videoPassesHardFilters(
-                    index: i, hints: hints, locationMatcher: locationMatcher, targetLoc: targetLoc,
-                    dates: vDates, latitudes: vLats, longitudes: vLons,
-                    cities: vCities, states: vStates, countries: vCountries, names: vLocNames
-                ) else { continue }
+                guard videoCandidateMask[i] else { continue }
 
-                for negEmbedding in negativeEmbeddings {
-                    let negScore = scoreEmbedding(queryEmbedding: negEmbedding, matrix: vMatrix, row: i, rowBuffer: &negativeVideoRowBuffer)
-                    frameScore -= negScore * SearchConfig.negativeTermWeight
+                for negativeScores in negativeVideoScores {
+                    frameScore -= negativeScores[i] * SearchConfig.negativeTermWeight
                 }
 
                 if let timeRange = hints.timeOfDayHours, let videoDate = vDates[i] {
@@ -865,7 +855,7 @@ class SearchEngine {
     private func computeFallbackResults(
         text: String, ids: [String], localIds: [String],
         dates: [Date?], matrix: [Float16], count: Int,
-        gpuSearch: GPUSimilaritySearch?
+        gpuSearch: SimilaritySearching?
     ) -> [SearchResult] {
         guard let queryEmbedding = try? encodeQuery(text: text) else { return [] }
         let scores = scoreEmbeddings(queryEmbedding: queryEmbedding, matrix: matrix, count: count, gpuSearch: gpuSearch)
@@ -927,7 +917,8 @@ class SearchEngine {
         queryEmbedding: [Float],
         matrix: [Float16],
         count: Int,
-        gpuSearch: GPUSimilaritySearch?
+        gpuSearch: SimilaritySearching?,
+        candidateMask: [Bool]? = nil
     ) -> [Float] {
         guard count > 0 else { return [] }
 
@@ -938,11 +929,13 @@ class SearchEngine {
         var scores = [Float](repeating: 0, count: count)
         var rowBuf = [Float](repeating: 0, count: embeddingDim)
         for i in 0..<count {
-            let offset = i * embeddingDim
-            for j in 0..<embeddingDim { rowBuf[j] = Float(matrix[offset + j]) }
-            var dot: Float = 0
-            vDSP_dotpr(queryEmbedding, 1, rowBuf, 1, &dot, vDSP_Length(embeddingDim))
-            scores[i] = dot
+            if let candidateMask, !candidateMask[i] { continue }
+            scores[i] = scoreEmbedding(
+                queryEmbedding: queryEmbedding,
+                matrix: matrix,
+                row: i,
+                rowBuffer: &rowBuf
+            )
         }
         return scores
     }
@@ -981,18 +974,59 @@ class SearchEngine {
             }
         }
 
+        return mediaPassesLocationFilter(
+            hints: hints,
+            locationMatcher: locationMatcher,
+            targetLoc: targetLoc,
+            latitude: latitudes[index],
+            longitude: longitudes[index],
+            city: cities[index],
+            state: states[index],
+            country: countries[index],
+            name: names[index]
+        )
+    }
+
+    private func mediaPassesLocationFilter(
+        hints: QueryHints,
+        locationMatcher: LocationMatcher.Matcher?,
+        targetLoc: CLLocation?,
+        latitude: Double?,
+        longitude: Double?,
+        city: String?,
+        state: String?,
+        country: String?,
+        name: String?
+    ) -> Bool {
         guard hints.locationHint != nil else { return true }
-        if let city = cities[index], !city.isEmpty {
-            return locationMatcher?(cities[index], states[index], countries[index], names[index]) ?? false
+
+        if let city, !city.isEmpty {
+            if locationMatcher?(city, state, country, name) == true {
+                return true
+            }
+
+            // Rescue cross-language city-name mismatches with the same tight
+            // coordinate cap for photos and videos.
+            guard let target = targetLoc, let latitude, let longitude else {
+                return false
+            }
+            let distanceKm = target.distance(
+                from: CLLocation(latitude: latitude, longitude: longitude)
+            ) / 1000.0
+            return distanceKm <= 50.0
         }
-        guard let target = targetLoc,
-              let radiusKm = hints.locationRadiusKm,
-              let lat = latitudes[index],
-              let lon = longitudes[index] else {
-            return false
+
+        if let target = targetLoc, let radiusKm = hints.locationRadiusKm {
+            guard let latitude, let longitude else { return false }
+            let distanceKm = target.distance(
+                from: CLLocation(latitude: latitude, longitude: longitude)
+            ) / 1000.0
+            return distanceKm <= radiusKm
         }
-        let distKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
-        return distKm <= radiusKm
+
+        // Without trusted query coordinates, locally unverifiable media stays
+        // in the candidate pool so reverse-geocoding lag does not exclude it.
+        return true
     }
 
     private func formatDateRange(_ range: DateRange) -> String {

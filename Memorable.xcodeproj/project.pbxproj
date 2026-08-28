@@ -50,6 +50,7 @@
 		6DAA069F302614AB2A08ABDE /* LocationMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE8E85642B4AD5164AF0DEB2 /* LocationMatcher.swift */; };
 		7B899DD797DFEA2A10F7C205 /* SearchEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F2A055CD079A0CE08308305 /* SearchEngine.swift */; };
 		7EA3861B8189F0597FE0D773 /* SemanticSearchRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA749E889274DF100D9EB1F0 /* SemanticSearchRuntime.swift */; };
+		7F9F9DACA2E56822FD62FFFA /* ProjectConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65FE22985B85938794104C86 /* ProjectConfigurationTests.swift */; };
 		81062F7BCED414F901DA160C /* GlassModifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68BFF5828079A1CBE1AD097A /* GlassModifiers.swift */; };
 		818A4AB3917F5A06DDCF42F2 /* Database.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04777888F7A65D942A97249E /* Database.swift */; };
 		880130150B28E83AF14F84E6 /* SharedUtilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2D20DBD5E9D064C3175459E /* SharedUtilities.swift */; };
@@ -136,9 +137,11 @@
 		4F9C84188552809F14E06ABD /* MemorySlideshowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemorySlideshowView.swift; sourceTree = "<group>"; };
 		5530ADFF94F6C3C46B7E0C85 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		56EF20ABC8CA852DE15E5495 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		5BB002D11AAC42FEDE75AB4C /* Build.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Build.xcconfig; sourceTree = "<group>"; };
 		5C3D5A6178EC09B78382C7FD /* Memorable.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Memorable.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5EA40A803B04576C000F43D4 /* SmartAlbumStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartAlbumStore.swift; sourceTree = "<group>"; };
 		65A4FE16748683991AAD0D0D /* TimeOfDayConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeOfDayConfigTests.swift; sourceTree = "<group>"; };
+		65FE22985B85938794104C86 /* ProjectConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectConfigurationTests.swift; sourceTree = "<group>"; };
 		68BFF5828079A1CBE1AD097A /* GlassModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassModifiers.swift; sourceTree = "<group>"; };
 		695C53E8964D1364616174BE /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		6AB5415737D56D0242046D9D /* PerformanceMetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceMetricsTests.swift; sourceTree = "<group>"; };
@@ -202,6 +205,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		300F3DD49FD574D2D1F819A1 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				5BB002D11AAC42FEDE75AB4C /* Build.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		640E8AE4AC18E0359BBBE397 /* Generated */ = {
 			isa = PBXGroup;
 			children = (
@@ -224,6 +235,7 @@
 			children = (
 				3D0FF77F13B75AD3DB1DEB59 /* SigLIP2_ImageEncoder.mlmodelc */,
 				EAF524595410C97CE28C71E7 /* SigLIP2_TextEncoder.mlmodelc */,
+				300F3DD49FD574D2D1F819A1 /* Config */,
 				D5B06E5B50EBC0493CAFEBAE /* Memorable */,
 				B615602ECDB5EFE6636B0E06 /* MemorableTests */,
 				7801D4DBC3AED5E3CBCEF38C /* Products */,
@@ -276,6 +288,7 @@
 				975DAE17DBF8435E099328EB /* LocationMatcherTests.swift */,
 				1E6EFB179805C00124922AE8 /* ModelResourceManagerTests.swift */,
 				6AB5415737D56D0242046D9D /* PerformanceMetricsTests.swift */,
+				65FE22985B85938794104C86 /* ProjectConfigurationTests.swift */,
 				6BD3DDFF0C17CCBBF2F49794 /* QueryParserTests.swift */,
 				3B7873A5DA6C60BBF8D8518E /* ResultGrouperTests.swift */,
 				EA2FDB3F17008C36724C493A /* SearchConfigTests.swift */,
@@ -408,7 +421,6 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					5742650677AC28D8CE84188B = {
-						DevelopmentTeam = GHL726VCA6;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -469,6 +481,7 @@
 				9C66CD1F0FACE00A353694AA /* LocationMatcherTests.swift in Sources */,
 				0EE4B71814955753E7E55F6B /* ModelResourceManagerTests.swift in Sources */,
 				2343D0A4529AF37C7C7E1910 /* PerformanceMetricsTests.swift in Sources */,
+				7F9F9DACA2E56822FD62FFFA /* ProjectConfigurationTests.swift in Sources */,
 				E5E015B33CD249F0CB1C2D30 /* QueryParserTests.swift in Sources */,
 				CA2539AA05C93A0BDE030C16 /* ResultGrouperTests.swift in Sources */,
 				3BB17E4033EB45BF2D0E3D11 /* SearchConfigTests.swift in Sources */,
@@ -619,6 +632,7 @@
 		};
 		5A009096A712E6773276FC2B /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5BB002D11AAC42FEDE75AB4C /* Build.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -637,6 +651,7 @@
 		};
 		A64896D5B059CE60CA1C8807 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5BB002D11AAC42FEDE75AB4C /* Build.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -711,12 +726,12 @@
 		};
 		D77A89550CEFA9B694A1CA97 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5BB002D11AAC42FEDE75AB4C /* Build.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 8;
-				DEVELOPMENT_TEAM = GHL726VCA6;
 				INFOPLIST_FILE = Memorable/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Memorable;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -738,12 +753,12 @@
 		};
 		E7A70D70F25D803ECE5DEC4C /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5BB002D11AAC42FEDE75AB4C /* Build.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 8;
-				DEVELOPMENT_TEAM = GHL726VCA6;
 				INFOPLIST_FILE = Memorable/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Memorable;
 				LD_RUNPATH_SEARCH_PATHS = (

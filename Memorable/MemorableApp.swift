@@ -181,10 +181,6 @@ class AppState: ObservableObject {
                 cleanOrphans: effectivePriority != .userInitiatedSearch,
                 loadPriority: effectivePriority == .userInitiatedSearch ? .userInitiated : .utility
             )
-            if UserDefaults.standard.bool(forKey: IndexingConfig.needsFastFormatPhotoRebuildKey) {
-                UserDefaults.standard.set(false, forKey: IndexingConfig.needsFastFormatPhotoRebuildKey)
-                indexing.indexNewPhotosOnly()
-            }
 
             #if DEBUG
             PerformanceMetrics.shared.end(PerformancePhase.indexLoad)

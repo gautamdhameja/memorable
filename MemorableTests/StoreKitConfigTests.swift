@@ -14,6 +14,12 @@ final class StoreKitConfigTests: XCTestCase {
         XCTAssertTrue(products[0].familyShareable)
     }
 
+    func testCurrentAndLegacyProductIdentifiersGrantProEntitlement() {
+        XCTAssertTrue(ProManager.isEntitlementProduct(ProManager.productId))
+        XCTAssertTrue(ProManager.isEntitlementProduct("com.blockdeep.memorable.pro"))
+        XCTAssertFalse(ProManager.isEntitlementProduct("com.blockdeep.memorable.unrelated"))
+    }
+
     private func loadStoreKitConfig() throws -> StoreKitConfig {
         let testURL = URL(fileURLWithPath: #filePath)
         let repoRoot = testURL.deletingLastPathComponent().deletingLastPathComponent()

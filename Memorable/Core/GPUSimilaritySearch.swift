@@ -3,9 +3,14 @@ import Metal
 import MetalPerformanceShadersGraph
 import Accelerate
 
+protocol SimilaritySearching: AnyObject {
+    func buildIndex(embeddings: [Float16], count: Int)
+    func search(queryEmbedding: [Float]) -> [Float]?
+}
+
 /// GPU-accelerated similarity search using MPSGraph matrix multiplication.
 /// Replaces per-embedding CPU dot products with a single [N, 768] × [768, 1] GPU matmul.
-class GPUSimilaritySearch {
+class GPUSimilaritySearch: SimilaritySearching {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let embeddingDim: Int

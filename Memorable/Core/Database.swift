@@ -37,7 +37,9 @@ protocol DatabaseProtocol {
     func fetchRandomPhoto(sharp: Bool) throws -> IndexedPhoto?
     func photosNeedingEnrichment(limit: Int) throws -> [PhotoEnrichmentCandidate]
     func photosNeedingEnrichmentCount() throws -> Int
-    func updatePhotoEnrichment(_ update: PhotoEnrichmentUpdate) throws
+    func updatePhotoEnrichment(_ updates: [PhotoEnrichmentUpdate]) throws
+    func indexRebuildRequired() throws -> Bool
+    func clearIndexRebuildRequired() throws
 
     // Videos
     func insertVideo(_ video: IndexedVideo) throws
@@ -85,6 +87,11 @@ protocol DatabaseProtocol {
 class AppDatabase: DatabaseProtocol {
     static let shared = AppDatabase()
     static var isInMemoryFallback: Bool = false
+    private static let orientationMigrationID = "v3-orientation-normalized-embeddings"
+    private static let indexRebuildStateKey = "indexRebuildRequired"
+    private static let embeddingFormatStateKey = "embeddingFormatVersion"
+    private static let currentEmbeddingFormatVersion = "orientation-correct-v1"
+    private static let legacyFastFormatRebuildKey = "indexing.needsFastFormatPhotoRebuild"
     let dbQueue: DatabaseQueue
 
     private init() {
@@ -105,7 +112,14 @@ class AppDatabase: DatabaseProtocol {
         Self.isInMemoryFallback = false
         do {
             let queue = try openQueue()
+            let orientationMigrationWasAlreadyApplied = try queue.read { db in
+                try Self.migrator.appliedMigrations(db).contains(Self.orientationMigrationID)
+            }
             try migrate(queue)
+            try finalizeEmbeddingFormatState(
+                in: queue,
+                orientationMigrationWasAlreadyApplied: orientationMigrationWasAlreadyApplied
+            )
             #if DEBUG
             logger.info("[Database] Migrations completed successfully")
             #endif
@@ -161,6 +175,57 @@ class AppDatabase: DatabaseProtocol {
             // Intentional force-try: in-memory DatabaseQueue allocation virtually never fails
             return try! DatabaseQueue()
         }
+    }
+
+    private static func finalizeEmbeddingFormatState(
+        in queue: DatabaseQueue,
+        orientationMigrationWasAlreadyApplied: Bool
+    ) throws {
+        let legacyRebuildRequired = UserDefaults.standard.bool(forKey: legacyFastFormatRebuildKey)
+        var didConsumeLegacyFlag = false
+
+        try queue.write { db in
+            guard try db.tableExists("indexed_photos") else { return }
+            try createAppStateTableIfNeeded(db)
+
+            let storedVersion = try String.fetchOne(
+                db,
+                sql: "SELECT value FROM app_state WHERE key = ?",
+                arguments: [embeddingFormatStateKey]
+            )
+            guard storedVersion != currentEmbeddingFormatVersion else { return }
+
+            if orientationMigrationWasAlreadyApplied || legacyRebuildRequired {
+                try setAppState(indexRebuildStateKey, value: "true", in: db)
+            }
+            try setAppState(
+                embeddingFormatStateKey,
+                value: currentEmbeddingFormatVersion,
+                in: db
+            )
+            didConsumeLegacyFlag = legacyRebuildRequired
+        }
+
+        if didConsumeLegacyFlag {
+            UserDefaults.standard.removeObject(forKey: legacyFastFormatRebuildKey)
+        }
+    }
+
+    private static func createAppStateTableIfNeeded(_ db: Database) throws {
+        try db.create(table: "app_state", ifNotExists: true) { t in
+            t.column("key", .text).primaryKey()
+            t.column("value", .text).notNull()
+        }
+    }
+
+    private static func setAppState(_ key: String, value: String, in db: Database) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO app_state (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            arguments: [key, value]
+        )
     }
 
     private enum DatabaseInitError: LocalizedError {
@@ -263,6 +328,13 @@ class AppDatabase: DatabaseProtocol {
         // Old embeddings may represent raw sensor pixels rather than the
         // displayed image, so clear indexed media and rebuild homogeneously.
         migrator.registerMigration("v3-orientation-normalized-embeddings") { db in
+            let existingMediaCount =
+                (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM indexed_photos") ?? 0)
+                + (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM indexed_videos") ?? 0)
+            try createAppStateTableIfNeeded(db)
+            if existingMediaCount > 0 {
+                try setAppState(indexRebuildStateKey, value: "true", in: db)
+            }
             try db.execute(sql: "DELETE FROM indexed_video_frames")
             try db.execute(sql: "DELETE FROM indexed_videos")
             try db.execute(sql: "DELETE FROM indexed_photos")
@@ -285,10 +357,23 @@ class AppDatabase: DatabaseProtocol {
         // index. Rebuild photo embeddings with the high-quality local loader.
         migrator.registerMigration("v5-rebuild-fastformat-photo-embeddings") { db in
             let existingPhotoCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM indexed_photos") ?? 0
-            try db.execute(sql: "DELETE FROM indexed_photos")
+            try createAppStateTableIfNeeded(db)
             if existingPhotoCount > 0 {
-                UserDefaults.standard.set(true, forKey: IndexingConfig.needsFastFormatPhotoRebuildKey)
+                try setAppState(indexRebuildStateKey, value: "true", in: db)
             }
+            try db.execute(sql: "DELETE FROM indexed_photos")
+        }
+
+        // Keep transient enrichment load failures retryable without allowing
+        // one unreadable photo to spin inside a single enrichment pass.
+        migrator.registerMigration("v6-photo-enrichment-retry") { db in
+            try db.alter(table: "indexed_photos") { t in
+                t.add(column: "enrichmentAttemptedAt", .datetime)
+            }
+        }
+
+        migrator.registerMigration("v7-index-rebuild-state") { db in
+            try createAppStateTableIfNeeded(db)
         }
 
         return migrator
@@ -409,12 +494,14 @@ class AppDatabase: DatabaseProtocol {
 
     func photosNeedingEnrichment(limit: Int = IndexingConfig.enrichmentBatchSize) throws -> [PhotoEnrichmentCandidate] {
         try dbQueue.read { db in
+            let retryBefore = Date().addingTimeInterval(-IndexingConfig.enrichmentRetryDelaySeconds)
             let rows = try Row.fetchAll(db, sql: """
                 SELECT localIdentifier, pixelWidth, pixelHeight, sourceId, filePath FROM indexed_photos
                 WHERE enrichmentComplete = 0
+                  AND (enrichmentAttemptedAt IS NULL OR enrichmentAttemptedAt <= ?)
                 ORDER BY creationDate DESC
                 LIMIT ?
-            """, arguments: [limit])
+            """, arguments: [retryBefore, limit])
             return rows.map {
                 PhotoEnrichmentCandidate(
                     localIdentifier: $0["localIdentifier"] as String,
@@ -429,27 +516,66 @@ class AppDatabase: DatabaseProtocol {
 
     func photosNeedingEnrichmentCount() throws -> Int {
         try dbQueue.read { db in
-            try Int.fetchOne(db, sql: """
+            let retryBefore = Date().addingTimeInterval(-IndexingConfig.enrichmentRetryDelaySeconds)
+            return try Int.fetchOne(db, sql: """
                 SELECT COUNT(*) FROM indexed_photos
                 WHERE enrichmentComplete = 0
-            """) ?? 0
+                  AND (enrichmentAttemptedAt IS NULL OR enrichmentAttemptedAt <= ?)
+            """, arguments: [retryBefore]) ?? 0
         }
     }
 
-    func updatePhotoEnrichment(_ update: PhotoEnrichmentUpdate) throws {
+    func updatePhotoEnrichment(_ updates: [PhotoEnrichmentUpdate]) throws {
+        guard !updates.isEmpty else { return }
         try dbQueue.write { db in
+            for update in updates {
+                switch update.outcome {
+                case .completed:
+                    try db.execute(
+                        sql: """
+                            UPDATE indexed_photos
+                            SET ocrText = ?, sharpnessScore = ?, sceneLabels = ?,
+                                enrichmentComplete = 1, enrichmentAttemptedAt = NULL
+                            WHERE localIdentifier = ?
+                        """,
+                        arguments: [
+                            update.ocrText,
+                            update.sharpnessScore,
+                            update.sceneLabels,
+                            update.localIdentifier
+                        ]
+                    )
+                case .loadFailed(let attemptedAt):
+                    try db.execute(
+                        sql: """
+                            UPDATE indexed_photos
+                            SET enrichmentAttemptedAt = ?
+                            WHERE localIdentifier = ? AND enrichmentComplete = 0
+                        """,
+                        arguments: [attemptedAt, update.localIdentifier]
+                    )
+                }
+            }
+        }
+    }
+
+    func indexRebuildRequired() throws -> Bool {
+        try dbQueue.read { db in
+            guard try db.tableExists("app_state") else { return false }
+            return try String.fetchOne(
+                db,
+                sql: "SELECT value FROM app_state WHERE key = ?",
+                arguments: [Self.indexRebuildStateKey]
+            ) == "true"
+        }
+    }
+
+    func clearIndexRebuildRequired() throws {
+        try dbQueue.write { db in
+            guard try db.tableExists("app_state") else { return }
             try db.execute(
-                sql: """
-                    UPDATE indexed_photos
-                    SET ocrText = ?, sharpnessScore = ?, sceneLabels = ?, enrichmentComplete = 1
-                    WHERE localIdentifier = ?
-                """,
-                arguments: [
-                    update.ocrText,
-                    update.sharpnessScore,
-                    update.sceneLabels,
-                    update.localIdentifier
-                ]
+                sql: "DELETE FROM app_state WHERE key = ?",
+                arguments: [Self.indexRebuildStateKey]
             )
         }
     }

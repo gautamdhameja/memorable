@@ -32,6 +32,22 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(IndexingConfig.prefetchBatchCapacity, 1)
     }
 
+    func testSequentialBatchCursorContinuesAfterEmptyLoadedBatch() {
+        var cursor = IndexingBatchCursor(items: Array(0..<40), batchSize: 16)
+        var batchNumber = 0
+        var indexedItems: [Int] = []
+
+        while cursor.hasRemaining {
+            let batch = cursor.nextBatch()
+            let loadedItems = batchNumber == 0 ? [] : batch
+            indexedItems.append(contentsOf: loadedItems)
+            batchNumber += 1
+        }
+
+        XCTAssertEqual(batchNumber, 3)
+        XCTAssertEqual(indexedItems, Array(16..<40))
+    }
+
     func testProgressEstimateWaitsForMinimumCompletedItems() {
         let progress = IndexingProgress(
             total: 100,
@@ -56,5 +72,20 @@ final class IndexingPolicyTests: XCTestCase {
 
         XCTAssertNotNil(progress.itemsPerSecond)
         XCTAssertNotNil(progress.estimatedSecondsRemaining)
+    }
+
+    func testProgressEstimateIgnoresItemsCompletedBeforeCurrentPhaseTiming() {
+        let previouslyCompleted = 4_000
+        let progress = IndexingProgress(
+            total: 5_000,
+            completed: previouslyCompleted + IndexingConfig.progressEstimateMinCompleted - 1,
+            isRunning: true,
+            phase: .photos,
+            rateBaselineCompleted: previouslyCompleted,
+            phaseStartedAt: Date(timeIntervalSinceNow: -10)
+        )
+
+        XCTAssertNil(progress.itemsPerSecond)
+        XCTAssertNil(progress.estimatedSecondsRemaining)
     }
 }

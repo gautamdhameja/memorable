@@ -49,6 +49,30 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertTrue(response.results[0].isVideo)
     }
 
+    func testLocationQueryRetainsVideoWithGPSButNoStoredCityWithoutCoordinateHint() throws {
+        let database = SearchFixtureDatabase(
+            videos: [
+                .init(
+                    id: "video-awaiting-geocode",
+                    localIdentifier: "local-video-awaiting-geocode",
+                    date: Date(timeIntervalSince1970: 100),
+                    city: nil,
+                    latitude: 48.8566,
+                    longitude: 2.3522,
+                    embedding: float16Vector(first: 1)
+                )
+            ]
+        )
+        let engine = SearchEngine(textEncoder: FakeTextEncoder(["a photo": floatVector(first: 1)]), database: database)
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(
+            hints: hints(text: "a photo", locationHint: "Paris", hasVisualQuery: false)
+        )
+
+        XCTAssertEqual(response.results.map(\.id), ["video-awaiting-geocode"])
+    }
+
     func testDateFilterExcludesVideoOnlyResult() throws {
         let database = SearchFixtureDatabase(
             videos: [
@@ -98,6 +122,82 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(positive.results.count, 1)
         XCTAssertEqual(negative.results.count, 1)
         XCTAssertLessThan(negative.results[0].score, positive.results[0].score)
+    }
+
+    func testNegativeTermsUseMatrixScorerForPhotosAndVideos() throws {
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "photo-1",
+                    localIdentifier: "local-photo-1",
+                    date: Date(timeIntervalSince1970: 100),
+                    embedding: float16Vector(first: 1)
+                )
+            ],
+            videos: [
+                .init(
+                    id: "video-1",
+                    localIdentifier: "local-video-1",
+                    date: Date(timeIntervalSince1970: 100),
+                    city: nil,
+                    embedding: float16Vector(first: 1)
+                )
+            ]
+        )
+        let photoScorer = RecordingSimilaritySearch()
+        let videoScorer = RecordingSimilaritySearch()
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder([
+                "dog": floatVector(first: 0.8),
+                "cat": floatVector(first: 0.4)
+            ]),
+            database: database,
+            photoSimilaritySearch: photoScorer,
+            videoSimilaritySearch: videoScorer
+        )
+
+        try engine.loadIndex()
+        _ = try engine.hybridSearch(hints: hints(text: "dog", negativeTerms: ["cat"]))
+
+        XCTAssertEqual(photoScorer.queries.map { $0[0] }, [0.8, 0.4])
+        XCTAssertEqual(videoScorer.queries.map { $0[0] }, [0.8, 0.4])
+    }
+
+    func testInjectedVideoScorerIsAvailableWhenVideosAppearAfterReload() throws {
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "photo-1",
+                    localIdentifier: "local-photo-1",
+                    date: Date(timeIntervalSince1970: 100),
+                    embedding: float16Vector(first: 1)
+                )
+            ]
+        )
+        let videoScorer = RecordingSimilaritySearch()
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder([
+                "dog": floatVector(first: 0.8),
+                "cat": floatVector(first: 0.4)
+            ]),
+            database: database,
+            videoSimilaritySearch: videoScorer
+        )
+
+        try engine.loadIndex()
+        database.videos = [
+            .init(
+                id: "video-1",
+                localIdentifier: "local-video-1",
+                date: Date(timeIntervalSince1970: 100),
+                city: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ]
+        try engine.loadIndex()
+        _ = try engine.hybridSearch(hints: hints(text: "dog", negativeTerms: ["cat"]))
+
+        XCTAssertEqual(videoScorer.queries.map { $0[0] }, [0.8, 0.4])
     }
 
     func testFilteredOutPhotosStillProduceCpuFallbackResults() throws {
@@ -180,6 +280,20 @@ final class FakeTextEncoder: TextEmbeddingEncoding {
     }
 }
 
+final class RecordingSimilaritySearch: SimilaritySearching {
+    private var count = 0
+    private(set) var queries: [[Float]] = []
+
+    func buildIndex(embeddings: [Float16], count: Int) {
+        self.count = count
+    }
+
+    func search(queryEmbedding: [Float]) -> [Float]? {
+        queries.append(queryEmbedding)
+        return Array(repeating: queryEmbedding.first ?? 0, count: count)
+    }
+}
+
 struct FixturePhoto {
     let id: String
     let localIdentifier: String
@@ -194,6 +308,8 @@ struct FixtureVideo {
     let localIdentifier: String
     let date: Date?
     let city: String?
+    var latitude: Double? = nil
+    var longitude: Double? = nil
     let embedding: [Float16]
 }
 
@@ -231,8 +347,8 @@ final class SearchFixtureDatabase: DatabaseProtocol {
             videoIds: videos.map(\.id),
             localIdentifiers: videos.map(\.localIdentifier),
             dates: videos.map(\.date),
-            latitudes: Array<Double?>(repeating: nil, count: videos.count),
-            longitudes: Array<Double?>(repeating: nil, count: videos.count),
+            latitudes: videos.map(\.latitude),
+            longitudes: videos.map(\.longitude),
             framePositions: Array(repeating: 0.5, count: videos.count),
             locationCities: videos.map(\.city),
             locationStates: Array<String?>(repeating: nil, count: videos.count),
@@ -253,7 +369,9 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func fetchRandomPhoto(sharp: Bool) throws -> IndexedPhoto? { nil }
     func photosNeedingEnrichment(limit: Int) throws -> [PhotoEnrichmentCandidate] { [] }
     func photosNeedingEnrichmentCount() throws -> Int { 0 }
-    func updatePhotoEnrichment(_ update: PhotoEnrichmentUpdate) throws {}
+    func updatePhotoEnrichment(_ updates: [PhotoEnrichmentUpdate]) throws {}
+    func indexRebuildRequired() throws -> Bool { false }
+    func clearIndexRebuildRequired() throws {}
     func insertVideo(_ video: IndexedVideo) throws {}
     func insertVideoFrames(_ frames: [IndexedVideoFrame]) throws {}
     func isVideoIndexed(localIdentifier: String) throws -> Bool { false }

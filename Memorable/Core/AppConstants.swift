@@ -192,12 +192,12 @@ enum TimeOfDayConfig {
 // MARK: - Indexing
 
 enum IndexingConfig {
-    /// Set by the v5 database migration when photo embeddings are cleared
-    /// because they may have been generated from degraded PhotoKit input.
-    static let needsFastFormatPhotoRebuildKey = "indexing.needsFastFormatPhotoRebuild"
-
     /// Photos per DB transaction
     static let batchInsertSize = 20
+
+    /// Failed enrichment loads are retried by a later pass, not repeatedly in
+    /// the same pass while the underlying media is still unavailable.
+    static let enrichmentRetryDelaySeconds: TimeInterval = 24 * 60 * 60
 
     /// Images per Core ML batch prediction
     static let batchEncodeSize = 16

@@ -47,6 +47,12 @@ struct PhotoEnrichmentUpdate: Equatable {
     let ocrText: String?
     let sharpnessScore: Double?
     let sceneLabels: String?
+    var outcome: PhotoEnrichmentOutcome = .completed
+}
+
+enum PhotoEnrichmentOutcome: Equatable {
+    case completed
+    case loadFailed(at: Date)
 }
 
 struct PhotoSource: Codable, FetchableRecord, PersistableRecord, Identifiable {
@@ -131,6 +137,7 @@ struct IndexingProgress {
     var phase: IndexingPhase = .idle
     var photosComplete: Bool = false
     var searchableCount: Int = 0
+    var rateBaselineCompleted: Int = 0
     var phaseStartedAt: Date = Date()
 
     var percentage: Double {
@@ -139,10 +146,11 @@ struct IndexingProgress {
     }
 
     var itemsPerSecond: Double? {
-        guard completed >= IndexingConfig.progressEstimateMinCompleted else { return nil }
+        let timedCompleted = max(0, completed - rateBaselineCompleted)
+        guard timedCompleted >= IndexingConfig.progressEstimateMinCompleted else { return nil }
         let elapsed = Date().timeIntervalSince(phaseStartedAt)
         guard elapsed > 0 else { return nil }
-        return Double(completed) / elapsed
+        return Double(timedCompleted) / elapsed
     }
 
     var estimatedSecondsRemaining: TimeInterval? {

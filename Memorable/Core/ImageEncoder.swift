@@ -207,6 +207,12 @@ extension UIImage {
             return nil
         }
 
+        // UIKit drawing assumes a top-left origin, while a raw bitmap context
+        // uses a bottom-left origin. Align the context before drawing so row 0
+        // contains the visually top row while UIImage still applies its EXIF
+        // orientation.
+        ctx.translateBy(x: 0, y: CGFloat(height))
+        ctx.scaleBy(x: 1, y: -1)
         UIGraphicsPushContext(ctx)
         self.draw(in: CGRect(x: 0, y: 0, width: width, height: height))
         UIGraphicsPopContext()

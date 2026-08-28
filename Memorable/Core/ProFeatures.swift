@@ -14,6 +14,12 @@ class ProManager: ObservableObject {
     static let shared = ProManager()
 
     static let productId = "com.blockdeep.memorable.pro.v2"
+    static let legacyProductId = "com.blockdeep.memorable.pro"
+    private static let entitlementProductIds: Set<String> = [productId, legacyProductId]
+
+    static func isEntitlementProduct(_ productId: String) -> Bool {
+        entitlementProductIds.contains(productId)
+    }
 
     #if DEBUG
     @Published var isPro: Bool = true
@@ -110,7 +116,7 @@ class ProManager: ObservableObject {
         var found = false
         for await result in Transaction.currentEntitlements {
             if let transaction = try? checkVerified(result),
-               transaction.productID == Self.productId {
+               Self.isEntitlementProduct(transaction.productID) {
                 unlock()
                 found = true
                 break
@@ -134,7 +140,7 @@ class ProManager: ObservableObject {
         var entitled = false
         for await result in Transaction.currentEntitlements {
             if let transaction = try? checkVerified(result),
-               transaction.productID == Self.productId,
+               Self.isEntitlementProduct(transaction.productID),
                transaction.revocationDate == nil {
                 entitled = true
                 break
@@ -173,16 +179,13 @@ class ProManager: ObservableObject {
         // capture silences strict-concurrency diagnostics about mutable
         // self crossing a @Sendable detached-task boundary.
         Task.detached { [self] in
-            let productId = await Self.productId
+            let entitlementProductIds = await Self.entitlementProductIds
             for await result in Transaction.updates {
                 switch result {
                 case .verified(let transaction):
-                    if transaction.productID == productId {
+                    if entitlementProductIds.contains(transaction.productID) {
                         if transaction.revocationDate != nil {
-                            await MainActor.run {
-                                self.isPro = false
-                                self.onProRevoked?()
-                            }
+                            await self.verifyEntitlement()
                         } else {
                             await MainActor.run { self.unlock() }
                         }

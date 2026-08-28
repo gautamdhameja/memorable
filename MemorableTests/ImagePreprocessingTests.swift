@@ -4,8 +4,8 @@ import UIKit
 
 final class ImagePreprocessingTests: XCTestCase {
 
-    func testIndexingImageRequestOptionsUseHighQualityLocalExactLoading() {
-        let options = PhotoLibrary.indexingImageRequestOptions()
+    func testImageRequestOptionsUseHighQualityLocalExactLoading() {
+        let options = PhotoLibrary.imageRequestOptions()
 
         XCTAssertEqual(options.deliveryMode, .highQualityFormat)
         XCTAssertEqual(options.resizeMode, .exact)
@@ -13,26 +13,31 @@ final class ImagePreprocessingTests: XCTestCase {
         XCTAssertFalse(options.isNetworkAccessAllowed)
     }
 
-    func testDisplayImageRequestOptionsRemainHighQuality() {
-        let options = PhotoLibrary.displayImageRequestOptions()
+    func testPixelBufferRowZeroContainsVisuallyTopColor() throws {
+        let image = makeTopBottomImage(width: 2, height: 2)
 
-        XCTAssertEqual(options.deliveryMode, .highQualityFormat)
-        XCTAssertEqual(options.resizeMode, .exact)
-        XCTAssertFalse(options.isSynchronous)
-        XCTAssertFalse(options.isNetworkAccessAllowed)
+        let pixels = try rgbPixels(
+            from: XCTUnwrap(image.toPixelBuffer(width: 2, height: 2)),
+            width: 2,
+            height: 2
+        )
+
+        XCTAssertGreaterThan(pixels[0].red, pixels[0].blue)
+        XCTAssertGreaterThan(pixels[2].blue, pixels[2].red)
     }
 
-    func testPixelBufferUsesDisplayedImageOrientation() throws {
-        let source = makeTwoColorImage(width: 2, height: 1)
-        let oriented = UIImage(cgImage: source.cgImage!, scale: 1, orientation: .right)
-        let expected = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 2)).image { _ in
-            oriented.draw(in: CGRect(x: 0, y: 0, width: 1, height: 2))
-        }
+    func testPixelBufferAppliesNonUpImageOrientation() throws {
+        let source = makeLeftRightImage(width: 2, height: 1)
+        let oriented = UIImage(cgImage: try XCTUnwrap(source.cgImage), scale: 1, orientation: .right)
 
-        let expectedPixels = try rgbPixels(from: XCTUnwrap(expected.toPixelBuffer(width: 1, height: 2)), width: 1, height: 2)
-        let actualPixels = try rgbPixels(from: XCTUnwrap(oriented.toPixelBuffer(width: 1, height: 2)), width: 1, height: 2)
+        let pixels = try rgbPixels(
+            from: XCTUnwrap(oriented.toPixelBuffer(width: 1, height: 2)),
+            width: 1,
+            height: 2
+        )
 
-        XCTAssertEqual(actualPixels, expectedPixels)
+        XCTAssertGreaterThan(pixels[0].red, pixels[0].blue)
+        XCTAssertGreaterThan(pixels[1].blue, pixels[1].red)
     }
 
     func testPixelBufferCreationFailsGracefullyForEmptyImage() {
@@ -77,12 +82,21 @@ final class ImagePreprocessingTests: XCTestCase {
         XCTAssertFalse(FolderScanner.isValidImageFile(textURL, within: root))
     }
 
-    private func makeTwoColorImage(width: Int, height: Int) -> UIImage {
+    private func makeTopBottomImage(width: Int, height: Int) -> UIImage {
         UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { context in
             UIColor.red.setFill()
-            context.cgContext.fill(CGRect(x: 0, y: 0, width: 1, height: height))
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: width, height: height / 2))
             UIColor.blue.setFill()
-            context.cgContext.fill(CGRect(x: 1, y: 0, width: 1, height: height))
+            context.cgContext.fill(CGRect(x: 0, y: height / 2, width: width, height: height / 2))
+        }
+    }
+
+    private func makeLeftRightImage(width: Int, height: Int) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { context in
+            UIColor.red.setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: width / 2, height: height))
+            UIColor.blue.setFill()
+            context.cgContext.fill(CGRect(x: width / 2, y: 0, width: width / 2, height: height))
         }
     }
 

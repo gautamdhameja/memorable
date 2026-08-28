@@ -15,6 +15,9 @@ targets:
   Memorable:
     type: application
     platform: iOS
+    configFiles:
+      Debug: Config/Build.xcconfig
+      Release: Config/Build.xcconfig
     sources:
       - path: Memorable
         excludes:
@@ -40,9 +43,7 @@ targets:
         SWIFT_VERSION: "5.10"
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        CODE_SIGN_IDENTITY: Apple Development
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: GHL726VCA6
         PROVISIONING_PROFILE_SPECIFIER: ""
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         SUPPORTS_MACCATALYST: "NO"
@@ -51,6 +52,9 @@ targets:
   MemorableTests:
     type: bundle.unit-test
     platform: iOS
+    configFiles:
+      Debug: Config/Build.xcconfig
+      Release: Config/Build.xcconfig
     sources:
       - path: MemorableTests
     dependencies:
@@ -70,7 +74,7 @@ schemes:
         Memorable: all
         MemorableTests: [test]
     run:
-      config: Debug
+      config: Release
     test:
       config: Debug
       targets:

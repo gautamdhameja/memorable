@@ -1,0 +1,6 @@
+// Keep repository and CI builds independent of a developer's signing account.
+CODE_SIGNING_ALLOWED = NO
+CODE_SIGNING_REQUIRED = NO
+
+// Copy Local.xcconfig.example to Local.xcconfig to enable device signing locally.
+#include? "Local.xcconfig"

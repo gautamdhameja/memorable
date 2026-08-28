@@ -19,6 +19,31 @@ class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver {
     }
 }
 
+struct IndexingBatchCursor<Item> {
+    private let items: [Item]
+    private let batchSize: Int
+    private var nextIndex = 0
+
+    init(items: [Item], batchSize: Int) {
+        precondition(batchSize > 0)
+        self.items = items
+        self.batchSize = batchSize
+    }
+
+    var hasRemaining: Bool {
+        nextIndex < items.count
+    }
+
+    mutating func nextBatch(maxCount: Int? = nil) -> [Item] {
+        guard hasRemaining else { return [] }
+        let batchEnd = min(nextIndex + batchSize, items.count)
+        let batch = Array(items[nextIndex..<batchEnd])
+        nextIndex = batchEnd
+        guard let maxCount else { return batch }
+        return Array(batch.prefix(max(0, maxCount)))
+    }
+}
+
 @MainActor
 class IndexingService: ObservableObject {
     @Published var progress = IndexingProgress(total: 0, completed: 0, isRunning: false)
@@ -32,6 +57,7 @@ class IndexingService: ObservableObject {
         }
     }
     @Published var newPhotosAvailable = false
+    @Published private(set) var indexRebuildRequired = false
     @Published var indexVersion: Int = 0 {
         didSet {
             #if DEBUG
@@ -121,10 +147,27 @@ class IndexingService: ObservableObject {
             #if DEBUG
             logger.info("[IndexingService] loadExistingIndexIfAvailable start cleanOrphans=\(cleanOrphans), priority=\(String(describing: loadPriority))")
             #endif
-            let photoCount = try database.indexedCount()
+            let db = database
+            let rebuildRequired = try await Task.detached(priority: loadPriority) {
+                try db.indexRebuildRequired()
+            }.value
+            indexRebuildRequired = rebuildRequired
+            if rebuildRequired {
+                searchEngine.dropIndex()
+                isReady = false
+                progress = IndexingProgress(total: 0, completed: 0, isRunning: false)
+                onIndexUnavailable?()
+                return false
+            }
+
+            let photoCount = try await Task.detached(priority: loadPriority) {
+                try db.indexedCount()
+            }.value
             let videoCount: Int
             do {
-                videoCount = try database.videoIndexedCount()
+                videoCount = try await Task.detached(priority: loadPriority) {
+                    try db.videoIndexedCount()
+                }.value
             } catch {
                 logger.error("Failed to count indexed videos: \(error.localizedDescription)")
                 videoCount = 0
@@ -190,6 +233,44 @@ class IndexingService: ObservableObject {
         guard markRunningIfIdle() else { return }
         newPhotosAvailable = false
         indexingTask = Task { await performIndexing() }
+    }
+
+    func rebuildRequiredIndex() {
+        guard indexRebuildRequired else {
+            startIndexing()
+            return
+        }
+
+        stopIndexing()
+        guard markRunningIfIdle() else { return }
+        SurpriseQueries.clearValidated()
+        indexingTask = Task {
+            do {
+                let db = database
+                try await Task.detached(priority: .utility) {
+                    try db.deleteAll()
+                }.value
+            } catch {
+                logger.error("Failed to clear incompatible index before rebuild: \(error.localizedDescription)")
+                progress.isRunning = false
+                return
+            }
+
+            searchEngine.dropIndex()
+            isReady = false
+            await performIndexing()
+            guard !Task.isCancelled else { return }
+
+            do {
+                let db = database
+                try await Task.detached(priority: .utility) {
+                    try db.clearIndexRebuildRequired()
+                }.value
+                indexRebuildRequired = false
+            } catch {
+                logger.error("Failed to clear index rebuild requirement: \(error.localizedDescription)")
+            }
+        }
     }
 
     func stopIndexing() {
@@ -362,6 +443,8 @@ class IndexingService: ObservableObject {
                 assetsToIndex.append(asset)
             }
         }
+        progress.rateBaselineCompleted = indexed
+        progress.phaseStartedAt = Date()
 
         let checkpointInterval = searchableCheckpointInterval(forLibrarySize: total)
         var nextSearchableReloadCount = nextSearchableCheckpoint(
@@ -370,41 +453,42 @@ class IndexingService: ObservableObject {
             interval: checkpointInterval
         )
         var lastProgressiveReloadAt: Date?
-        var batchStart = 0
+        var batchCursor = IndexingBatchCursor(items: assetsToIndex, batchSize: encodeBatchSize)
         var nextLoadTask: Task<LoadedPhotoBatch, Never>?
         let prefetchEnabled = isPro && IndexingConfig.prefetchBatchCapacity > 0
 
-        func makeBatch(start: Int) -> [PHAsset] {
-            guard start < assetsToIndex.count else { return [] }
-            let batchEnd = min(start + encodeBatchSize, assetsToIndex.count)
-            let slice = Array(assetsToIndex[start..<batchEnd])
-            guard !isPro else { return slice }
+        func makeBatch() -> [PHAsset] {
+            guard !isPro else { return batchCursor.nextBatch() }
             let remainingAllowed = max(0, FreeTier.maxIndexedMedia - newlyIndexed)
-            return Array(slice.prefix(remainingAllowed))
+            return batchCursor.nextBatch(maxCount: remainingAllowed)
         }
 
-        let firstBatch = makeBatch(start: batchStart)
+        let firstBatch = makeBatch()
         if !firstBatch.isEmpty {
             nextLoadTask = loadPhotoBatchTask(assets: firstBatch)
-            batchStart += encodeBatchSize
         }
 
         // Process in batches with one bounded prefetch task ahead of encoding.
-        while let loadTask = nextLoadTask {
+        while nextLoadTask != nil || batchCursor.hasRemaining {
             if Task.isCancelled { break }
             if !FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) {
                 hitFreeLimit = true
                 break
             }
 
-            if prefetchEnabled {
-                let nextBatch = makeBatch(start: batchStart)
-                nextLoadTask = nextBatch.isEmpty ? nil : loadPhotoBatchTask(assets: nextBatch)
-                if !nextBatch.isEmpty {
-                    batchStart += encodeBatchSize
-                }
-            } else {
+            let loadTask: Task<LoadedPhotoBatch, Never>
+            if let prefetchedTask = nextLoadTask {
+                loadTask = prefetchedTask
                 nextLoadTask = nil
+            } else {
+                let batchToLoad = makeBatch()
+                guard !batchToLoad.isEmpty else { break }
+                loadTask = loadPhotoBatchTask(assets: batchToLoad)
+            }
+
+            if prefetchEnabled {
+                let nextBatch = makeBatch()
+                nextLoadTask = nextBatch.isEmpty ? nil : loadPhotoBatchTask(assets: nextBatch)
             }
 
             let loadedBatch = await loadTask.value
@@ -514,13 +598,6 @@ class IndexingService: ObservableObject {
 
             indexed += batchAssets.count
             progress.completed = indexed
-            if !prefetchEnabled {
-                let followingBatch = makeBatch(start: batchStart)
-                if !followingBatch.isEmpty {
-                    nextLoadTask = loadPhotoBatchTask(assets: followingBatch)
-                    batchStart += encodeBatchSize
-                }
-            }
             await Task.yield()
         }
 
@@ -554,28 +631,31 @@ class IndexingService: ObservableObject {
         #endif
 
         // Pass 2: Index videos in background
+        let videoAssetsToIndex = videoAssets.filter {
+            !alreadyIndexedVideos.contains($0.localIdentifier)
+        }
         if !videoAssets.isEmpty && !Task.isCancelled && !hitFreeLimit {
-            indexed = 0
+            indexed = videoAssets.count - videoAssetsToIndex.count
             progress = IndexingProgress(
                 total: videoAssets.count,
-                completed: 0,
+                completed: indexed,
                 isRunning: true,
                 phase: .videos,
                 photosComplete: true,
-                searchableCount: searchEngine.totalSize
+                searchableCount: searchEngine.totalSize,
+                rateBaselineCompleted: indexed,
+                phaseStartedAt: Date()
             )
         }
-        for asset in videoAssets {
+        for asset in videoAssetsToIndex {
             if Task.isCancelled { break }
             if !FreeTier.canIndexMore(indexedMediaCount: newlyIndexed, isPro: isPro) {
                 hitFreeLimit = true
                 break
             }
 
-            if !alreadyIndexedVideos.contains(asset.localIdentifier) {
-                await indexVideo(asset: asset)
-                newlyIndexed += 1
-            }
+            await indexVideo(asset: asset)
+            newlyIndexed += 1
             indexed += 1
             progress.completed = indexed
             if indexed % 10 == 0 { await Task.yield() }
@@ -909,8 +989,10 @@ class IndexingService: ObservableObject {
         let indexedPhotoCount: Int
         let indexedVideoCount: Int
         do {
-            indexedPhotoCount = try database.indexedCount()
-            indexedVideoCount = try database.videoIndexedCount()
+            let db = database
+            (indexedPhotoCount, indexedVideoCount) = try await Task.detached(priority: .utility) {
+                (try db.indexedCount(), try db.videoIndexedCount())
+            }.value
         } catch {
             logger.error("Failed to check index completeness: \(error.localizedDescription)")
             return
@@ -954,7 +1036,10 @@ class IndexingService: ObservableObject {
 
         let remaining: Int
         do {
-            remaining = try database.photosNeedingEnrichmentCount()
+            let db = database
+            remaining = try await Task.detached(priority: .utility) {
+                try db.photosNeedingEnrichmentCount()
+            }.value
         } catch {
             logger.error("Failed to count photos needing enrichment: \(error.localizedDescription)")
             return
@@ -974,25 +1059,34 @@ class IndexingService: ObservableObject {
         while !Task.isCancelled {
             let candidates: [PhotoEnrichmentCandidate]
             do {
-                candidates = try database.photosNeedingEnrichment(limit: IndexingConfig.enrichmentBatchSize)
+                let db = database
+                candidates = try await Task.detached(priority: .utility) {
+                    try db.photosNeedingEnrichment(limit: IndexingConfig.enrichmentBatchSize)
+                }.value
             } catch {
                 logger.error("Failed to fetch photo enrichment batch: \(error.localizedDescription)")
                 return
             }
             guard !candidates.isEmpty else { break }
 
+            var updates: [PhotoEnrichmentUpdate] = []
+            updates.reserveCapacity(candidates.count)
             for candidate in candidates {
                 if Task.isCancelled { return }
-                let update = await enrichPhoto(candidate)
-                do {
-                    try database.updatePhotoEnrichment(update)
-                    completed += 1
-                    progress.completed = min(completed, progress.total)
-                } catch {
-                    logger.error("Failed to update enrichment for \(candidate.localIdentifier): \(error.localizedDescription)")
-                    return
-                }
+                updates.append(await enrichPhoto(candidate))
                 await Task.yield()
+            }
+
+            do {
+                let db = database
+                try await Task.detached(priority: .utility) {
+                    try db.updatePhotoEnrichment(updates)
+                }.value
+                completed += updates.count
+                progress.completed = min(completed, progress.total)
+            } catch {
+                logger.error("Failed to update photo enrichment batch: \(error.localizedDescription)")
+                return
             }
         }
 
@@ -1007,7 +1101,8 @@ class IndexingService: ObservableObject {
                 localIdentifier: candidate.localIdentifier,
                 ocrText: nil,
                 sharpnessScore: nil,
-                sceneLabels: nil
+                sceneLabels: nil,
+                outcome: .loadFailed(at: Date())
             )
         }
 

@@ -6,7 +6,7 @@ final class DatabaseTests: XCTestCase {
 
     override func tearDown() {
         AppDatabase.isInMemoryFallback = false
-        UserDefaults.standard.removeObject(forKey: IndexingConfig.needsFastFormatPhotoRebuildKey)
+        UserDefaults.standard.removeObject(forKey: "indexing.needsFastFormatPhotoRebuild")
         super.tearDown()
     }
 
@@ -52,15 +52,86 @@ final class DatabaseTests: XCTestCase {
         )
         try database.insertPhoto(makePhoto(localIdentifier: "photo-1"))
 
-        try database.updatePhotoEnrichment(PhotoEnrichmentUpdate(
+        try database.updatePhotoEnrichment([PhotoEnrichmentUpdate(
             localIdentifier: "photo-1",
             ocrText: nil,
             sharpnessScore: 72,
             sceneLabels: nil
-        ))
+        )])
 
         XCTAssertEqual(try database.photosNeedingEnrichmentCount(), 0)
         XCTAssertTrue(try database.photosNeedingEnrichment(limit: 10).isEmpty)
+    }
+
+    func testPhotoEnrichmentUpdatesCompleteMultipleRowsAsOneBatch() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.insertPhotos([
+            makePhoto(localIdentifier: "photo-1"),
+            makePhoto(localIdentifier: "photo-2")
+        ])
+
+        try database.updatePhotoEnrichment([
+            PhotoEnrichmentUpdate(
+                localIdentifier: "photo-1",
+                ocrText: "first",
+                sharpnessScore: 72,
+                sceneLabels: nil
+            ),
+            PhotoEnrichmentUpdate(
+                localIdentifier: "photo-2",
+                ocrText: nil,
+                sharpnessScore: 81,
+                sceneLabels: "outdoor"
+            )
+        ])
+
+        XCTAssertEqual(try database.photosNeedingEnrichmentCount(), 0)
+    }
+
+    func testFailedPhotoEnrichmentIsDeferredWithoutBeingCompleted() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.insertPhoto(makePhoto(localIdentifier: "photo-retry"))
+        let attemptedAt = Date()
+
+        try database.updatePhotoEnrichment([
+            PhotoEnrichmentUpdate(
+                localIdentifier: "photo-retry",
+                ocrText: nil,
+                sharpnessScore: nil,
+                sceneLabels: nil,
+                outcome: .loadFailed(at: attemptedAt)
+            )
+        ])
+
+        let state = try database.dbQueue.read { db in
+            try Row.fetchOne(
+                db,
+                sql: "SELECT enrichmentComplete, enrichmentAttemptedAt FROM indexed_photos WHERE localIdentifier = ?",
+                arguments: ["photo-retry"]
+            )
+        }
+        XCTAssertEqual(state?["enrichmentComplete"] as Bool?, false)
+        let storedAttemptedAt = try XCTUnwrap(state?["enrichmentAttemptedAt"] as Date?)
+        XCTAssertEqual(storedAttemptedAt.timeIntervalSince1970, attemptedAt.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(try database.photosNeedingEnrichmentCount(), 0)
+
+        try database.dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE indexed_photos SET enrichmentAttemptedAt = ? WHERE localIdentifier = ?",
+                arguments: [
+                    attemptedAt.addingTimeInterval(-IndexingConfig.enrichmentRetryDelaySeconds - 1),
+                    "photo-retry"
+                ]
+            )
+        }
+
+        XCTAssertEqual(try database.photosNeedingEnrichmentCount(), 1)
     }
 
     func testFolderEnrichmentCandidateCarriesSourceIdAndFilePath() throws {
@@ -156,10 +227,87 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(indexNames.contains("idx_photos_enrichment_pending"))
     }
 
+    func testFreshDatabaseDoesNotRequireIndexRebuild() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+
+        XCTAssertFalse(try database.indexRebuildRequired())
+    }
+
+    func testOrientationWipeRecordsRequiredIndexRebuild() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v2-siglip2-model-swap")
+        try insertLegacyPhoto(localIdentifier: "pre-orientation-photo", into: queue)
+
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+
+        XCTAssertEqual(try database.indexedCount(), 0)
+        XCTAssertTrue(try database.indexRebuildRequired())
+        try database.clearIndexRebuildRequired()
+        XCTAssertFalse(try database.indexRebuildRequired())
+    }
+
+    func testFastFormatWipeUsesSameRequiredIndexRebuildState() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v4-photo-enrichment-state")
+        try queue.write { db in
+            try makePhoto(localIdentifier: "fast-format-photo").insert(db)
+        }
+
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+
+        XCTAssertEqual(try database.indexedCount(), 0)
+        XCTAssertTrue(try database.indexRebuildRequired())
+    }
+
+    func testAlreadyMigratedDatabaseWithEmbeddingsRequiresIndexRebuild() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue)
+        try queue.write { db in
+            try makePhoto(localIdentifier: "flipped-photo").insert(db)
+        }
+
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+
+        XCTAssertEqual(try database.indexedCount(), 1)
+        XCTAssertTrue(try database.indexRebuildRequired())
+    }
+
 }
 
 private enum StubMigrationError: Error {
     case failed
+}
+
+private func insertLegacyPhoto(localIdentifier: String, into queue: DatabaseQueue) throws {
+    try queue.write { db in
+        try db.execute(
+            sql: """
+                INSERT INTO indexed_photos (
+                    id, localIdentifier, pixelWidth, pixelHeight, embedding, indexedAt
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            arguments: [
+                UUID().uuidString,
+                localIdentifier,
+                100,
+                100,
+                floatVector(first: 1).toFloat16Data(),
+                Date(timeIntervalSince1970: 200)
+            ]
+        )
+    }
 }
 
 private func makePhoto(
