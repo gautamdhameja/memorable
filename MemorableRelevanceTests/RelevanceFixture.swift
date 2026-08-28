@@ -202,6 +202,15 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
 
     func indexedCount() throws -> Int { manifest.entries.count }
     func videoIndexedCount() throws -> Int { 0 }
+    func indexedMediaCounts() throws -> IndexedMediaCounts {
+        IndexedMediaCounts(photos: manifest.entries.count, videos: 0)
+    }
+    func allIndexedMediaIdentifiers() throws -> IndexedMediaIdentifiers {
+        IndexedMediaIdentifiers(
+            photos: Set(manifest.entries.flatMap(\.expectedAssetIds)),
+            videos: []
+        )
+    }
 
     func loadAllEmbeddings() throws -> MediaIndex {
         guard manifest.entries.count == embeddings.count else {
@@ -253,10 +262,9 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func trimToLimit(_ limit: Int) throws {}
     func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
-    func photosNeedingLocationBackfillCount() throws -> Int { 0 }
-    func videosNeedingLocationBackfillCount() throws -> Int { 0 }
-    func photosWithGPSCount() throws -> Int { 0 }
-    func videosWithGPSCount() throws -> Int { 0 }
+    func geocodingCounts() throws -> GeocodingCounts {
+        GeocodingCounts(totalWithGPS: 0, remaining: 0, indexedPhotos: manifest.entries.count, indexedVideos: 0)
+    }
     func updatePhotoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws {}
     func updateVideoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws {}
     func insertSource(_ source: PhotoSource) throws {}

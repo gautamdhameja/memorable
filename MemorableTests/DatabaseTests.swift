@@ -21,6 +21,43 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(try database.videoIndexedCount(), 0)
     }
 
+    func testCombinedMediaReadsReturnPhotoAndVideoInOneSnapshot() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let photo = makePhoto(localIdentifier: "photo-1")
+        let video = makeVideo(localIdentifier: "video-1")
+        try database.insertPhoto(photo)
+        try database.insertVideo(
+            video,
+            [
+                IndexedVideoFrame(
+                    id: UUID().uuidString,
+                    videoId: video.id,
+                    framePosition: 0.5,
+                    embedding: floatVector(first: 1).toFloat16Data(),
+                    indexedAt: Date(timeIntervalSince1970: 200)
+                )
+            ],
+            completingRequiredRebuild: false
+        )
+
+        let counts = try database.indexedMediaCounts()
+        let identifiers = try database.allIndexedMediaIdentifiers()
+        let geocodingCounts = try database.geocodingCounts()
+
+        XCTAssertEqual(counts.photos, 1)
+        XCTAssertEqual(counts.videos, 1)
+        XCTAssertEqual(counts.total, 2)
+        XCTAssertEqual(identifiers.photos, ["photo-1"])
+        XCTAssertEqual(identifiers.videos, ["video-1"])
+        XCTAssertEqual(geocodingCounts.totalWithGPS, 0)
+        XCTAssertEqual(geocodingCounts.remaining, 0)
+        XCTAssertEqual(geocodingCounts.indexedPhotos, 1)
+        XCTAssertEqual(geocodingCounts.indexedVideos, 1)
+    }
+
     func testMigrationFailureUsesInMemoryFallbackState() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },

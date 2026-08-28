@@ -192,6 +192,25 @@ struct MediaIndex {
 
 // MARK: - Database Protocol
 
+struct IndexedMediaCounts {
+    let photos: Int
+    let videos: Int
+
+    var total: Int { photos + videos }
+}
+
+struct IndexedMediaIdentifiers {
+    let photos: Set<String>
+    let videos: Set<String>
+}
+
+struct GeocodingCounts {
+    let totalWithGPS: Int
+    let remaining: Int
+    let indexedPhotos: Int
+    let indexedVideos: Int
+}
+
 protocol DatabaseProtocol {
     // Photos
     func insertPhoto(_ photo: IndexedPhoto) throws
@@ -205,6 +224,8 @@ protocol DatabaseProtocol {
     func allIndexedIdentifiers() throws -> Set<String>
     func allIndexedFilePaths() throws -> Set<String>
     func indexedCount() throws -> Int
+    func indexedMediaCounts() throws -> IndexedMediaCounts
+    func allIndexedMediaIdentifiers() throws -> IndexedMediaIdentifiers
     func loadAllEmbeddings() throws -> MediaIndex
     func deleteAll() throws
     func deletePhoto(localIdentifier: String) throws
@@ -235,10 +256,7 @@ protocol DatabaseProtocol {
     // Location backfill
     func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
     func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
-    func photosNeedingLocationBackfillCount() throws -> Int
-    func videosNeedingLocationBackfillCount() throws -> Int
-    func photosWithGPSCount() throws -> Int
-    func videosWithGPSCount() throws -> Int
+    func geocodingCounts() throws -> GeocodingCounts
     func updatePhotoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws
     func updateVideoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws
 
@@ -656,6 +674,30 @@ class AppDatabase: DatabaseProtocol {
         }
     }
 
+    func indexedMediaCounts() throws -> IndexedMediaCounts {
+        try dbQueue.read { db in
+            IndexedMediaCounts(
+                photos: try IndexedPhoto.fetchCount(db),
+                videos: try IndexedVideo.fetchCount(db)
+            )
+        }
+    }
+
+    func allIndexedMediaIdentifiers() throws -> IndexedMediaIdentifiers {
+        try dbQueue.read { db in
+            IndexedMediaIdentifiers(
+                photos: Set(try String.fetchAll(
+                    db,
+                    sql: "SELECT localIdentifier FROM indexed_photos"
+                )),
+                videos: Set(try String.fetchAll(
+                    db,
+                    sql: "SELECT localIdentifier FROM indexed_videos"
+                ))
+            )
+        }
+    }
+
     func loadAllEmbeddings() throws -> MediaIndex {
         #if DEBUG
         let loadStart = CFAbsoluteTimeGetCurrent()
@@ -1020,41 +1062,32 @@ class AppDatabase: DatabaseProtocol {
         }
     }
 
-    func photosNeedingLocationBackfillCount() throws -> Int {
+    func geocodingCounts() throws -> GeocodingCounts {
         try dbQueue.read { db in
-            try Int.fetchOne(db, sql: """
+            let photosWithGPS = try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM indexed_photos
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+            """) ?? 0
+            let videosWithGPS = try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM indexed_videos
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+            """) ?? 0
+            let photosRemaining = try Int.fetchOne(db, sql: """
                 SELECT COUNT(*) FROM indexed_photos
                 WHERE latitude IS NOT NULL AND longitude IS NOT NULL
                 AND (locationCity IS NULL OR locationCity = '')
             """) ?? 0
-        }
-    }
-
-    func videosNeedingLocationBackfillCount() throws -> Int {
-        try dbQueue.read { db in
-            try Int.fetchOne(db, sql: """
+            let videosRemaining = try Int.fetchOne(db, sql: """
                 SELECT COUNT(*) FROM indexed_videos
                 WHERE latitude IS NOT NULL AND longitude IS NOT NULL
                 AND (locationCity IS NULL OR locationCity = '')
             """) ?? 0
-        }
-    }
-
-    func photosWithGPSCount() throws -> Int {
-        try dbQueue.read { db in
-            try Int.fetchOne(db, sql: """
-                SELECT COUNT(*) FROM indexed_photos
-                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-            """) ?? 0
-        }
-    }
-
-    func videosWithGPSCount() throws -> Int {
-        try dbQueue.read { db in
-            try Int.fetchOne(db, sql: """
-                SELECT COUNT(*) FROM indexed_videos
-                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-            """) ?? 0
+            return GeocodingCounts(
+                totalWithGPS: photosWithGPS + videosWithGPS,
+                remaining: photosRemaining + videosRemaining,
+                indexedPhotos: try IndexedPhoto.fetchCount(db),
+                indexedVideos: try IndexedVideo.fetchCount(db)
+            )
         }
     }
 

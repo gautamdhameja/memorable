@@ -160,19 +160,12 @@ class IndexingService: ObservableObject {
                 return false
             }
 
-            let photoCount = try await Task.detached(priority: loadPriority) {
-                try db.indexedCount()
+            let counts = try await Task.detached(priority: loadPriority) {
+                try db.indexedMediaCounts()
             }.value
-            let videoCount: Int
-            do {
-                videoCount = try await Task.detached(priority: loadPriority) {
-                    try db.videoIndexedCount()
-                }.value
-            } catch {
-                logger.error("Failed to count indexed videos: \(error.localizedDescription)")
-                videoCount = 0
-            }
-            let totalIndexed = photoCount + videoCount
+            let photoCount = counts.photos
+            let videoCount = counts.videos
+            let totalIndexed = counts.total
 
             if totalIndexed > 0 {
                 #if DEBUG
@@ -335,7 +328,7 @@ class IndexingService: ObservableObject {
             let totalInLibrary = allMedia.count
 
             do {
-                let totalIndexed = try db.indexedCount() + db.videoIndexedCount()
+                let totalIndexed = try db.indexedMediaCounts().total
 
                 if totalInLibrary > totalIndexed {
                     await MainActor.run { self.newPhotosAvailable = true }
@@ -416,26 +409,18 @@ class IndexingService: ObservableObject {
         let indexingStart = CFAbsoluteTimeGetCurrent()
         #endif
 
-        let alreadyIndexed: Set<String>
+        let indexedIdentifiers: IndexedMediaIdentifiers
         do {
             let db = database
-            alreadyIndexed = try await Task.detached(priority: .userInitiated) {
-                try db.allIndexedIdentifiers()
+            indexedIdentifiers = try await Task.detached(priority: .userInitiated) {
+                try db.allIndexedMediaIdentifiers()
             }.value
         } catch {
-            logger.error("Failed to load indexed identifiers: \(error.localizedDescription)")
-            alreadyIndexed = []
+            logger.error("Failed to load indexed media identifiers: \(error.localizedDescription)")
+            indexedIdentifiers = IndexedMediaIdentifiers(photos: [], videos: [])
         }
-        let alreadyIndexedVideos: Set<String>
-        do {
-            let db = database
-            alreadyIndexedVideos = try await Task.detached(priority: .userInitiated) {
-                try db.allIndexedVideoIdentifiers()
-            }.value
-        } catch {
-            logger.error("Failed to load indexed video identifiers: \(error.localizedDescription)")
-            alreadyIndexedVideos = []
-        }
+        let alreadyIndexed = indexedIdentifiers.photos
+        let alreadyIndexedVideos = indexedIdentifiers.videos
         let isPro = ProManager.shared.isPro
         var indexed = 0
         var newlyIndexed = alreadyIndexed.count + alreadyIndexedVideos.count
@@ -998,19 +983,18 @@ class IndexingService: ObservableObject {
     private func checkForIncompleteIndex(totalInLibrary providedTotal: Int? = nil) async {
         let totalInLibrary = providedTotal ?? PhotoLibrary.fetchAllMedia().count
 
-        let indexedPhotoCount: Int
-        let indexedVideoCount: Int
+        let counts: IndexedMediaCounts
         do {
             let db = database
-            (indexedPhotoCount, indexedVideoCount) = try await Task.detached(priority: .utility) {
-                (try db.indexedCount(), try db.videoIndexedCount())
+            counts = try await Task.detached(priority: .utility) {
+                try db.indexedMediaCounts()
             }.value
         } catch {
             logger.error("Failed to check index completeness: \(error.localizedDescription)")
             return
         }
 
-        let totalIndexed = indexedPhotoCount + indexedVideoCount
+        let totalIndexed = counts.total
         guard totalIndexed > 0 else { return }
         let unindexedCount = totalInLibrary - totalIndexed
 
@@ -1218,17 +1202,14 @@ class IndexingService: ObservableObject {
                 libraryIds.insert(media[i].localIdentifier)
             }
 
-            // Find orphaned photo embeddings
             let db = database
-            let indexedPhotoIds = try await Task.detached(priority: .utility) {
-                try db.allIndexedIdentifiers()
+            let indexedIdentifiers = try await Task.detached(priority: .utility) {
+                try db.allIndexedMediaIdentifiers()
             }.value
+            let indexedPhotoIds = indexedIdentifiers.photos
             let orphanedPhotos = indexedPhotoIds.subtracting(libraryIds)
 
-            // Find orphaned video embeddings
-            let indexedVideoIds = try await Task.detached(priority: .utility) {
-                try db.allIndexedVideoIdentifiers()
-            }.value
+            let indexedVideoIds = indexedIdentifiers.videos
             let orphanedVideos = indexedVideoIds.subtracting(libraryIds)
 
             let totalOrphans = orphanedPhotos.count + orphanedVideos.count
@@ -1294,146 +1275,159 @@ class IndexingService: ObservableObject {
     /// Reverse-geocodes indexed photos and videos that have GPS but no location strings yet.
     /// Runs in the background after indexing completes without blocking search.
     private func geocodeIndexedMedia() async {
-        var totalGeocoded = 0
-
         // Absolute (library-wide) figures so the progress indicator reflects
         // total geocoding progress across the library, not just work remaining
         // in this session. Without this, the bar appears to reset to 0 on
         // every launch even though prior sessions already did most of the work.
         let db = database
-        let counts = await Task.detached(priority: .utility) {
-            let totalWithGPS = ((try? db.photosWithGPSCount()) ?? 0)
-                + ((try? db.videosWithGPSCount()) ?? 0)
-            let remainingAtStart = ((try? db.photosNeedingLocationBackfillCount()) ?? 0)
-                + ((try? db.videosNeedingLocationBackfillCount()) ?? 0)
-            let totalPhotos = (try? db.indexedCount()) ?? 0
-            let totalVideos = (try? db.videoIndexedCount()) ?? 0
-            return (
-                totalWithGPS: totalWithGPS,
-                remainingAtStart: remainingAtStart,
-                totalPhotos: totalPhotos,
-                totalVideos: totalVideos
-            )
-        }.value
+        let counts: GeocodingCounts
+        do {
+            counts = try await Task.detached(priority: .utility) {
+                try db.geocodingCounts()
+            }.value
+        } catch {
+            logger.error("[Geocoder] Failed to load geocoding counts: \(error.localizedDescription)")
+            geocodingProgress = nil
+            return
+        }
         let totalWithGPS = counts.totalWithGPS
-        let remainingAtStart = counts.remainingAtStart
+        let remainingAtStart = counts.remaining
         let alreadyGeocoded = max(0, totalWithGPS - remainingAtStart)
 
         #if DEBUG
-        logger.info("[Geocoder] Starting: \(remainingAtStart) / \(totalWithGPS) remaining out of GPS-tagged media (\(counts.totalPhotos) photos + \(counts.totalVideos) videos indexed)")
+        logger.info("[Geocoder] Starting: \(remainingAtStart) / \(totalWithGPS) remaining out of GPS-tagged media (\(counts.indexedPhotos) photos + \(counts.indexedVideos) videos indexed)")
         #endif
 
         if remainingAtStart > 0 {
-            await MainActor.run {
-                self.geocodingProgress = (completed: alreadyGeocoded, total: totalWithGPS)
-            }
+            geocodingProgress = (completed: alreadyGeocoded, total: totalWithGPS)
         }
 
-        // Track failures in-memory to avoid infinite retries within this session.
-        // Failed coordinates are retried on next app launch.
-        var failedIds = Set<String>()
-
-        // Photos
-        while true {
-            let batch: [(localIdentifier: String, lat: Double, lon: Double)]
-            do {
-                let db = database
-                batch = try await Task.detached(priority: .utility) {
+        let photoResult = await geocodeMediaSource(
+            label: "photos",
+            progressBase: alreadyGeocoded,
+            fetchBatch: {
+                try await Task.detached(priority: .utility) {
                     try db.photosNeedingLocationBackfill(limit: 500)
                 }.value
-            } catch {
-                logger.error("[Geocoder] Failed to fetch photo backfill batch: \(error.localizedDescription)")
-                break
+            },
+            updateLocation: { localIdentifier, location in
+                try await Task.detached(priority: .utility) {
+                    try db.updatePhotoLocationStrings(
+                        localIdentifier: localIdentifier,
+                        city: location.city,
+                        state: location.state,
+                        country: location.country,
+                        name: location.name
+                    )
+                }.value
             }
-            if batch.isEmpty { break }
-            let actionable = batch.filter { !failedIds.contains($0.localIdentifier) }
-            guard !actionable.isEmpty else { break }
-            for (localId, lat, lon) in actionable {
-                if Task.isCancelled { return }
-                if let loc = await reverseGeocoder.reverseGeocode(latitude: lat, longitude: lon) {
-                    let db = database
-                    await Task.detached(priority: .utility) {
-                        try? db.updatePhotoLocationStrings(
-                            localIdentifier: localId,
-                            city: loc.city, state: loc.state,
-                            country: loc.country, name: loc.name
-                        )
-                    }.value
-                    totalGeocoded += 1
-                    let doneSnapshot = alreadyGeocoded + totalGeocoded
-                    await MainActor.run {
-                        if let current = self.geocodingProgress {
-                            self.geocodingProgress = (completed: doneSnapshot, total: current.total)
-                        }
-                    }
-                    #if DEBUG
-                    if totalGeocoded <= 5 || totalGeocoded % 50 == 0 {
-                        logger.info("[Geocoder] #\(totalGeocoded): \(loc.city ?? "?") (\(lat), \(lon))")
-                    }
-                    #endif
-                } else {
-                    failedIds.insert(localId)
-                    #if DEBUG
-                    logger.info("[Geocoder] Failed: \(localId) (\(lat), \(lon))")
-                    #endif
-                }
-            }
-            #if DEBUG
-            logger.info("[Geocoder] Photos progress: \(totalGeocoded) geocoded, \(failedIds.count) failed")
-            #endif
-        }
+        )
+        if photoResult.cancelled { return }
 
-        // Videos
-        while true {
-            let batch: [(localIdentifier: String, lat: Double, lon: Double)]
-            do {
-                let db = database
-                batch = try await Task.detached(priority: .utility) {
+        let videoResult = await geocodeMediaSource(
+            label: "videos",
+            progressBase: alreadyGeocoded + photoResult.completed,
+            fetchBatch: {
+                try await Task.detached(priority: .utility) {
                     try db.videosNeedingLocationBackfill(limit: 500)
                 }.value
-            } catch {
-                logger.error("[Geocoder] Failed to fetch video backfill batch: \(error.localizedDescription)")
-                break
+            },
+            updateLocation: { localIdentifier, location in
+                try await Task.detached(priority: .utility) {
+                    try db.updateVideoLocationStrings(
+                        localIdentifier: localIdentifier,
+                        city: location.city,
+                        state: location.state,
+                        country: location.country,
+                        name: location.name
+                    )
+                }.value
             }
-            if batch.isEmpty { break }
-            let actionable = batch.filter { !failedIds.contains($0.localIdentifier) }
-            guard !actionable.isEmpty else { break }
-            for (localId, lat, lon) in actionable {
-                if Task.isCancelled { return }
-                if let loc = await reverseGeocoder.reverseGeocode(latitude: lat, longitude: lon) {
-                    let db = database
-                    await Task.detached(priority: .utility) {
-                        try? db.updateVideoLocationStrings(
-                            localIdentifier: localId,
-                            city: loc.city, state: loc.state,
-                            country: loc.country, name: loc.name
-                        )
-                    }.value
-                    totalGeocoded += 1
-                    let doneSnapshot = alreadyGeocoded + totalGeocoded
-                    await MainActor.run {
-                        if let current = self.geocodingProgress {
-                            self.geocodingProgress = (completed: doneSnapshot, total: current.total)
-                        }
-                    }
-                } else {
-                    failedIds.insert(localId)
-                }
-            }
-        }
+        )
+        if videoResult.cancelled { return }
+        let totalGeocoded = photoResult.completed + videoResult.completed
 
         #if DEBUG
         logger.info("[Geocoder] Completed: \(totalGeocoded) media items geocoded")
         #endif
         if totalGeocoded > 0 {
             let engine = searchEngine
-            try? await Task.detached(priority: .utility) {
-                try engine.loadIndex()
-            }.value
+            do {
+                try await Task.detached(priority: .utility) {
+                    try engine.loadIndex()
+                }.value
+            } catch {
+                logger.error("[Geocoder] Failed to reload search index: \(error.localizedDescription)")
+            }
         }
-        await MainActor.run {
-            self.geocodingProgress = nil
+        geocodingProgress = nil
+    }
+
+    private func geocodeMediaSource(
+        label: String,
+        progressBase: Int,
+        fetchBatch: () async throws -> [(localIdentifier: String, lat: Double, lon: Double)],
+        updateLocation: (String, LocationStrings) async throws -> Void
+    ) async -> (completed: Int, cancelled: Bool) {
+        var completed = 0
+        // Avoid retry loops within one run. Failed coordinates and database
+        // writes remain eligible on the next app launch.
+        var failedIdentifiers = Set<String>()
+
+        while true {
+            let batch: [(localIdentifier: String, lat: Double, lon: Double)]
+            do {
+                batch = try await fetchBatch()
+            } catch {
+                logger.error("[Geocoder] Failed to fetch \(label) backfill batch: \(error.localizedDescription)")
+                break
+            }
+            if batch.isEmpty { break }
+
+            let actionable = batch.filter {
+                !failedIdentifiers.contains($0.localIdentifier)
+            }
+            if actionable.isEmpty { break }
+
+            for candidate in actionable {
+                if Task.isCancelled { return (completed, true) }
+                guard let location = await reverseGeocoder.reverseGeocode(
+                    latitude: candidate.lat,
+                    longitude: candidate.lon
+                ) else {
+                    failedIdentifiers.insert(candidate.localIdentifier)
+                    continue
+                }
+
+                do {
+                    try await updateLocation(candidate.localIdentifier, location)
+                } catch {
+                    failedIdentifiers.insert(candidate.localIdentifier)
+                    logger.error("[Geocoder] Failed to update \(label) location for \(candidate.localIdentifier): \(error.localizedDescription)")
+                    continue
+                }
+
+                completed += 1
+                if let current = geocodingProgress {
+                    geocodingProgress = (
+                        completed: progressBase + completed,
+                        total: current.total
+                    )
+                }
+
+                #if DEBUG
+                if completed <= 5 || completed % 50 == 0 {
+                    logger.info("[Geocoder] \(label) #\(completed): \(location.city ?? "?") (\(candidate.lat), \(candidate.lon))")
+                }
+                #endif
+            }
+
+            #if DEBUG
+            logger.info("[Geocoder] \(label) progress: \(completed) geocoded, \(failedIdentifiers.count) failed")
+            #endif
         }
+
+        return (completed, false)
     }
 
     // MARK: - Video Indexing

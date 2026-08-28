@@ -22,6 +22,11 @@ private struct SearchIndexSnapshot {
     var videoSimilaritySearch: SimilaritySearching?
 }
 
+private struct ScoredMedia {
+    let rawScores: [Float]
+    let scores: [Float]
+}
+
 class SearchEngine {
     private var indexSnapshot = SearchIndexSnapshot()
 
@@ -197,55 +202,16 @@ class SearchEngine {
         let photos = snapshot.photos
         let videos = snapshot.videos
 
-        let ids = photos.ids
-        let localIds = photos.localIdentifiers
-        let photoDates = photos.dates
-        let photoLats = photos.latitudes
-        let photoLons = photos.longitudes
-        let photoOcrTexts = photos.ocrTexts
-        let pCities = photos.locationCities
-        let pStates = photos.locationStates
-        let pCountries = photos.locationCountries
-        let pLocNames = photos.locationNames
-        let photoLabels = photos.sceneLabels
-        let matrix = photos.embeddings
-        let count = photos.count
-        let vIds = videos.ids
-        let vLocalIds = videos.localIdentifiers
-        let vDates = videos.dates
-        let vLats = videos.latitudes
-        let vLons = videos.longitudes
-        let vPositions = videos.framePositions
-        let vCities = videos.locationCities
-        let vStates = videos.locationStates
-        let vCountries = videos.locationCountries
-        let vLocNames = videos.locationNames
-        let vMatrix = videos.embeddings
-        let vCount = videos.count
         let photoGPU = snapshot.photoSimilaritySearch
         let videoGPU = snapshot.videoSimilaritySearch
 
-        guard count + vCount > 0 else { return SearchResponse(results: [], fallbackResults: [], filtersApplied: nil) }
+        guard photos.count + videos.count > 0 else {
+            return SearchResponse(results: [], fallbackResults: [], filtersApplied: nil)
+        }
 
         // =====================================================================
         // PHASE 1: HARD FILTERS — build candidate mask before any CLIP scoring
         // =====================================================================
-
-        var candidateMask = [Bool](repeating: true, count: count)
-
-        // Date filter: discard photos outside the specified date range
-        if let dateRange = hints.dateRange {
-            for i in 0..<count {
-                if let photoDate = photoDates[i] {
-                    if photoDate < dateRange.start || photoDate > dateRange.end {
-                        candidateMask[i] = false
-                    }
-                } else {
-                    // No date metadata + user specified a time → not useful
-                    candidateMask[i] = false
-                }
-            }
-        }
 
         // Location filter: local-only matching. Query-derived location text is
         // never sent to CLGeocoder; it matches stored reverse-geocoded strings,
@@ -259,45 +225,34 @@ class SearchEngine {
                 country: hints.locationCountryName
             )
         }
-        if hints.locationHint != nil {
-            // Prepare GPS fallback coordinates (only meaningful if we also
-            // have a radius; the Tier 2 branch re-checks radius per photo).
-            if let coord = hints.locationCoordinate, hints.locationRadiusKm != nil {
-                targetLoc = CLLocation(latitude: coord.lat, longitude: coord.lon)
-            }
-
-            for i in 0..<count {
-                guard candidateMask[i] else { continue }
-                candidateMask[i] = mediaPassesLocationFilter(
-                    hints: hints,
-                    locationMatcher: locationMatcher,
-                    targetLoc: targetLoc,
-                    latitude: photoLats[i],
-                    longitude: photoLons[i],
-                    city: pCities[i],
-                    state: pStates[i],
-                    country: pCountries[i],
-                    name: pLocNames[i]
-                )
-            }
+        if let coord = hints.locationCoordinate,
+           hints.locationHint != nil,
+           hints.locationRadiusKm != nil {
+            targetLoc = CLLocation(latitude: coord.lat, longitude: coord.lon)
         }
 
-        let candidateCount = candidateMask.filter { $0 }.count
-        var videoCandidateMask = [Bool](repeating: false, count: vCount)
-        for i in 0..<vCount {
-            videoCandidateMask[i] = videoPassesHardFilters(
-                index: i, hints: hints, locationMatcher: locationMatcher, targetLoc: targetLoc,
-                dates: vDates, latitudes: vLats, longitudes: vLons,
-                cities: vCities, states: vStates, countries: vCountries, names: vLocNames
-            )
-        }
+        let photoCandidateMask = candidateMask(
+            for: photos,
+            hints: hints,
+            locationMatcher: locationMatcher,
+            targetLoc: targetLoc
+        )
+        let videoCandidateMask = candidateMask(
+            for: videos,
+            hints: hints,
+            locationMatcher: locationMatcher,
+            targetLoc: targetLoc
+        )
+        let candidateCount = photoCandidateMask.filter { $0 }.count
         let videoCandidateCount = videoCandidateMask.filter { $0 }.count
 
         #if DEBUG
-        logger.info("[SearchEngine] Filter: \(candidateCount)/\(count) photos passed hard filters")
+        logger.info("[SearchEngine] Filter: \(candidateCount)/\(photos.count) photos and \(videoCandidateCount)/\(videos.count) video frames passed hard filters")
         if hints.locationCoordinate != nil {
-            let withGPS = (0..<count).filter { photoLats[$0] != nil && photoLons[$0] != nil }.count
-            logger.info("[SearchEngine] GPS stats: \(withGPS)/\(count) photos have GPS, \(candidateCount) passed all filters")
+            let withGPS = (0..<photos.count).filter {
+                photos.latitudes[$0] != nil && photos.longitudes[$0] != nil
+            }.count
+            logger.info("[SearchEngine] GPS stats: \(withGPS)/\(photos.count) photos have GPS, \(candidateCount) passed all filters")
         }
         #endif
 
@@ -310,7 +265,7 @@ class SearchEngine {
         // Empty candidate set with active filters → provide fallback
         if candidateCount == 0 && videoCandidateCount == 0 && filtersActive {
             let fallbackResults = hints.hasVisualQuery
-                ? computeFallbackResults(text: hints.textQuery, ids: ids, localIds: localIds, dates: photoDates, matrix: matrix, count: count, gpuSearch: photoGPU)
+                ? computeFallbackResults(text: hints.textQuery, index: photos, gpuSearch: photoGPU)
                 : []
             let summary = FilterSummary(
                 dateDescription: hints.dateRange.map { formatDateRange($0) },
@@ -321,18 +276,13 @@ class SearchEngine {
         }
 
         // Pure-location query (explicit or auto-filled): skip CLIP ranking and
-        // return every matching photo sorted by date — the user wants all of
-        // them, not a CLIP-ranked top-K against a meaningless city-name embedding.
+        // return every matching media item sorted by date — the user wants all
+        // of them, not a CLIP-ranked top-K against a meaningless city embedding.
         if isPureLocationQuery(hints) {
-            return locationOnlyResults(
-                candidateMask: candidateMask, ids: ids, localIds: localIds,
-                dates: photoDates, count: count,
-                vIds: vIds, vLocalIds: vLocalIds, vDates: vDates,
-                vLats: vLats, vLons: vLons, vPositions: vPositions,
-                vCities: vCities, vStates: vStates, vCountries: vCountries, vLocNames: vLocNames,
-                vCount: vCount,
-                hints: hints, targetLoc: targetLoc
-            )
+            return try locationOnlyResults(media: [
+                (index: photos, candidateMask: photoCandidateMask),
+                (index: videos, candidateMask: videoCandidateMask),
+            ])
         }
 
         // =====================================================================
@@ -342,18 +292,32 @@ class SearchEngine {
         let queryEmbedding = try encodeQuery(text: hints.textQuery)
         let negativeEmbeddings = try hints.negativeTerms.map { try textEncoder.encode(text: $0) }
 
-        var scores = scoreEmbeddings(queryEmbedding: queryEmbedding, matrix: matrix, count: count, gpuSearch: photoGPU)
-
-        // Zero out non-candidates
-        for i in 0..<count {
-            if !candidateMask[i] {
-                scores[i] = -1.0
-            }
-        }
+        let photoScoring = scoreMedia(
+            photos,
+            candidateMask: photoCandidateMask,
+            queryEmbedding: queryEmbedding,
+            negativeEmbeddings: negativeEmbeddings,
+            hints: hints,
+            targetLoc: targetLoc,
+            gpuSearch: photoGPU
+        )
+        let videoScoring = scoreMedia(
+            videos,
+            candidateMask: videoCandidateMask,
+            queryEmbedding: queryEmbedding,
+            negativeEmbeddings: negativeEmbeddings,
+            hints: hints,
+            targetLoc: targetLoc,
+            gpuSearch: videoGPU
+        )
+        let scores = photoScoring.scores
+        let videoScores = videoScoring.scores
 
         #if DEBUG
         // Raw CLIP score distribution BEFORE any boosts
-        let rawCandidateScores = (0..<count).filter { candidateMask[$0] }.map { scores[$0] }
+        let rawCandidateScores = (0..<photos.count)
+            .filter { photoCandidateMask[$0] }
+            .map { photoScoring.rawScores[$0] }
         if !rawCandidateScores.isEmpty {
             let sortedRaw = rawCandidateScores.sorted(by: >)
             let rawAbove020 = rawCandidateScores.filter { $0 >= 0.20 }.count
@@ -363,107 +327,15 @@ class SearchEngine {
             let rawMean = rawCandidateScores.reduce(0, +) / Float(rawCandidateScores.count)
             logger.info("[RawCLIP] candidates=\(rawCandidateScores.count) top10=[\(sortedRaw.prefix(10).map { String(format: "%.4f", $0) }.joined(separator: ", "))] mean=\(String(format: "%.4f", rawMean)) >=0.20:\(rawAbove020) >=0.15:\(rawAbove015) >=0.12:\(rawAbove012) >=0.10:\(rawAbove010)")
         }
-        let preBoostScores = scores
         #endif
 
         // =====================================================================
-        // PHASE 4: SOFT BOOSTS — only on candidates that passed hard filters
+        // PHASE 4: SOFT BOOSTS — applied by scoreMedia for both media kinds
         // =====================================================================
-
-        // Location proximity boost (Tier 2 GPS matches only — Tier 1 string matches are equally "in" the location)
-        if let target = targetLoc, let radiusKm = hints.locationRadiusKm {
-            for i in 0..<count {
-                guard candidateMask[i] else { continue }
-                guard pCities[i] == nil || pCities[i]?.isEmpty == true else { continue }
-                guard let lat = photoLats[i], let lon = photoLons[i] else { continue }
-                let distanceKm = target.distance(from: CLLocation(latitude: lat, longitude: lon)) / 1000.0
-                if distanceKm < radiusKm * 0.1 {
-                    scores[i] += SearchConfig.locationCloseBoost
-                } else if distanceKm < radiusKm * 0.3 {
-                    scores[i] += SearchConfig.locationNearBoost
-                }
-            }
-        }
-
-        // Time-of-day boost (boost only, no penalty)
-        if let timeRange = hints.timeOfDayHours {
-            let calendar = Calendar.current
-            for i in 0..<count {
-                guard candidateMask[i] else { continue }
-                guard let photoDate = photoDates[i] else { continue }
-                let hour = calendar.component(.hour, from: photoDate)
-                let inRange: Bool
-                if timeRange.start <= timeRange.end {
-                    inRange = hour >= timeRange.start && hour < timeRange.end
-                } else {
-                    inRange = hour >= timeRange.start || hour < timeRange.end
-                }
-                if inRange { scores[i] += SearchConfig.timeOfDayMatchBoost }
-            }
-        }
-
-        // Negative term penalty
-        for negEmbedding in negativeEmbeddings {
-            let negativeScores = scoreEmbeddings(
-                queryEmbedding: negEmbedding,
-                matrix: matrix,
-                count: count,
-                gpuSearch: photoGPU,
-                candidateMask: candidateMask
-            )
-            for i in 0..<count {
-                guard candidateMask[i] else { continue }
-                scores[i] -= negativeScores[i] * SearchConfig.negativeTermWeight
-            }
-        }
-
-        // OCR text boost
-        let queryWords = hints.textQuery.lowercased().split(separator: " ").map(String.init)
-        if !queryWords.isEmpty {
-            for i in 0..<count {
-                guard candidateMask[i] else { continue }
-                guard let ocrTextOpt = photoOcrTexts[safe: i], let ocrText = ocrTextOpt else { continue }
-                let text = ocrText.lowercased()
-                let matchCount = queryWords.filter { text.contains($0) }.count
-                if matchCount > 0 {
-                    scores[i] += SearchConfig.ocrBoostPerWord * Float(matchCount) / Float(queryWords.count)
-                }
-            }
-        }
-
-        // Scene label boost (with synonym expansion)
-        if !queryWords.isEmpty {
-            for i in 0..<count {
-                guard candidateMask[i] else { continue }
-                guard let labelsStr = photoLabels[safe: i], let labels = labelsStr else { continue }
-                let labelSet = Set(SceneClassifier.stringToLabels(labels))
-
-                var matchScore: Float = 0
-                for word in queryWords {
-                    var wordScore: Float = 0
-                    if labelSet.contains(word) {
-                        wordScore += SearchConfig.sceneLabelBoostPerMatch
-                    }
-                    if let synonyms = SceneLabelConfig.synonyms[word] {
-                        let hits = synonyms
-                            .subtracting([word])
-                            .intersection(labelSet)
-                            .count
-                        if hits > 0 {
-                            wordScore += SearchConfig.sceneLabelBoostPerMatch * 0.5 * Float(hits)
-                        }
-                    }
-                    matchScore += wordScore / Float(queryWords.count)
-                }
-                if matchScore > 0 {
-                    scores[i] += matchScore
-                }
-            }
-        }
 
         #if DEBUG
         // Score distribution AFTER boosts
-        let candidateScores = (0..<count).filter { candidateMask[$0] }.map { scores[$0] }
+        let candidateScores = (0..<photos.count).filter { photoCandidateMask[$0] }.map { scores[$0] }
         if !candidateScores.isEmpty {
             let sortedCS = candidateScores.sorted(by: >)
             let above020 = candidateScores.filter { $0 >= 0.20 }.count
@@ -474,87 +346,27 @@ class SearchEngine {
             logger.info("[BoostedCLIP] top10=[\(sortedCS.prefix(10).map { String(format: "%.4f", $0) }.joined(separator: ", "))] mean=\(String(format: "%.4f", mean)) >=0.20:\(above020) >=0.15:\(above015) >=0.12:\(above012) >=0.10:\(above010)")
 
             // Show boost breakdown for top 20 candidates
-            let topIndices = (0..<count)
-                .filter { candidateMask[$0] }
+            let topIndices = (0..<photos.count)
+                .filter { photoCandidateMask[$0] }
                 .sorted { scores[$0] > scores[$1] }
                 .prefix(20)
             for (rank, i) in topIndices.enumerated() {
-                let raw = preBoostScores[i]
+                let raw = photoScoring.rawScores[i]
                 let boosted = scores[i]
                 let boostTotal = boosted - raw
-                let dateStr = photoDates[i].map { ISO8601DateFormatter().string(from: $0) } ?? "no-date"
-                logger.info("[BoostDetail #\(rank+1)] raw=\(String(format: "%.4f", raw)) boosted=\(String(format: "%.4f", boosted)) boost=\(String(format: "%+.4f", boostTotal)) date=\(dateStr) id=\(localIds[i].prefix(12))")
+                let dateStr = photos.dates[i].map { ISO8601DateFormatter().string(from: $0) } ?? "no-date"
+                logger.info("[BoostDetail #\(rank+1)] raw=\(String(format: "%.4f", raw)) boosted=\(String(format: "%.4f", boosted)) boost=\(String(format: "%+.4f", boostTotal)) date=\(dateStr) id=\(photos.localIdentifiers[i].prefix(12))")
             }
         }
-        #endif
-
-        // =====================================================================
-        // PHASE 5: VIDEO SCORING
-        // =====================================================================
-
-        var videoScoreMap: [String: (score: Float, localId: String, date: Date?, framePosition: Double)] = [:]
-
-        if vCount > 0 {
-            let videoScores = scoreEmbeddings(queryEmbedding: queryEmbedding, matrix: vMatrix, count: vCount, gpuSearch: videoGPU)
-            let negativeVideoScores = negativeEmbeddings.map {
-                scoreEmbeddings(
-                    queryEmbedding: $0,
-                    matrix: vMatrix,
-                    count: vCount,
-                    gpuSearch: videoGPU,
-                    candidateMask: videoCandidateMask
-                )
-            }
-
-            #if DEBUG
+        if !videoScoring.rawScores.isEmpty {
             let sortedVS = videoScores.enumerated().sorted { $0.element > $1.element }
             let vAbove020 = videoScores.filter { $0 >= 0.20 }.count
             let vAbove015 = videoScores.filter { $0 >= 0.15 }.count
             let vAbove010 = videoScores.filter { $0 >= 0.10 }.count
-            let vMean = videoScores.reduce(0, +) / Float(vCount)
-            logger.info("[ScoreDist] Videos: top5=[\(sortedVS.prefix(5).map { String(format: "%.3f", $0.element) }.joined(separator: ", "))] mean=\(String(format: "%.4f", vMean)) >=0.20:\(vAbove020) >=0.15:\(vAbove015) >=0.10:\(vAbove010) total:\(vCount)")
-            #endif
-
-            for i in 0..<vCount {
-                var frameScore = videoScores[i]
-                guard frameScore > 0 else { continue }
-                guard videoCandidateMask[i] else { continue }
-
-                for negativeScores in negativeVideoScores {
-                    frameScore -= negativeScores[i] * SearchConfig.negativeTermWeight
-                }
-
-                if let timeRange = hints.timeOfDayHours, let videoDate = vDates[i] {
-                    let hour = Calendar.current.component(.hour, from: videoDate)
-                    let inRange = timeRange.start <= timeRange.end
-                        ? hour >= timeRange.start && hour < timeRange.end
-                        : hour >= timeRange.start || hour < timeRange.end
-                    if inRange { frameScore += SearchConfig.timeOfDayMatchBoost }
-                }
-
-                // Videos don't get scene-label, OCR, or location-name boosts
-                // that photos receive because those features aren't indexed
-                // per video frame. Compensate so a genuinely relevant video
-                // isn't outranked by boost-inflated photos.
-                frameScore += SearchConfig.videoRelevanceCompensation
-                guard frameScore > 0 else { continue }
-
-                let vid = vIds[i]
-                guard frameScore >= minimumScoreThreshold else { continue }
-                guard let framePosition = vPositions[i] else {
-                    throw SearchEngineError.corruptedIndex
-                }
-
-                if let existing = videoScoreMap[vid] {
-                    if frameScore > existing.score {
-                        videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], framePosition)
-                    }
-                } else {
-                    videoScoreMap[vid] = (frameScore, vLocalIds[i], vDates[i], framePosition)
-                }
-            }
-
+            let vMean = videoScores.reduce(0, +) / Float(videos.count)
+            logger.info("[ScoreDist] Videos: top5=[\(sortedVS.prefix(5).map { String(format: "%.3f", $0.element) }.joined(separator: ", "))] mean=\(String(format: "%.4f", vMean)) >=0.20:\(vAbove020) >=0.15:\(vAbove015) >=0.10:\(vAbove010) total:\(videos.count)")
         }
+        #endif
 
         // =====================================================================
         // PHASE 6: RANK AND RETURN
@@ -581,13 +393,16 @@ class SearchEngine {
 
         // No topK cap here — return every above-threshold candidate. The UI
         // layer windows to an initial visible count and lets the user expand.
-        let photoResults = sorted.filter { $0.element >= effectiveThreshold }.map { (index, score) in
-            SearchResult(id: ids[index], score: score, localIdentifier: localIds[index], creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
-        }
-
-        let videoResults = videoScoreMap.map { (videoId, data) in
-            SearchResult(id: videoId, score: data.score, localIdentifier: data.localId, creationDate: data.date, isVideo: true, bestFramePosition: data.framePosition)
-        }
+        let photoResults = try results(
+            for: photos,
+            scores: scores,
+            threshold: effectiveThreshold
+        )
+        let videoResults = try results(
+            for: videos,
+            scores: videoScores,
+            threshold: minimumScoreThreshold
+        )
 
         var allResults = photoResults + videoResults
         // Sort by score descending. For near-identical scores (within 1%),
@@ -628,17 +443,17 @@ class SearchEngine {
             let nearMissCount = min(5, sorted.count)
             logger.info("[NearMiss] Top \(nearMissCount) photo scores (below threshold or filtered):")
             for (index, score) in sorted.prefix(nearMissCount) {
-                let dateStr = photoDates[index].map { dateFormatter.string(from: $0) } ?? "no-date"
-                let passed = candidateMask[index]
+                let dateStr = photos.dates[index].map { dateFormatter.string(from: $0) } ?? "no-date"
+                let passed = photoCandidateMask[index]
                 logger.info("[NearMiss] score=\(String(format: "%.4f", score)) passedFilter=\(passed) date=\(dateStr)")
             }
-            if vCount > 0 {
-                let topVideo = videoScoreMap.sorted { $0.value.score > $1.value.score }.prefix(3)
+            if videos.count > 0 {
+                let topVideo = videoResults.sorted { $0.score > $1.score }.prefix(3)
                 if topVideo.isEmpty {
                     logger.info("[NearMiss] No video frames passed threshold")
                 }
-                for (vid, data) in topVideo {
-                    logger.info("[NearMiss] VIDEO score=\(String(format: "%.4f", data.score)) vid=\(vid.prefix(12)) frame=\(String(format: "%.2f", data.framePosition))")
+                for result in topVideo {
+                    logger.info("[NearMiss] VIDEO score=\(String(format: "%.4f", result.score)) vid=\(result.id.prefix(12)) frame=\(String(format: "%.2f", result.bestFramePosition ?? 0))")
                 }
             }
         }
@@ -658,27 +473,20 @@ class SearchEngine {
             // This way "old town" photos that scored 0.16 rank above random
             // San Diego photos that scored 0.08.
             var candidateResults: [SearchResult] = []
-            for i in 0..<count {
-                guard candidateMask[i] else { continue }
+            for i in 0..<photos.count {
+                guard photoCandidateMask[i] else { continue }
                 candidateResults.append(SearchResult(
-                    id: ids[i],
+                    id: photos.ids[i],
                     score: scores[i],
-                    localIdentifier: localIds[i],
-                    creationDate: photoDates[i],
+                    localIdentifier: photos.localIdentifiers[i],
+                    creationDate: photos.dates[i],
                     isVideo: false,
                     bestFramePosition: nil
                 ))
             }
 
             // Also include video candidates if they passed filters
-            let fallbackVideoResults = videoScoreMap
-                .filter { $0.value.score > 0 }
-                .map { (videoId, data) in
-                    SearchResult(id: videoId, score: data.score,
-                        localIdentifier: data.localId, creationDate: data.date,
-                        isVideo: true, bestFramePosition: data.framePosition)
-                }
-            candidateResults.append(contentsOf: fallbackVideoResults)
+            candidateResults.append(contentsOf: videoResults.filter { $0.score > 0 })
 
             // Sort by CLIP score descending. All candidates get ranked by visual
             // relevance, even those below the normal threshold.
@@ -713,11 +521,13 @@ class SearchEngine {
         // fallback so the user sees "closest matches" instead of an empty screen.
         if allResults.isEmpty && hints.hasVisualQuery {
             let nearMissResults = sorted
-                .filter { $0.element > 0 && candidateMask[$0.offset] }
+                .filter { $0.element > 0 && photoCandidateMask[$0.offset] }
                 .prefix(SearchConfig.topK)
                 .map { (index, score) in
-                    SearchResult(id: ids[index], score: score, localIdentifier: localIds[index],
-                                 creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
+                    SearchResult(id: photos.ids[index], score: score,
+                                 localIdentifier: photos.localIdentifiers[index],
+                                 creationDate: photos.dates[index], isVideo: false,
+                                 bestFramePosition: nil)
                 }
             let fallbackSummary = FilterSummary(
                 dateDescription: appliedSummary?.dateDescription,
@@ -733,46 +543,16 @@ class SearchEngine {
     // MARK: - Helper Methods
 
     private func locationOnlyResults(
-        candidateMask: [Bool], ids: [String], localIds: [String],
-        dates: [Date?], count: Int,
-        vIds: [String], vLocalIds: [String], vDates: [Date?],
-        vLats: [Double?], vLons: [Double?], vPositions: [Double?],
-        vCities: [String?], vStates: [String?], vCountries: [String?], vLocNames: [String?],
-        vCount: Int,
-        hints: QueryHints, targetLoc: CLLocation?
-    ) -> SearchResponse {
+        media: [(index: MediaIndex, candidateMask: [Bool])]
+    ) throws -> SearchResponse {
         var results: [SearchResult] = []
-
-        for i in 0..<count {
-            guard candidateMask[i] else { continue }
-            results.append(SearchResult(
-                id: ids[i], score: 1.0, localIdentifier: localIds[i],
-                creationDate: dates[i], isVideo: false, bestFramePosition: nil
-            ))
-        }
-
-        let locationMatcher: LocationMatcher.Matcher? = hints.locationHint.map { locationQuery in
-            LocationMatcher.makeMatcher(
-                queryLower: locationQuery.lowercased(),
-                locality: hints.locationLocality,
-                adminArea: hints.locationAdminArea,
-                country: hints.locationCountryName
-            )
-        }
-
-        var seenVideoIds = Set<String>()
-        for i in 0..<vCount {
-            guard videoPassesHardFilters(
-                index: i, hints: hints, locationMatcher: locationMatcher, targetLoc: targetLoc,
-                dates: vDates, latitudes: vLats, longitudes: vLons,
-                cities: vCities, states: vStates, countries: vCountries, names: vLocNames
-            ) else { continue }
-            let vid = vIds[i]
-            guard !seenVideoIds.contains(vid) else { continue }
-            seenVideoIds.insert(vid)
-            results.append(SearchResult(
-                id: vid, score: 1.0, localIdentifier: vLocalIds[i],
-                creationDate: vDates[i], isVideo: true, bestFramePosition: vPositions[i]
+        for (index, mask) in media {
+            let scores = mask.map { $0 ? Float(1) : -1 }
+            results.append(contentsOf: try self.results(
+                for: index,
+                scores: scores,
+                threshold: 1,
+                sortByScore: false
             ))
         }
 
@@ -786,19 +566,26 @@ class SearchEngine {
     }
 
     private func computeFallbackResults(
-        text: String, ids: [String], localIds: [String],
-        dates: [Date?], matrix: [Float16], count: Int,
+        text: String,
+        index mediaIndex: MediaIndex,
         gpuSearch: SimilaritySearching?
     ) -> [SearchResult] {
         guard let queryEmbedding = try? encodeQuery(text: text) else { return [] }
-        let scores = scoreEmbeddings(queryEmbedding: queryEmbedding, matrix: matrix, count: count, gpuSearch: gpuSearch)
+        let scores = scoreEmbeddings(
+            queryEmbedding: queryEmbedding,
+            matrix: mediaIndex.embeddings,
+            count: mediaIndex.count,
+            gpuSearch: gpuSearch
+        )
 
         let sorted = scores.enumerated().sorted { $0.element > $1.element }
         return sorted.prefix(5)
             .filter { $0.element >= minimumScoreThreshold }
-            .map { (index, score) in
-                SearchResult(id: ids[index], score: score, localIdentifier: localIds[index],
-                             creationDate: dates[index], isVideo: false, bestFramePosition: nil)
+            .map { (row, score) in
+                SearchResult(id: mediaIndex.ids[row], score: score,
+                             localIdentifier: mediaIndex.localIdentifiers[row],
+                             creationDate: mediaIndex.dates[row], isVideo: false,
+                             bestFramePosition: nil)
             }
     }
 
@@ -895,36 +682,238 @@ class SearchEngine {
         return dot
     }
 
-    private func videoPassesHardFilters(
-        index: Int,
+    private func candidateMask(
+        for index: MediaIndex,
         hints: QueryHints,
         locationMatcher: LocationMatcher.Matcher?,
-        targetLoc: CLLocation?,
-        dates: [Date?],
-        latitudes: [Double?],
-        longitudes: [Double?],
-        cities: [String?],
-        states: [String?],
-        countries: [String?],
-        names: [String?]
-    ) -> Bool {
-        if let dateRange = hints.dateRange {
-            guard let videoDate = dates[index], videoDate >= dateRange.start && videoDate <= dateRange.end else {
-                return false
+        targetLoc: CLLocation?
+    ) -> [Bool] {
+        var mask = [Bool](repeating: true, count: index.count)
+        for row in 0..<index.count {
+            if let dateRange = hints.dateRange {
+                guard let date = index.dates[row],
+                      date >= dateRange.start,
+                      date <= dateRange.end else {
+                    mask[row] = false
+                    continue
+                }
             }
+
+            mask[row] = mediaPassesLocationFilter(
+                hints: hints,
+                locationMatcher: locationMatcher,
+                targetLoc: targetLoc,
+                latitude: index.latitudes[row],
+                longitude: index.longitudes[row],
+                city: index.locationCities[row],
+                state: index.locationStates[row],
+                country: index.locationCountries[row],
+                name: index.locationNames[row]
+            )
+        }
+        return mask
+    }
+
+    private func scoreMedia(
+        _ index: MediaIndex,
+        candidateMask: [Bool],
+        queryEmbedding: [Float],
+        negativeEmbeddings: [[Float]],
+        hints: QueryHints,
+        targetLoc: CLLocation?,
+        gpuSearch: SimilaritySearching?
+    ) -> ScoredMedia {
+        let rawScores = scoreEmbeddings(
+            queryEmbedding: queryEmbedding,
+            matrix: index.embeddings,
+            count: index.count,
+            gpuSearch: gpuSearch
+        )
+        let negativeScoreSets = negativeEmbeddings.map {
+            scoreEmbeddings(
+                queryEmbedding: $0,
+                matrix: index.embeddings,
+                count: index.count,
+                gpuSearch: gpuSearch,
+                candidateMask: candidateMask
+            )
+        }
+        let queryWords = hints.textQuery.lowercased().split(separator: " ").map(String.init)
+        let calendar = Calendar.current
+        var scores = rawScores
+
+        for row in 0..<index.count {
+            guard candidateMask[row] else {
+                scores[row] = -1
+                continue
+            }
+
+            var score = rawScores[row]
+            if index.kind == .videoFrame {
+                // Preserve the historical video eligibility boundary: a frame
+                // with non-positive raw similarity cannot be rescued by boosts.
+                guard score > 0 else {
+                    scores[row] = -1
+                    continue
+                }
+                for negativeScores in negativeScoreSets {
+                    score -= negativeScores[row] * SearchConfig.negativeTermWeight
+                }
+            } else {
+                score += photoLocationBoost(
+                    index: index,
+                    row: row,
+                    hints: hints,
+                    targetLoc: targetLoc
+                )
+            }
+
+            if let timeRange = hints.timeOfDayHours,
+               let date = index.dates[row],
+               hour(calendar.component(.hour, from: date), isIn: timeRange) {
+                score += SearchConfig.timeOfDayMatchBoost
+            }
+
+            switch index.kind {
+            case .photo:
+                for negativeScores in negativeScoreSets {
+                    score -= negativeScores[row] * SearchConfig.negativeTermWeight
+                }
+                score += photoOCRBoost(index: index, row: row, queryWords: queryWords)
+                score += photoSceneLabelBoost(index: index, row: row, queryWords: queryWords)
+
+            case .videoFrame:
+                // Video frames still lack OCR, scene-label, and location-name
+                // enrichment. Keep this compensation explicit until those
+                // features are indexed for videos too.
+                score += SearchConfig.videoRelevanceCompensation
+                if score <= 0 { score = -1 }
+            }
+
+            scores[row] = score
         }
 
-        return mediaPassesLocationFilter(
-            hints: hints,
-            locationMatcher: locationMatcher,
-            targetLoc: targetLoc,
-            latitude: latitudes[index],
-            longitude: longitudes[index],
-            city: cities[index],
-            state: states[index],
-            country: countries[index],
-            name: names[index]
-        )
+        return ScoredMedia(rawScores: rawScores, scores: scores)
+    }
+
+    private func photoLocationBoost(
+        index: MediaIndex,
+        row: Int,
+        hints: QueryHints,
+        targetLoc: CLLocation?
+    ) -> Float {
+        guard let targetLoc, let radiusKm = hints.locationRadiusKm else { return 0 }
+        guard index.locationCities[row] == nil || index.locationCities[row]?.isEmpty == true else {
+            return 0
+        }
+        guard let latitude = index.latitudes[row], let longitude = index.longitudes[row] else {
+            return 0
+        }
+
+        let distanceKm = targetLoc.distance(
+            from: CLLocation(latitude: latitude, longitude: longitude)
+        ) / 1000
+        if distanceKm < radiusKm * 0.1 {
+            return SearchConfig.locationCloseBoost
+        }
+        if distanceKm < radiusKm * 0.3 {
+            return SearchConfig.locationNearBoost
+        }
+        return 0
+    }
+
+    private func photoOCRBoost(
+        index: MediaIndex,
+        row: Int,
+        queryWords: [String]
+    ) -> Float {
+        guard !queryWords.isEmpty else { return 0 }
+        guard let ocrText = index.ocrTexts[row] else { return 0 }
+        let text = ocrText.lowercased()
+        let matchCount = queryWords.filter { text.contains($0) }.count
+        guard matchCount > 0 else { return 0 }
+        return SearchConfig.ocrBoostPerWord
+            * Float(matchCount) / Float(queryWords.count)
+    }
+
+    private func photoSceneLabelBoost(
+        index: MediaIndex,
+        row: Int,
+        queryWords: [String]
+    ) -> Float {
+        guard !queryWords.isEmpty, let sceneLabels = index.sceneLabels[row] else { return 0 }
+        let labelSet = Set(SceneClassifier.stringToLabels(sceneLabels))
+        var boost: Float = 0
+        for word in queryWords {
+            var wordScore: Float = labelSet.contains(word)
+                ? SearchConfig.sceneLabelBoostPerMatch
+                : 0
+            if let synonyms = SceneLabelConfig.synonyms[word] {
+                let hits = synonyms.subtracting([word]).intersection(labelSet).count
+                if hits > 0 {
+                    wordScore += SearchConfig.sceneLabelBoostPerMatch * 0.5 * Float(hits)
+                }
+            }
+            boost += wordScore / Float(queryWords.count)
+        }
+        return boost
+    }
+
+    private func hour(_ hour: Int, isIn range: (start: Int, end: Int)) -> Bool {
+        if range.start <= range.end {
+            return hour >= range.start && hour < range.end
+        }
+        return hour >= range.start || hour < range.end
+    }
+
+    private func results(
+        for index: MediaIndex,
+        scores: [Float],
+        threshold: Float,
+        sortByScore: Bool = true
+    ) throws -> [SearchResult] {
+        switch index.kind {
+        case .photo:
+            var rows = (0..<index.count).filter { scores[$0] >= threshold }
+            if sortByScore {
+                rows.sort { scores[$0] > scores[$1] }
+            }
+            return rows.map { row in
+                SearchResult(
+                    id: index.ids[row],
+                    score: scores[row],
+                    localIdentifier: index.localIdentifiers[row],
+                    creationDate: index.dates[row],
+                    isVideo: false,
+                    bestFramePosition: nil
+                )
+            }
+
+        case .videoFrame:
+            var idOrder: [String] = []
+            var bestByID: [String: SearchResult] = [:]
+            for row in 0..<index.count where scores[row] >= threshold {
+                guard let framePosition = index.framePositions[row] else {
+                    throw SearchEngineError.corruptedIndex
+                }
+                let id = index.ids[row]
+                let result = SearchResult(
+                    id: id,
+                    score: scores[row],
+                    localIdentifier: index.localIdentifiers[row],
+                    creationDate: index.dates[row],
+                    isVideo: true,
+                    bestFramePosition: framePosition
+                )
+                if let existing = bestByID[id] {
+                    if result.score > existing.score { bestByID[id] = result }
+                } else {
+                    idOrder.append(id)
+                    bestByID[id] = result
+                }
+            }
+            return idOrder.compactMap { bestByID[$0] }
+        }
     }
 
     private func mediaPassesLocationFilter(

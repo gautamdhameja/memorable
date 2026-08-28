@@ -182,6 +182,91 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertLessThan(negative.results[0].score, positive.results[0].score)
     }
 
+    func testPhotoAndVideoRowsShareCommonFilterAndScoringPath() throws {
+        let date = Date(timeIntervalSince1970: 10_000)
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "photo-paris",
+                    localIdentifier: "local-photo-paris",
+                    date: date,
+                    city: "Paris",
+                    embedding: float16Vector(first: 1)
+                )
+            ],
+            videos: [
+                .init(
+                    id: "video-paris",
+                    localIdentifier: "local-video-paris",
+                    date: date,
+                    city: "Paris",
+                    embedding: float16Vector(first: 1)
+                )
+            ]
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder([
+                "dog": floatVector(first: 0.3),
+                "cat": floatVector(first: 0.1),
+            ]),
+            database: database
+        )
+        let dateRange = DateRange(
+            start: date.addingTimeInterval(-1),
+            end: date.addingTimeInterval(1)
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(hints: hints(
+            text: "dog",
+            dateRange: dateRange,
+            locationHint: "Paris",
+            negativeTerms: ["cat"],
+            timeOfDayHours: (0, 24)
+        ))
+
+        XCTAssertEqual(Set(response.results.map(\.id)), ["photo-paris", "video-paris"])
+        let photoScore = try XCTUnwrap(response.results.first { !$0.isVideo }?.score)
+        let videoScore = try XCTUnwrap(response.results.first { $0.isVideo }?.score)
+        XCTAssertEqual(
+            videoScore - photoScore,
+            SearchConfig.videoRelevanceCompensation,
+            accuracy: 0.0001
+        )
+    }
+
+    func testMultiFrameVideoKeepsBestFramePosition() throws {
+        let database = SearchFixtureDatabase(videos: [
+            .init(
+                id: "video",
+                localIdentifier: "local-video",
+                date: nil,
+                city: nil,
+                framePosition: 0.1,
+                embedding: float16Vector(first: 0.5)
+            ),
+            .init(
+                id: "video",
+                localIdentifier: "local-video",
+                date: nil,
+                city: nil,
+                framePosition: 0.9,
+                embedding: float16Vector(first: 1)
+            ),
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(hints: hints(text: "dog"))
+
+        XCTAssertEqual(response.results.count, 1)
+        XCTAssertEqual(response.results[0].id, "video")
+        XCTAssertEqual(response.results[0].bestFramePosition, 0.9)
+    }
+
     func testNegativeTermsUseMatrixScorerForPhotosAndVideos() throws {
         let database = SearchFixtureDatabase(
             photos: [
@@ -306,7 +391,8 @@ final class SearchEngineTests: XCTestCase {
         dateRange: DateRange? = nil,
         locationHint: String? = nil,
         hasVisualQuery: Bool = true,
-        negativeTerms: [String] = []
+        negativeTerms: [String] = [],
+        timeOfDayHours: (start: Int, end: Int)? = nil
     ) -> QueryHints {
         QueryHints(
             textQuery: text,
@@ -320,7 +406,7 @@ final class SearchEngineTests: XCTestCase {
             locationCountryName: nil,
             seasonHint: nil,
             negativeTerms: negativeTerms,
-            timeOfDayHours: nil,
+            timeOfDayHours: timeOfDayHours,
             hasVisualQuery: hasVisualQuery
         )
     }
@@ -368,6 +454,7 @@ struct FixtureVideo {
     let city: String?
     var latitude: Double? = nil
     var longitude: Double? = nil
+    var framePosition: Double = 0.5
     let embedding: [Float16]
 }
 
@@ -382,6 +469,15 @@ final class SearchFixtureDatabase: DatabaseProtocol {
 
     func indexedCount() throws -> Int { photos.count }
     func videoIndexedCount() throws -> Int { Set(videos.map(\.id)).count }
+    func indexedMediaCounts() throws -> IndexedMediaCounts {
+        IndexedMediaCounts(photos: photos.count, videos: Set(videos.map(\.id)).count)
+    }
+    func allIndexedMediaIdentifiers() throws -> IndexedMediaIdentifiers {
+        IndexedMediaIdentifiers(
+            photos: Set(photos.map(\.localIdentifier)),
+            videos: Set(videos.map(\.localIdentifier))
+        )
+    }
 
     func loadAllEmbeddings() throws -> MediaIndex {
         var index = MediaIndex(kind: .photo)
@@ -419,7 +515,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
                     state: nil,
                     country: nil,
                     locationName: nil,
-                    details: .videoFrame(position: 0.5)
+                    details: .videoFrame(position: video.framePosition)
                 ),
                 embedding: video.embedding
             )
@@ -455,10 +551,9 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func trimToLimit(_ limit: Int) throws {}
     func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
-    func photosNeedingLocationBackfillCount() throws -> Int { 0 }
-    func videosNeedingLocationBackfillCount() throws -> Int { 0 }
-    func photosWithGPSCount() throws -> Int { 0 }
-    func videosWithGPSCount() throws -> Int { 0 }
+    func geocodingCounts() throws -> GeocodingCounts {
+        GeocodingCounts(totalWithGPS: 0, remaining: 0, indexedPhotos: photos.count, indexedVideos: videos.count)
+    }
     func updatePhotoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws {}
     func updateVideoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws {}
     func insertSource(_ source: PhotoSource) throws {}
