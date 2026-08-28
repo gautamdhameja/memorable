@@ -4,7 +4,7 @@ import FoundationModels
 // Structured output from the on-device language model
 @available(iOS 26.0, *)
 @Generable
-struct ParsedQuery {
+struct ParsedQuery: Sendable {
     @Guide(description: "The visual content to search for — what the photo looks like. Remove time/location words, keep only visual descriptors. Examples: 'drink', 'sunset at beach', 'dog playing', 'birthday cake'.")
     var visualDescription: String
 
@@ -22,19 +22,36 @@ struct ParsedQuery {
 }
 
 @available(iOS 26.0, *)
-class SmartQueryParser {
-    private var session: LanguageModelSession?
+protocol SmartQueryResponding: Sendable {
+    func respond(to prompt: String) async throws -> ParsedQuery
+}
 
-    init() {
-        if SystemLanguageModel.default.isAvailable {
-            session = LanguageModelSession()
+@available(iOS 26.0, *)
+private struct LanguageModelSmartQueryResponder: SmartQueryResponding {
+    private let session = LanguageModelSession()
+
+    func respond(to prompt: String) async throws -> ParsedQuery {
+        try await session.respond(to: prompt, generating: ParsedQuery.self).content
+    }
+}
+
+@available(iOS 26.0, *)
+struct SmartQueryParser: Sendable {
+    private let responderFactory: @Sendable () -> any SmartQueryResponding
+    let isAvailable: Bool
+
+    init(
+        isAvailable: Bool = SystemLanguageModel.default.isAvailable,
+        responderFactory: @escaping @Sendable () -> any SmartQueryResponding = {
+            LanguageModelSmartQueryResponder()
         }
+    ) {
+        self.isAvailable = isAvailable
+        self.responderFactory = responderFactory
     }
 
-    var isAvailable: Bool { session != nil }
-
     func parse(query: String) async -> QueryHints {
-        guard let session else {
+        guard isAvailable else {
             return QueryParserFallback.parse(query: query)
         }
 
@@ -57,8 +74,7 @@ class SmartQueryParser {
         """
 
         do {
-            let response = try await session.respond(to: prompt, generating: ParsedQuery.self)
-            let parsed = response.content
+            let parsed = try await responderFactory().respond(to: prompt)
 
             var dateRange: DateRange?
             let isoFormatter = ISO8601DateFormatter()
@@ -147,18 +163,13 @@ class SmartQueryParser {
 // MARK: - Unified entry point
 
 enum QueryParser {
-    private static var smartParser: Any? = {
-        if #available(iOS 26.0, *) {
-            return SmartQueryParser()
-        }
-        return nil
-    }()
+    @available(iOS 26.0, *)
+    private static let smartParser = SmartQueryParser()
 
     static func parse(query: String) async -> QueryHints {
         if #available(iOS 26.0, *),
-           let smart = smartParser as? SmartQueryParser,
-           smart.isAvailable {
-            return await smart.parse(query: query)
+           smartParser.isAvailable {
+            return await smartParser.parse(query: query)
         }
         return QueryParserFallback.parse(query: query)
     }
