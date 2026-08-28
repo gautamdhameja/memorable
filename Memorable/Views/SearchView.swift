@@ -2,82 +2,27 @@ import SwiftUI
 import Photos
 import AVKit
 
-private enum SortMode: String {
-    case relevance
-    case recent
-}
-
-private enum MediaFilter: String, CaseIterable {
-    case all
-    case photos
-    case videos
-    case screenshots
-
-    var label: String {
-        switch self {
-        case .all: return "All"
-        case .photos: return "Photos"
-        case .videos: return "Videos"
-        case .screenshots: return "Screenshots"
-        }
-    }
-}
-
 struct SearchView: View {
     @ObservedObject var indexingService: IndexingService
     let searchEngine: SearchEngine
     @ObservedObject var semanticRuntime: SemanticSearchRuntime
     let captionService: PhotoCaptionService
 
-    @State private var searchText = ""
-    @State private var results: [SearchResult] = []
-    @State private var isSearching = false
+    @StateObject private var viewModel: SearchViewModel
     @State private var selectedPhoto: SearchResult?
-    @State private var searchError: String?
-    // Tracks the query string that produced the current `results`. Used so the
-    // "no results" view only appears after a search has actually completed for
-    // the text currently in the field, not while the user is mid-typing.
-    @State private var lastSearchedQuery: String?
     @State private var showUpgrade = false
     @State private var showSaveAlbum = false
     @State private var albumName = ""
     @ObservedObject private var proManager = ProManager.shared
     @Environment(\.scenePhase) private var scenePhase
-    @State private var searchHistory: [String] = []
     @State private var smartAlbums: [SmartAlbum] = []
     @State private var totalLibraryCount: Int = 0
-    @State private var searchTimeMs: Int = 0
-    @State private var fallbackResults: [SearchResult] = []
-    @State private var filterSummary: FilterSummary?
     @State private var placeholderIndex: Int = 0
     @State private var placeholderTimer: Task<Void, Never>?
-    @State private var searchSequence: Int = 0
-    @State private var activeSearchID: Int?
 
-    // Persisted sort mode. Stored as rawValue because @AppStorage doesn't
-    // support RawRepresentable enums directly.
-    @AppStorage("searchSortMode") private var sortModeRaw: String = SortMode.relevance.rawValue
-    private var sortMode: SortMode {
-        SortMode(rawValue: sortModeRaw) ?? .relevance
-    }
-
-    // Progressive reveal: engine returns every matching result, UI windows to
-    // `initialVisibleCount` until the user taps "Show all N matching results".
-    private let initialVisibleCount = 50
-    @State private var visibleCount: Int = 50
-
-    // Tracks the in-flight submitted search. Text edits do not cancel a submitted
-    // query; only a newer submitted query supersedes an older one.
-    @State private var searchTask: Task<Void, Never>?
-
-    // Media type filter (All / Photos / Videos / Screenshots)
-    @State private var mediaFilter: MediaFilter = .all
-    @State private var screenshotIds: Set<String> = []
-
-    // Post-search upgrade flow (free tier)
-    @State private var hasCompletedFirstSearch = false
-    @State private var searchesSinceDismiss = 0
-    @State private var upgradeBannerDismissed = false
+    // Keep the existing persisted key stable. SearchViewModel owns the runtime
+    // sort state; this wrapper is the SwiftUI persistence adapter.
+    @AppStorage(SearchViewModel.sortModeStorageKey) private var sortModeRaw: String = SearchSortMode.relevance.rawValue
 
     private static let placeholders = [
         "Search for your moment...",
@@ -87,17 +32,73 @@ struct SearchView: View {
         "Try \"birthday cake\"...",
     ]
 
-    // Last successful search — shown when search box is cleared
-    @State private var lastQuery: String = ""
-    @State private var lastResults: [SearchResult] = []
-
-    private var currentDisplayedResults: [SearchResult] {
-        if !results.isEmpty { return results }
-        if !lastResults.isEmpty { return lastResults }
-        return []
+    init(
+        indexingService: IndexingService,
+        searchEngine: SearchEngine,
+        semanticRuntime: SemanticSearchRuntime,
+        captionService: PhotoCaptionService
+    ) {
+        self.indexingService = indexingService
+        self.searchEngine = searchEngine
+        self.semanticRuntime = semanticRuntime
+        self.captionService = captionService
+        _viewModel = StateObject(wrappedValue: SearchViewModel(dependencies: .init(
+            deferEnrichmentForUserSearch: { indexingService.deferEnrichmentForUserSearch() },
+            isSemanticSearchReady: { semanticRuntime.readiness.isSemanticSearchReady },
+            isIndexReady: { indexingService.isReady },
+            isIndexLoaded: { searchEngine.isIndexLoaded },
+            prepareForSearch: { try await semanticRuntime.prepareForSearch() },
+            search: { query in try await searchEngine.search(query: query) },
+            detectScreenshotIDs: { searchResults in
+                let task = Task.detached {
+                    guard !Task.isCancelled else { return Set<String>() }
+                    let identifiers = searchResults.map(\.localIdentifier)
+                    let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+                    var screenshotIdentifiers = Set<String>()
+                    assets.enumerateObjects { asset, _, _ in
+                        if asset.mediaSubtypes.contains(.photoScreenshot) {
+                            screenshotIdentifiers.insert(asset.localIdentifier)
+                        }
+                    }
+                    return Set(searchResults.compactMap { result in
+                        screenshotIdentifiers.contains(result.localIdentifier) ? result.id : nil
+                    })
+                }
+                return await withTaskCancellationHandler {
+                    await task.value
+                } onCancel: {
+                    task.cancel()
+                }
+            },
+            validResultIDs: { candidates in
+                let task = Task.detached {
+                    guard !Task.isCancelled else { return Set<String>() }
+                    let identifiers = candidates.map(\.localIdentifier)
+                    let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+                    var validIdentifiers = Set<String>()
+                    assets.enumerateObjects { asset, _, _ in
+                        validIdentifiers.insert(asset.localIdentifier)
+                    }
+                    return Set(candidates.compactMap { result in
+                        validIdentifiers.contains(result.localIdentifier) ? result.id : nil
+                    })
+                }
+                return await withTaskCancellationHandler {
+                    await task.value
+                } onCancel: {
+                    task.cancel()
+                }
+            },
+            addHistory: { SearchHistory.add(query: $0) },
+            loadHistory: { SearchHistory.load() },
+            clearHistory: { SearchHistory.clear() },
+            removeHistory: { SearchHistory.remove(at: $0) },
+            now: { CFAbsoluteTimeGetCurrent() }
+        )))
     }
 
     var body: some View {
+        let filteredSearchResults = viewModel.filteredResults(viewModel.results)
         NavigationStack {
             ZStack {
                 Celestial.Colors.background.ignoresSafeArea()
@@ -130,9 +131,8 @@ struct SearchView: View {
                     }
 
                     // Sticky controls panel (above scroll)
-                    if !searchText.isEmpty && !results.isEmpty && !isSearching {
-                        let filtered = applyMediaFilter(applySort(results, mode: sortMode))
-                        controlsPanel(filteredCount: filtered.count)
+                    if !viewModel.queryText.isEmpty && !viewModel.results.isEmpty && !viewModel.isSearching {
+                        controlsPanel(filteredCount: filteredSearchResults.count)
                     }
 
                     ScrollView {
@@ -164,22 +164,22 @@ struct SearchView: View {
                         }
 
                         // Content
-                        if isSearching {
+                        if viewModel.isSearching {
                             searchingState
-                        } else if let error = searchError {
+                        } else if let error = viewModel.searchError {
                             errorState(error)
-                        } else if !searchText.isEmpty && results.isEmpty && !isSearching && lastSearchedQuery == normalizedSearchQuery(searchText) {
+                        } else if viewModel.hasNoResultsForCurrentQuery {
                             noResultsState
-                        } else if !searchText.isEmpty {
-                            resultsGrid(results: results)
-                        } else if !lastResults.isEmpty {
+                        } else if !viewModel.queryText.isEmpty {
+                            resultsGrid(results: viewModel.results, filteredResults: filteredSearchResults)
+                        } else if !viewModel.lastResults.isEmpty {
                             lastResultsView
-                        } else if indexingService.progress.isRunning && searchText.isEmpty && !indexingService.progress.photosComplete {
+                        } else if indexingService.progress.isRunning && viewModel.queryText.isEmpty && !indexingService.progress.photosComplete {
                             // Slideshow while indexing
                             IndexingSlideshowView(captionService: captionService)
                                 .padding(.top, 8)
-                        } else if results.isEmpty && searchText.isEmpty && (!indexingService.progress.isRunning || indexingService.progress.photosComplete) {
-                            if indexingService.isReady && (!searchHistory.isEmpty || !smartAlbums.isEmpty) {
+                        } else if viewModel.results.isEmpty && viewModel.queryText.isEmpty && (!indexingService.progress.isRunning || indexingService.progress.photosComplete) {
+                            if indexingService.isReady && (!viewModel.searchHistory.isEmpty || !smartAlbums.isEmpty) {
                                 homeView
                             } else {
                                 emptyState
@@ -205,9 +205,9 @@ struct SearchView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if !results.isEmpty && !smartAlbums.contains(where: { $0.query.lowercased() == searchText.lowercased() }) {
+                    if !viewModel.results.isEmpty && !smartAlbums.contains(where: { $0.query.lowercased() == viewModel.queryText.lowercased() }) {
                         Button(action: {
-                            albumName = searchText
+                            albumName = viewModel.queryText
                             showSaveAlbum = true
                         }) {
                             Image(systemName: "folder.badge.plus")
@@ -230,7 +230,7 @@ struct SearchView: View {
                 } else {
                     SearchResultsViewer(
                         initialResult: result,
-                        allResults: currentDisplayedResults.filter { !$0.isVideo },
+                        allResults: viewModel.currentDisplayedResults.filter { !$0.isVideo },
                         searchEngine: searchEngine
                     )
                 }
@@ -241,8 +241,8 @@ struct SearchView: View {
             .alert("Save as Smart Album", isPresented: $showSaveAlbum) {
                 TextField("Album name", text: $albumName)
                 Button("Save") {
-                    if !albumName.isEmpty && !searchText.isEmpty {
-                        SmartAlbumStore.add(name: albumName, query: searchText)
+                    if !albumName.isEmpty && !viewModel.queryText.isEmpty {
+                        SmartAlbumStore.add(name: albumName, query: viewModel.queryText)
                         smartAlbums = SmartAlbumStore.load()
                         albumName = ""
                     }
@@ -252,6 +252,7 @@ struct SearchView: View {
                 Text("This album will auto-update when new matching photos are indexed.")
             }
             .onAppear {
+                viewModel.setSortMode(rawValue: sortModeRaw)
                 if indexingService.isReady {
                     startPlaceholderRotation()
                 }
@@ -259,9 +260,8 @@ struct SearchView: View {
             .task {
                 // Load DB-backed data off the main thread's critical path so
                 // the search bar is tappable immediately on appear.
-                let history = SearchHistory.load()
                 let albums = SmartAlbumStore.load()
-                searchHistory = history
+                viewModel.loadSearchHistory()
                 smartAlbums = albums
 
                 let count = await Task.detached {
@@ -271,6 +271,9 @@ struct SearchView: View {
             }
             .onDisappear {
                 placeholderTimer?.cancel()
+            }
+            .onChange(of: sortModeRaw) { _, newValue in
+                viewModel.setSortMode(rawValue: newValue)
             }
             .onChange(of: indexingService.isReady) { oldValue, newValue in
                 #if DEBUG
@@ -282,13 +285,13 @@ struct SearchView: View {
             }
             .onChange(of: indexingService.indexVersion) { oldValue, newValue in
                 #if DEBUG
-                logger.info("[SearchView] indexVersion changed \(oldValue) -> \(newValue); activeSearchID=\(activeSearchID.map(String.init) ?? "nil"), results=\(results.count), lastResults=\(lastResults.count), searchText='\(searchText)'")
+                logger.info("[SearchView] indexVersion changed \(oldValue) -> \(newValue); activeSearchID=\(viewModel.activeSearchID.map(String.init) ?? "nil"), results=\(viewModel.results.count), lastResults=\(viewModel.lastResults.count), searchText='\(viewModel.queryText)'")
                 #endif
                 // SearchEngine snapshots under lock, so an in-flight submitted
                 // search can safely finish against its snapshot. Do not clear
                 // visible results here: background enrichment/reloads can advance
                 // indexVersion without invalidating the user's current UI.
-                validateVisibleResults(reason: "indexVersion changed")
+                viewModel.handleIndexVersionChange()
             }
             .onChange(of: scenePhase) {
                 if scenePhase == .active {
@@ -306,7 +309,7 @@ struct SearchView: View {
                         }
                     }
 
-                    validateVisibleResults(reason: "foreground return")
+                    viewModel.validateVisibleResults(reason: "foreground return")
                 }
             }
         }
@@ -319,32 +322,18 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
                 .accessibilityHidden(true)
-            TextField(searchPlaceholder, text: $searchText)
+            TextField(searchPlaceholder, text: Binding(
+                get: { viewModel.queryText },
+                set: { viewModel.setQueryText($0) }
+            ))
                 .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurface)
-                .onChange(of: searchText) { _, newValue in
-                    if normalizedSearchQuery(newValue).isEmpty {
-                        #if DEBUG
-                        logger.info("[SearchView] Clearing search state because searchText is empty")
-                        #endif
-                        cancelActiveSearch(reason: "searchText cleared")
-                        results = []
-                        fallbackResults = []
-                        filterSummary = nil
-                        searchError = nil
-                        lastSearchedQuery = nil
-                        lastResults = []
-                        isSearching = false
-                        activeSearchID = nil
-                        searchTask = nil
-                    }
-                }
                 .onSubmit {
                     performSearch(saveToHistory: true)
                 }
                 .accessibilityLabel("Search photos")
-            if !searchText.isEmpty {
-                Button(action: { searchText = ""; results = []; searchError = nil; lastSearchedQuery = nil }) {
+            if !viewModel.queryText.isEmpty {
+                Button(action: { viewModel.setQueryText("") }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(Celestial.Colors.outlineVariant)
                 }
@@ -353,7 +342,7 @@ struct SearchView: View {
             if indexingService.isReady {
                 Button(action: {
                     let surprise = SurpriseQueries.random()
-                    searchText = surprise
+                    viewModel.setQueryText(surprise)
                     performSearch()
                 }) {
                     Image(systemName: "sparkles")
@@ -365,7 +354,7 @@ struct SearchView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .modifier(GlassSearchBarModifier())
-        .opacity(searchEngine.isIndexLoaded || !searchText.isEmpty ? 1.0 : 0.85)
+        .opacity(searchEngine.isIndexLoaded || !viewModel.queryText.isEmpty ? 1.0 : 0.85)
     }
 
     private var searchPlaceholder: String {
@@ -401,8 +390,7 @@ struct SearchView: View {
             .font(.subheadline.weight(.medium))
             .foregroundStyle(Celestial.Colors.primary)
             Button {
-                upgradeBannerDismissed = true
-                searchesSinceDismiss = 0
+                viewModel.dismissUpgradeBanner()
             } label: {
                 Image(systemName: "xmark")
                     .font(.caption)
@@ -425,7 +413,7 @@ struct SearchView: View {
             if !smartAlbums.isEmpty {
                 smartAlbumsView
             }
-            if !searchHistory.isEmpty {
+            if !viewModel.searchHistory.isEmpty {
                 searchHistoryView
             }
             if indexingService.hitFreeLimit && totalLibraryCount > searchEngine.totalSize {
@@ -505,7 +493,7 @@ struct SearchView: View {
 
             ForEach(Array(smartAlbums.enumerated()), id: \.element.id) { index, album in
                 Button {
-                    searchText = album.query
+                    viewModel.setQueryText(album.query)
                     performSearch(saveToHistory: true)
                 } label: {
                     HStack(spacing: 12) {
@@ -558,10 +546,7 @@ struct SearchView: View {
                     .foregroundStyle(Celestial.Colors.amber)
                 Spacer()
                 Button("Clear All") {
-                    SearchHistory.clear()
-                    searchHistory = []
-                    lastResults = []
-                    lastQuery = ""
+                    viewModel.clearSearchHistory()
                 }
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
@@ -570,9 +555,9 @@ struct SearchView: View {
             .padding(.top, 16)
             .padding(.bottom, 12)
 
-            ForEach(Array(searchHistory.enumerated()), id: \.offset) { index, query in
+            ForEach(Array(viewModel.searchHistory.enumerated()), id: \.offset) { index, query in
                 Button {
-                    searchText = query
+                    viewModel.setQueryText(query)
                     performSearch(saveToHistory: true)
                 } label: {
                     HStack(spacing: 12) {
@@ -592,14 +577,13 @@ struct SearchView: View {
                 }
                 .contextMenu {
                     Button(role: .destructive) {
-                        SearchHistory.remove(at: index)
-                        searchHistory = SearchHistory.load()
+                        viewModel.removeSearchHistory(at: index)
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }
                 }
 
-                if index < searchHistory.count - 1 {
+                if index < viewModel.searchHistory.count - 1 {
                     Divider()
                         .background(Celestial.Colors.outlineVariant.opacity(0.2))
                         .padding(.leading, 48)
@@ -616,13 +600,12 @@ struct SearchView: View {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.footnote)
                     .foregroundStyle(Celestial.Colors.tertiaryDim)
-                Text("Results for \"\(lastQuery)\"")
+                Text("Results for \"\(viewModel.lastQuery)\"")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 Spacer()
                 Button("Dismiss") {
-                    lastResults = []
-                    lastQuery = ""
+                    viewModel.dismissLastResults()
                 }
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
@@ -630,7 +613,7 @@ struct SearchView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
 
-            resultsGrid(results: lastResults)
+            resultsGrid(results: viewModel.lastResults)
         }
     }
 
@@ -677,7 +660,7 @@ struct SearchView: View {
                 .foregroundStyle(Celestial.Colors.outlineVariant)
                 .accessibilityHidden(true)
 
-            if let summary = filterSummary {
+            if let summary = viewModel.filterSummary {
                 VStack(spacing: 6) {
                     Text("No photos found")
                         .font(.subheadline.weight(.medium))
@@ -693,7 +676,7 @@ struct SearchView: View {
                     }
                 }
 
-                if !fallbackResults.isEmpty {
+                if !viewModel.fallbackResults.isEmpty {
                     VStack(spacing: 10) {
                         HStack {
                             Text(fallbackTitle(summary: summary))
@@ -706,7 +689,7 @@ struct SearchView: View {
 
                         let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
                         LazyVGrid(columns: columns, spacing: 8) {
-                            ForEach(fallbackResults) { result in
+                            ForEach(viewModel.fallbackResults) { result in
                                 FallbackThumbnail(result: result)
                                     .onTapGesture {
                                         if result.isVideo {
@@ -714,8 +697,8 @@ struct SearchView: View {
                                                 presentVideoPlayer(for: asset)
                                             }
                                         } else {
-                                            // Use fallbackResults for the viewer since main results are empty
-                                            lastResults = fallbackResults.filter { !$0.isVideo }
+                                            // Use fallback results for the viewer since main results are empty.
+                                            viewModel.useFallbackResultsForViewer()
                                             selectedPhoto = result
                                         }
                                     }
@@ -786,7 +769,7 @@ struct SearchView: View {
                 Button(action: {
                     Haptics.medium()
                     let surprise = SurpriseQueries.random()
-                    searchText = surprise
+                    viewModel.setQueryText(surprise)
                     performSearch()
                 }) {
                     Label("Surprise Me", systemImage: "sparkles")
@@ -843,23 +826,10 @@ struct SearchView: View {
 
     // MARK: - Results Grid (Masonry Layout)
 
-    private func applyMediaFilter(_ input: [SearchResult]) -> [SearchResult] {
-        switch mediaFilter {
-        case .all:
-            return input
-        case .photos:
-            return input.filter { !$0.isVideo && !screenshotIds.contains($0.id) }
-        case .videos:
-            return input.filter { $0.isVideo }
-        case .screenshots:
-            return input.filter { screenshotIds.contains($0.id) }
-        }
-    }
-
     private func controlsPanel(filteredCount: Int) -> some View {
         VStack(spacing: 0) {
             // Location fallback banner
-            if let summary = filterSummary {
+            if let summary = viewModel.filterSummary {
                 HStack(spacing: 6) {
                     Image(systemName: "mappin.circle.fill")
                         .font(.footnote)
@@ -874,7 +844,7 @@ struct SearchView: View {
             }
 
             // Upgrade banner for free tier (after first successful search)
-            if !proManager.isPro && indexingService.hitFreeLimit && hasCompletedFirstSearch && !upgradeBannerDismissed {
+            if !proManager.isPro && indexingService.hitFreeLimit && viewModel.hasCompletedFirstSearch && !viewModel.upgradeBannerDismissed {
                 upgradeBanner
                     .padding(.bottom, 10)
             }
@@ -884,18 +854,21 @@ struct SearchView: View {
                 Text("\(filteredCount) \(filteredCount == 1 ? "result" : "results")")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                if searchTimeMs > 0 {
-                    Text("in \(searchTimeMs)ms")
+                if viewModel.searchTimeMs > 0 {
+                    Text("in \(viewModel.searchTimeMs)ms")
                         .font(.caption)
                         .foregroundStyle(Celestial.Colors.outline)
                 }
                 Spacer()
                 Picker("Sort", selection: Binding(
-                    get: { sortMode },
-                    set: { sortModeRaw = $0.rawValue }
+                    get: { viewModel.sortMode },
+                    set: {
+                        viewModel.selectSortMode($0)
+                        sortModeRaw = $0.rawValue
+                    }
                 )) {
-                    Text("Relevance").tag(SortMode.relevance)
-                    Text("Recent").tag(SortMode.recent)
+                    Text("Relevance").tag(SearchSortMode.relevance)
+                    Text("Recent").tag(SearchSortMode.recent)
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 180)
@@ -906,12 +879,11 @@ struct SearchView: View {
             // Media filter chips
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(MediaFilter.allCases, id: \.self) { filter in
-                        let isActive = mediaFilter == filter
+                    ForEach(SearchMediaFilter.allCases, id: \.self) { filter in
+                        let isActive = viewModel.mediaFilter == filter
                         Button {
                             Haptics.selection()
-                            mediaFilter = filter
-                            visibleCount = initialVisibleCount
+                            viewModel.setMediaFilter(filter)
                         } label: {
                             Text(filter.label)
                                 .font(.caption.weight(.medium))
@@ -932,13 +904,15 @@ struct SearchView: View {
         .padding(.bottom, 10)
     }
 
-    private func resultsGrid(results: [SearchResult]) -> some View {
-        let sorted = applySort(results, mode: sortMode)
-        let filtered = applyMediaFilter(sorted)
-        let visible = Array(filtered.prefix(visibleCount))
+    private func resultsGrid(
+        results: [SearchResult],
+        filteredResults: [SearchResult]? = nil
+    ) -> some View {
+        let filtered = filteredResults ?? viewModel.filteredResults(results)
+        let visible = Array(filtered.prefix(viewModel.visibleCount))
         let hasMore = filtered.count > visible.count
         return VStack(alignment: .leading, spacing: 0) {
-            if sortMode == .recent {
+            if viewModel.sortMode == .recent {
                 let groups = ResultGrouper.groupByMonth(results: visible)
                 ForEach(groups) { group in
                     HStack {
@@ -967,7 +941,7 @@ struct SearchView: View {
             if hasMore {
                 Button {
                     Haptics.light()
-                    visibleCount = filtered.count
+                    viewModel.showAllResults(count: filtered.count)
                 } label: {
                     Text("Show all \(filtered.count) matching results")
                         .font(.subheadline.weight(.semibold))
@@ -990,17 +964,6 @@ struct SearchView: View {
         }
     }
 
-    private func applySort(_ input: [SearchResult], mode: SortMode) -> [SearchResult] {
-        switch mode {
-        case .relevance:
-            return input
-        case .recent:
-            return input.sorted {
-                ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast)
-            }
-        }
-    }
-
     private func masonryGrid(results: [SearchResult]) -> some View {
         MasonryGrid(results) { result in
             resultTile(result: result)
@@ -1014,9 +977,7 @@ struct SearchView: View {
                 if proManager.isPro {
                     Button {
                         let similar = searchEngine.findSimilar(photoId: result.id)
-                        self.results = similar
-                        searchText = "Similar to selected photo"
-                        lastSearchedQuery = "Similar to selected photo"
+                        viewModel.applySimilarResults(similar)
                     } label: {
                         Label("Find Similar", systemImage: "sparkle.magnifyingglass")
                     }
@@ -1048,53 +1009,6 @@ struct SearchView: View {
         }
     }
 
-    private func validateVisibleResults(reason: String) {
-        let currentResults = results
-        let currentLast = lastResults
-        guard !currentResults.isEmpty || !currentLast.isEmpty else {
-            #if DEBUG
-            logger.info("[SearchView] visible-result validation skipped reason='\(reason)' because no visible results exist")
-            #endif
-            return
-        }
-
-        let resultIds = Set(currentResults.map(\.id))
-        let lastResultIds = Set(currentLast.map(\.id))
-        let candidates = currentResults + currentLast
-
-        // Run off the main thread because each getAsset call is a synchronous
-        // PHFetchRequest. With many results this can otherwise block the UI.
-        Task.detached {
-            let validIds = Set(
-                candidates
-                    .filter { PhotoLibrary.getAsset(by: $0.localIdentifier) != nil }
-                    .map(\.id)
-            )
-            await MainActor.run { [self] in
-                guard Set(results.map(\.id)) == resultIds, Set(lastResults.map(\.id)) == lastResultIds else {
-                    #if DEBUG
-                    logger.info("[SearchView] visible-result validation skipped reason='\(reason)' because results changed")
-                    #endif
-                    return
-                }
-
-                let updatedResults = currentResults.filter { validIds.contains($0.id) }
-                let updatedLast = currentLast.filter { validIds.contains($0.id) }
-                if updatedResults.count != currentResults.count || updatedLast.count != currentLast.count {
-                    #if DEBUG
-                    logger.info("[SearchView] visible-result validation removed stale assets reason='\(reason)' results \(currentResults.count) -> \(updatedResults.count), last \(currentLast.count) -> \(updatedLast.count)")
-                    #endif
-                    results = updatedResults
-                    lastResults = updatedLast
-                } else {
-                    #if DEBUG
-                    logger.info("[SearchView] visible-result validation kept all assets reason='\(reason)' count=\(candidates.count)")
-                    #endif
-                }
-            }
-        }
-    }
-
     private func startPlaceholderRotation() {
         placeholderTimer?.cancel()
         placeholderIndex = Int.random(in: 0..<Self.placeholders.count)
@@ -1102,7 +1016,7 @@ struct SearchView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
                 if Task.isCancelled { break }
-                if searchText.isEmpty {
+                if viewModel.queryText.isEmpty {
                     withAnimation(.easeInOut(duration: 0.3)) {
                         placeholderIndex = (placeholderIndex + 1) % Self.placeholders.count
                     }
@@ -1128,163 +1042,9 @@ struct SearchView: View {
     }
 
     private func performSearch(saveToHistory: Bool = false) {
-        let submittedText = searchText
-        let query = normalizedSearchQuery(submittedText)
-        guard !query.isEmpty else { return }
+        guard !viewModel.normalizedQuery.isEmpty else { return }
         Haptics.light()
-        // Cancel any previous search so stale results can't land on top of
-        // the new one (race condition when the user types quickly or when
-        // the index is rebuilt mid-query).
-        cancelActiveSearch(reason: "new search submitted")
-        isSearching = true
-        searchError = nil
-        visibleCount = initialVisibleCount
-        searchSequence += 1
-        let searchID = searchSequence
-        activeSearchID = searchID
-        let startTime = CFAbsoluteTimeGetCurrent()
-
-        searchTask = Task {
-            do {
-                #if DEBUG
-                logger.info("[SearchView #\(searchID)] start saveToHistory=\(saveToHistory) isReady=\(indexingService.isReady) indexLoaded=\(searchEngine.isIndexLoaded) indexVersion=\(indexingService.indexVersion) semanticReady=\(semanticRuntime.readiness.isSemanticSearchReady) progressRunning=\(indexingService.progress.isRunning)")
-                #endif
-                defer {
-                    #if DEBUG
-                    logger.info("[SearchView #\(searchID)] finish; activeSearchID=\(activeSearchID.map(String.init) ?? "nil"), results=\(results.count), fallback=\(fallbackResults.count), lastSearched='\(lastSearchedQuery ?? "nil")'")
-                    #endif
-                    if activeSearchID == searchID {
-                        isSearching = false
-                        activeSearchID = nil
-                        searchTask = nil
-                    }
-                }
-                indexingService.deferEnrichmentForUserSearch()
-                if !semanticRuntime.readiness.isSemanticSearchReady || !indexingService.isReady {
-                    #if DEBUG
-                    logger.info("[SearchView #\(searchID)] preparing semantic search; semanticReady=\(semanticRuntime.readiness.isSemanticSearchReady) isReady=\(indexingService.isReady)")
-                    #endif
-                    try await semanticRuntime.prepareForSearch()
-                    #if DEBUG
-                    logger.info("[SearchView #\(searchID)] semantic prepare complete; semanticReady=\(semanticRuntime.readiness.isSemanticSearchReady) isReady=\(indexingService.isReady) indexLoaded=\(searchEngine.isIndexLoaded)")
-                    #endif
-                }
-                guard indexingService.isReady || searchEngine.isIndexLoaded else {
-                    #if DEBUG
-                    logger.info("[SearchView #\(searchID)] abort: index unavailable after prepare; isReady=\(indexingService.isReady) indexLoaded=\(searchEngine.isIndexLoaded)")
-                    #endif
-                    if activeSearchID == searchID {
-                        searchError = "Index your photos before searching."
-                    }
-                    return
-                }
-                guard activeSearchID == searchID else {
-                    #if DEBUG
-                    logger.info("[SearchView #\(searchID)] abort before engine: superseded by activeSearchID=\(activeSearchID.map(String.init) ?? "nil")")
-                    #endif
-                    return
-                }
-                #if DEBUG
-                logger.info("[SearchView #\(searchID)] calling SearchEngine.search")
-                #endif
-                let response = try await searchEngine.search(query: query)
-                #if DEBUG
-                logger.info("[SearchView #\(searchID)] engine returned main=\(response.results.count) fallback=\(response.fallbackResults.count) filters=\(response.filtersApplied != nil)")
-                #endif
-                if Task.isCancelled || activeSearchID != searchID {
-                    #if DEBUG
-                    logger.info("[SearchView #\(searchID)] abort after engine: canceledOrSuperseded taskCancelled=\(Task.isCancelled), activeSearchID=\(activeSearchID.map(String.init) ?? "nil")")
-                    #endif
-                    return
-                }
-                results = response.results
-                lastSearchedQuery = query
-                fallbackResults = response.fallbackResults
-                filterSummary = response.filtersApplied
-                mediaFilter = .all
-                searchTimeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
-                #if DEBUG
-                let first = response.results.first
-                logger.info("[SearchView #\(searchID)] applied response: results=\(results.count), fallback=\(fallbackResults.count), firstId=\(first?.localIdentifier ?? "nil"), firstIsVideo=\(first?.isVideo ?? false), mediaFilter=\(mediaFilter.rawValue), searchTimeMs=\(searchTimeMs)")
-                #endif
-
-                // Detect screenshots in background for the media filter
-                let resultIDs = Set(response.results.map(\.id))
-                let photoResults = response.results.filter { !$0.isVideo }
-                Task.detached {
-                    #if DEBUG
-                    logger.info("[SearchView #\(searchID)] screenshot detection started for photoResults=\(photoResults.count)")
-                    #endif
-                    let detected = Set(
-                        photoResults.compactMap { r -> String? in
-                            guard let asset = PhotoLibrary.getAsset(by: r.localIdentifier),
-                                  asset.mediaSubtypes.contains(.photoScreenshot) else { return nil }
-                            return r.id
-                        }
-                    )
-                    await MainActor.run {
-                        guard Set(results.map(\.id)) == resultIDs else {
-                            #if DEBUG
-                            logger.info("[SearchView #\(searchID)] screenshot detection skipped because visible results changed")
-                            #endif
-                            return
-                        }
-                        #if DEBUG
-                        logger.info("[SearchView #\(searchID)] screenshot detection applied count=\(detected.count)")
-                        #endif
-                        screenshotIds = detected
-                    }
-                }
-
-                #if DEBUG
-                logger.info("[SearchView #\(searchID)] \(response.results.count) results in \(searchTimeMs)ms")
-                #endif
-
-                if !response.results.isEmpty {
-                    if saveToHistory {
-                        SearchHistory.add(query: query)
-                        searchHistory = SearchHistory.load()
-                    }
-                    lastQuery = query
-                    lastResults = response.results
-
-                    // Track searches for free tier upgrade banner
-                    if !hasCompletedFirstSearch {
-                        hasCompletedFirstSearch = true
-                    }
-                    if upgradeBannerDismissed {
-                        searchesSinceDismiss += 1
-                        if searchesSinceDismiss >= 5 {
-                            upgradeBannerDismissed = false
-                            searchesSinceDismiss = 0
-                        }
-                    }
-                }
-            } catch {
-                logger.error("[SearchView #\(searchID)] Search failed: \(error.localizedDescription)")
-                if activeSearchID == searchID {
-                    searchError = "Search failed: \(error.localizedDescription)"
-                    results = []
-                }
-            }
-        }
-    }
-
-    private func normalizedSearchQuery(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func cancelActiveSearch(reason: String) {
-        guard let task = searchTask else {
-            #if DEBUG
-            logger.info("[SearchView] cancel skipped reason='\(reason)' activeSearchID=\(activeSearchID.map(String.init) ?? "nil")")
-            #endif
-            return
-        }
-        #if DEBUG
-        logger.info("[SearchView] cancel searchTask reason='\(reason)' activeSearchID=\(activeSearchID.map(String.init) ?? "nil") isSearching=\(isSearching) indexVersion=\(indexingService.indexVersion)")
-        #endif
-        task.cancel()
+        viewModel.submitSearch(saveToHistory: saveToHistory)
     }
 
 }
