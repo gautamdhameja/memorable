@@ -68,10 +68,13 @@ final class DatabaseTests: XCTestCase {
             openQueue: { try DatabaseQueue() },
             migrate: { try AppDatabase.migrator.migrate($0) }
         )
-        try database.insertPhotos([
-            makePhoto(localIdentifier: "photo-1"),
-            makePhoto(localIdentifier: "photo-2")
-        ])
+        try database.insertPhotos(
+            [
+                makePhoto(localIdentifier: "photo-1"),
+                makePhoto(localIdentifier: "photo-2")
+            ],
+            completingRequiredRebuild: false
+        )
 
         try database.updatePhotoEnrichment([
             PhotoEnrichmentUpdate(
@@ -236,6 +239,18 @@ final class DatabaseTests: XCTestCase {
         XCTAssertFalse(try database.indexRebuildRequired())
     }
 
+    func testAlreadyMigratedEmptyDatabaseDoesNotRequireIndexRebuild() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue)
+
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+
+        XCTAssertFalse(try database.indexRebuildRequired())
+    }
+
     func testOrientationWipeRecordsRequiredIndexRebuild() throws {
         let queue = try DatabaseQueue()
         try AppDatabase.migrator.migrate(queue, upTo: "v2-siglip2-model-swap")
@@ -249,6 +264,58 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(try database.indexedCount(), 0)
         XCTAssertTrue(try database.indexRebuildRequired())
         try database.clearIndexRebuildRequired()
+        XCTAssertFalse(try database.indexRebuildRequired())
+    }
+
+    func testFirstPhotoBatchAfterRebuildWipeClearsRequirement() throws {
+        let database = try makeDatabaseRequiringRebuild()
+
+        let completedRebuild = try database.insertPhotos(
+            [makePhoto(localIdentifier: "rebuilt-photo")],
+            completingRequiredRebuild: true
+        )
+
+        XCTAssertTrue(completedRebuild)
+        XCTAssertEqual(try database.indexedCount(), 1)
+        XCTAssertFalse(try database.indexRebuildRequired())
+    }
+
+    func testFirstVideoFrameBatchAfterRebuildWipeClearsRequirement() throws {
+        let database = try makeDatabaseRequiringRebuild()
+        let video = makeVideo(localIdentifier: "rebuilt-video")
+
+        let completedRebuild = try database.insertVideo(
+            video,
+            [
+                IndexedVideoFrame(
+                    id: UUID().uuidString,
+                    videoId: video.id,
+                    framePosition: 0.5,
+                    embedding: floatVector(first: 1).toFloat16Data(),
+                    indexedAt: Date(timeIntervalSince1970: 200)
+                )
+            ],
+            completingRequiredRebuild: true
+        )
+
+        XCTAssertTrue(completedRebuild)
+        XCTAssertEqual(try database.videoIndexedCount(), 1)
+        XCTAssertFalse(try database.indexRebuildRequired())
+    }
+
+    func testMigrationRemovesVideoRecordsWithoutFrames() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v7-index-rebuild-state")
+        try queue.write { db in
+            try makeVideo(localIdentifier: "incomplete-video").insert(db)
+        }
+
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+
+        XCTAssertEqual(try database.videoIndexedCount(), 0)
         XCTAssertFalse(try database.indexRebuildRequired())
     }
 
@@ -284,10 +351,40 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(try database.indexRebuildRequired())
     }
 
+    func testNewBatchDoesNotClearRequirementWhileOldEmbeddingsRemain() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue)
+        try queue.write { db in
+            try makePhoto(localIdentifier: "flipped-photo").insert(db)
+        }
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+
+        try database.insertPhotos(
+            [makePhoto(localIdentifier: "new-photo")],
+            completingRequiredRebuild: true
+        )
+
+        XCTAssertEqual(try database.indexedCount(), 2)
+        XCTAssertTrue(try database.indexRebuildRequired())
+    }
+
 }
 
 private enum StubMigrationError: Error {
     case failed
+}
+
+private func makeDatabaseRequiringRebuild() throws -> AppDatabase {
+    let queue = try DatabaseQueue()
+    try AppDatabase.migrator.migrate(queue, upTo: "v2-siglip2-model-swap")
+    try insertLegacyPhoto(localIdentifier: "pre-orientation-photo", into: queue)
+    return AppDatabase(
+        openQueue: { queue },
+        migrate: { try AppDatabase.migrator.migrate($0) }
+    )
 }
 
 private func insertLegacyPhoto(localIdentifier: String, into queue: DatabaseQueue) throws {
@@ -327,5 +424,20 @@ private func makePhoto(
         indexedAt: Date(timeIntervalSince1970: 200),
         sourceId: sourceId,
         filePath: filePath
+    )
+}
+
+private func makeVideo(localIdentifier: String) -> IndexedVideo {
+    IndexedVideo(
+        id: UUID().uuidString,
+        localIdentifier: localIdentifier,
+        creationDate: Date(timeIntervalSince1970: 100),
+        latitude: nil,
+        longitude: nil,
+        duration: 10,
+        pixelWidth: 1920,
+        pixelHeight: 1080,
+        frameCount: 1,
+        indexedAt: Date(timeIntervalSince1970: 200)
     )
 }

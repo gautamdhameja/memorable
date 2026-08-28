@@ -25,7 +25,12 @@ typealias VideoEmbeddingIndex = (videoIds: [String], localIdentifiers: [String],
 protocol DatabaseProtocol {
     // Photos
     func insertPhoto(_ photo: IndexedPhoto) throws
-    func insertPhotos(_ photos: [IndexedPhoto]) throws
+    /// Returns true when the write atomically completes a pending required rebuild.
+    @discardableResult
+    func insertPhotos(
+        _ photos: [IndexedPhoto],
+        completingRequiredRebuild: Bool
+    ) throws -> Bool
     func isIndexed(localIdentifier: String) throws -> Bool
     func allIndexedIdentifiers() throws -> Set<String>
     func allIndexedFilePaths() throws -> Set<String>
@@ -42,8 +47,14 @@ protocol DatabaseProtocol {
     func clearIndexRebuildRequired() throws
 
     // Videos
-    func insertVideo(_ video: IndexedVideo) throws
-    func insertVideoFrames(_ frames: [IndexedVideoFrame]) throws
+    /// Persists video metadata and frames together. Returns true when the write
+    /// atomically completes a pending required rebuild.
+    @discardableResult
+    func insertVideo(
+        _ video: IndexedVideo,
+        _ frames: [IndexedVideoFrame],
+        completingRequiredRebuild: Bool
+    ) throws -> Bool
     func isVideoIndexed(localIdentifier: String) throws -> Bool
     func videoIndexedCount() throws -> Int
     func allIndexedVideoIdentifiers() throws -> Set<String>
@@ -195,7 +206,9 @@ class AppDatabase: DatabaseProtocol {
             )
             guard storedVersion != currentEmbeddingFormatVersion else { return }
 
-            if orientationMigrationWasAlreadyApplied || legacyRebuildRequired {
+            let existingEmbeddingCount = try embeddingCount(in: db)
+            if existingEmbeddingCount > 0
+                && (orientationMigrationWasAlreadyApplied || legacyRebuildRequired) {
                 try setAppState(indexRebuildStateKey, value: "true", in: db)
             }
             try setAppState(
@@ -225,6 +238,30 @@ class AppDatabase: DatabaseProtocol {
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """,
             arguments: [key, value]
+        )
+    }
+
+    private static func embeddingCount(in db: Database) throws -> Int {
+        (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM indexed_photos") ?? 0)
+            + (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM indexed_video_frames") ?? 0)
+    }
+
+    private static func shouldCompleteRequiredRebuildOnNextEmbeddingWrite(
+        in db: Database
+    ) throws -> Bool {
+        let rebuildRequired = try String.fetchOne(
+            db,
+            sql: "SELECT value FROM app_state WHERE key = ?",
+            arguments: [indexRebuildStateKey]
+        ) == "true"
+        guard rebuildRequired else { return false }
+        return try embeddingCount(in: db) == 0
+    }
+
+    private static func clearIndexRebuildRequired(in db: Database) throws {
+        try db.execute(
+            sql: "DELETE FROM app_state WHERE key = ?",
+            arguments: [indexRebuildStateKey]
         )
     }
 
@@ -376,6 +413,21 @@ class AppDatabase: DatabaseProtocol {
             try createAppStateTableIfNeeded(db)
         }
 
+        // Older indexing wrote video metadata before its frames. If the app
+        // stopped between those writes, the metadata row made later passes
+        // skip a video that had no searchable embedding.
+        migrator.registerMigration("v8-remove-incomplete-videos") { db in
+            try db.execute(
+                sql: """
+                    DELETE FROM indexed_videos
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM indexed_video_frames
+                        WHERE indexed_video_frames.videoId = indexed_videos.id
+                    )
+                """
+            )
+        }
+
         return migrator
     }
 
@@ -387,11 +439,26 @@ class AppDatabase: DatabaseProtocol {
         }
     }
 
-    func insertPhotos(_ photos: [IndexedPhoto]) throws {
-        try dbQueue.write { db in
+    @discardableResult
+    func insertPhotos(
+        _ photos: [IndexedPhoto],
+        completingRequiredRebuild: Bool
+    ) throws -> Bool {
+        guard !photos.isEmpty else { return false }
+        return try dbQueue.write { db in
+            var completesRequiredRebuild = false
+            if completingRequiredRebuild {
+                completesRequiredRebuild = try Self.shouldCompleteRequiredRebuildOnNextEmbeddingWrite(
+                    in: db
+                )
+            }
             for photo in photos {
                 try photo.insert(db, onConflict: .ignore)
             }
+            if completesRequiredRebuild {
+                try Self.clearIndexRebuildRequired(in: db)
+            }
+            return completesRequiredRebuild
         }
     }
 
@@ -573,10 +640,7 @@ class AppDatabase: DatabaseProtocol {
     func clearIndexRebuildRequired() throws {
         try dbQueue.write { db in
             guard try db.tableExists("app_state") else { return }
-            try db.execute(
-                sql: "DELETE FROM app_state WHERE key = ?",
-                arguments: [Self.indexRebuildStateKey]
-            )
+            try Self.clearIndexRebuildRequired(in: db)
         }
     }
 
@@ -612,10 +676,6 @@ class AppDatabase: DatabaseProtocol {
     }
 
     // MARK: - Videos
-
-    func insertVideo(_ video: IndexedVideo) throws {
-        try dbQueue.write { db in try video.insert(db) }
-    }
 
     func isVideoIndexed(localIdentifier: String) throws -> Bool {
         try dbQueue.read { db in
@@ -717,9 +777,26 @@ class AppDatabase: DatabaseProtocol {
         }
     }
 
-    func insertVideoFrames(_ frames: [IndexedVideoFrame]) throws {
-        try dbQueue.write { db in
+    @discardableResult
+    func insertVideo(
+        _ video: IndexedVideo,
+        _ frames: [IndexedVideoFrame],
+        completingRequiredRebuild: Bool
+    ) throws -> Bool {
+        guard !frames.isEmpty else { return false }
+        return try dbQueue.write { db in
+            var completesRequiredRebuild = false
+            if completingRequiredRebuild {
+                completesRequiredRebuild = try Self.shouldCompleteRequiredRebuildOnNextEmbeddingWrite(
+                    in: db
+                )
+            }
+            try video.insert(db)
             for frame in frames { try frame.insert(db) }
+            if completesRequiredRebuild {
+                try Self.clearIndexRebuildRequired(in: db)
+            }
+            return completesRequiredRebuild
         }
     }
 

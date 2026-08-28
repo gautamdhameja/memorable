@@ -359,7 +359,10 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     }
 
     func insertPhoto(_ photo: IndexedPhoto) throws {}
-    func insertPhotos(_ photos: [IndexedPhoto]) throws {}
+    func insertPhotos(
+        _ photos: [IndexedPhoto],
+        completingRequiredRebuild: Bool
+    ) throws -> Bool { false }
     func isIndexed(localIdentifier: String) throws -> Bool { false }
     func allIndexedIdentifiers() throws -> Set<String> { [] }
     func allIndexedFilePaths() throws -> Set<String> { [] }
@@ -372,8 +375,11 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func updatePhotoEnrichment(_ updates: [PhotoEnrichmentUpdate]) throws {}
     func indexRebuildRequired() throws -> Bool { false }
     func clearIndexRebuildRequired() throws {}
-    func insertVideo(_ video: IndexedVideo) throws {}
-    func insertVideoFrames(_ frames: [IndexedVideoFrame]) throws {}
+    func insertVideo(
+        _ video: IndexedVideo,
+        _ frames: [IndexedVideoFrame],
+        completingRequiredRebuild: Bool
+    ) throws -> Bool { false }
     func isVideoIndexed(localIdentifier: String) throws -> Bool { false }
     func allIndexedVideoIdentifiers() throws -> Set<String> { [] }
     func deleteOrphanedVideos(localIdentifiers: Set<String>) throws {}

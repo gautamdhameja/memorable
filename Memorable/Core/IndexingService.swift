@@ -259,7 +259,7 @@ class IndexingService: ObservableObject {
             searchEngine.dropIndex()
             isReady = false
             await performIndexing()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, indexRebuildRequired else { return }
 
             do {
                 let db = database
@@ -268,7 +268,7 @@ class IndexingService: ObservableObject {
                 }.value
                 indexRebuildRequired = false
             } catch {
-                logger.error("Failed to clear index rebuild requirement: \(error.localizedDescription)")
+                logger.error("Failed to complete empty index rebuild: \(error.localizedDescription)")
             }
         }
     }
@@ -361,6 +361,41 @@ class IndexingService: ObservableObject {
                 }
             } catch {
                 logger.error("Error checking for photo changes: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func persistPhotoBatch(_ photos: [IndexedPhoto]) async {
+        do {
+            let db = database
+            let shouldCompleteRequiredRebuild = indexRebuildRequired
+            let completedRequiredRebuild = try await Task.detached(priority: .utility) {
+                try db.insertPhotos(
+                    photos,
+                    completingRequiredRebuild: shouldCompleteRequiredRebuild
+                )
+            }.value
+            if completedRequiredRebuild {
+                indexRebuildRequired = false
+            }
+        } catch {
+            logger.error("Failed to insert photo batch: \(error.localizedDescription), retrying individually")
+            for photo in photos {
+                do {
+                    let db = database
+                    let shouldCompleteRequiredRebuild = indexRebuildRequired
+                    let completedRequiredRebuild = try await Task.detached(priority: .utility) {
+                        try db.insertPhotos(
+                            [photo],
+                            completingRequiredRebuild: shouldCompleteRequiredRebuild
+                        )
+                    }.value
+                    if completedRequiredRebuild {
+                        indexRebuildRequired = false
+                    }
+                } catch {
+                    logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -567,24 +602,7 @@ class IndexingService: ObservableObject {
 
             // Flush DB batches (outside encoding try block)
             if batch.count >= batchSize {
-                do {
-                    let db = database
-                    let photosToInsert = batch
-                    try await Task.detached(priority: .utility) {
-                        try db.insertPhotos(photosToInsert)
-                    }.value
-                } catch {
-                    logger.error("Failed to insert photo batch: \(error.localizedDescription), retrying individually")
-                    for photo in batch {
-                        do {
-                            let db = database
-                            try await Task.detached(priority: .utility) {
-                                try db.insertPhotos([photo])
-                            }.value
-                        }
-                        catch { logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)") }
-                    }
-                }
+                await persistPhotoBatch(batch)
                 batch.removeAll(keepingCapacity: true)
                 let checkpoint = await reloadSearchIndexIfNeeded(
                     indexedMediaCount: newlyIndexed,
@@ -602,24 +620,7 @@ class IndexingService: ObservableObject {
         }
 
         if !batch.isEmpty {
-            do {
-                let db = database
-                let photosToInsert = batch
-                try await Task.detached(priority: .utility) {
-                    try db.insertPhotos(photosToInsert)
-                }.value
-            } catch {
-                logger.error("Failed to flush photo batch: \(error.localizedDescription), retrying individually")
-                for photo in batch {
-                    do {
-                        let db = database
-                        try await Task.detached(priority: .utility) {
-                            try db.insertPhotos([photo])
-                        }.value
-                    }
-                    catch { logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)") }
-                }
-            }
+            await persistPhotoBatch(batch)
         }
 
         // Photos done; ensure the final photo checkpoint is searchable.
@@ -654,7 +655,9 @@ class IndexingService: ObservableObject {
                 break
             }
 
-            await indexVideo(asset: asset)
+            if await indexVideo(asset: asset) {
+                indexRebuildRequired = false
+            }
             newlyIndexed += 1
             indexed += 1
             progress.completed = indexed
@@ -790,7 +793,10 @@ class IndexingService: ObservableObject {
                     let db = database
                     let photosToInsert = batch
                     try await Task.detached(priority: .utility) {
-                        try db.insertPhotos(photosToInsert)
+                        _ = try db.insertPhotos(
+                            photosToInsert,
+                            completingRequiredRebuild: false
+                        )
                     }.value
                     batch.removeAll(keepingCapacity: true)
                 }
@@ -808,7 +814,10 @@ class IndexingService: ObservableObject {
                 let db = database
                 let photosToInsert = batch
                 try await Task.detached(priority: .utility) {
-                    try db.insertPhotos(photosToInsert)
+                    _ = try db.insertPhotos(
+                        photosToInsert,
+                        completingRequiredRebuild: false
+                    )
                 }.value
             } catch {
                 logger.error("Failed to flush folder batch: \(error.localizedDescription), retrying individually")
@@ -816,7 +825,10 @@ class IndexingService: ObservableObject {
                     do {
                         let db = database
                         try await Task.detached(priority: .utility) {
-                            try db.insertPhotos([photo])
+                            _ = try db.insertPhotos(
+                                [photo],
+                                completingRequiredRebuild: false
+                            )
                         }.value
                     }
                     catch { logger.error("Failed to insert photo \(photo.localIdentifier): \(error.localizedDescription)") }
@@ -1426,25 +1438,26 @@ class IndexingService: ObservableObject {
 
     // MARK: - Video Indexing
 
-    private func indexVideo(asset: PHAsset) async {
+    /// Returns whether the first persisted video embeddings completed a required rebuild.
+    private func indexVideo(asset: PHAsset) async -> Bool {
         let db = database
         let localIdentifier = asset.localIdentifier
         let alreadyIndexed = await Task.detached(priority: .utility) {
             (try? db.isVideoIndexed(localIdentifier: localIdentifier)) == true
         }.value
-        guard !alreadyIndexed else { return }
+        guard !alreadyIndexed else { return false }
 
-        guard let avAsset = await VideoFrameExtractor.loadAVAsset(from: asset) else { return }
+        guard let avAsset = await VideoFrameExtractor.loadAVAsset(from: asset) else { return false }
 
-        guard let duration = try? await avAsset.load(.duration) else { return }
+        guard let duration = try? await avAsset.load(.duration) else { return false }
         let durationSeconds = CMTimeGetSeconds(duration)
-        guard durationSeconds > 0 else { return }
+        guard durationSeconds > 0 else { return false }
 
         let numFrames = VideoFrameExtractor.frameCount(forDuration: durationSeconds)
         let positions = VideoFrameExtractor.framePositions(count: numFrames)
 
         let frames = await VideoFrameExtractor.extractFrames(from: avAsset, positions: positions)
-        guard !frames.isEmpty else { return }
+        guard !frames.isEmpty else { return false }
 
         // Reverse geocode video location
         let videoId = UUID().uuidString
@@ -1460,16 +1473,6 @@ class IndexingService: ObservableObject {
             frameCount: frames.count,
             indexedAt: Date()
         )
-
-        do {
-            let db = database
-            try await Task.detached(priority: .utility) {
-                try db.insertVideo(video)
-            }.value
-        } catch {
-            logger.error("Failed to insert video record: \(error.localizedDescription)")
-            return
-        }
 
         // Batch-encode all frames at once
         do {
@@ -1495,11 +1498,17 @@ class IndexingService: ObservableObject {
                 ))
             }
             let db = database
-            try await Task.detached(priority: .utility) {
-                try db.insertVideoFrames(frameRecords)
+            let shouldCompleteRequiredRebuild = indexRebuildRequired
+            return try await Task.detached(priority: .utility) {
+                try db.insertVideo(
+                    video,
+                    frameRecords,
+                    completingRequiredRebuild: shouldCompleteRequiredRebuild
+                )
             }.value
         } catch {
-            logger.error("Failed to index video frames: \(error.localizedDescription)")
+            logger.error("Failed to persist indexed video: \(error.localizedDescription)")
+            return false
         }
     }
 }
