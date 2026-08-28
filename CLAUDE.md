@@ -75,6 +75,29 @@ For device testing: set signing team in Xcode → Signing & Capabilities. Change
 
 StoreKit testing: set the StoreKit Configuration file (`Memorable/Store/MemorableProducts.storekit`) in Scheme → Run → Options.
 
+## Pre-merge Safety Gate
+
+Run the required relevance and migration-safety gates before merging:
+
+```bash
+python3 scripts/premerge.py
+```
+
+Any new migration that deletes from `indexed_photos`, `indexed_videos`, or
+`indexed_video_frames` must set the persisted rebuild-required state, retain a
+user-facing rebuild prompt, and receive explicit sign-off. After reviewing the
+data loss and rebuild flow, provide that sign-off with the exact migration ID:
+
+```bash
+MEMORABLE_INDEX_WIPE_SIGNOFF="v9-example-migration" python3 scripts/premerge.py
+```
+
+The sign-off approves only the named migration; it does not bypass the rebuild
+state or prompt checks. Record the reviewed statement in
+`scripts/migration_delete_baseline.json` in the same change. Set
+`MEMORABLE_MIGRATION_BASE` to the target branch when it differs from the current
+branch's upstream.
+
 ## Dependencies
 
 - **GRDB.swift 7.x** -- SQLite database
