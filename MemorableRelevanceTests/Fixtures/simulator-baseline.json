@@ -1,0 +1,313 @@
+{
+  "schemaVersion": 1,
+  "environment": "iOS Simulator, cpuOnly",
+  "datasetRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+  "tolerance": 0.02,
+  "aggregate": {
+    "recallAt10": 0.96,
+    "recallAt50": 0.96,
+    "meanReciprocalRank": 0.853333
+  },
+  "queries": [
+    {
+      "questionId": "000000190236.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 0.5
+    },
+    {
+      "questionId": "000000012667.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000482917.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000289393.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000338325.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000051598.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 0.5
+    },
+    {
+      "questionId": "000000063740.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 0.5
+    },
+    {
+      "questionId": "000000492937.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000232538.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000096549.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 0.25
+    },
+    {
+      "questionId": "000000298396.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000552883.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000127987.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000040471.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000551304.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000103548.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000543047.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000099054.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000489091.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 0.333333
+    },
+    {
+      "questionId": "000000423971.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000026204.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000085576.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000224051.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000147518.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000243204.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000214192.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000360564.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000098520.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000205514.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 0.5
+    },
+    {
+      "questionId": "000000382734.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000170893.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000107087.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000255917.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000021839.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000156071.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000194875.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000243495.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 0.333333
+    },
+    {
+      "questionId": "000000146667.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000458768.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000045229.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000570782.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000520324.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000408112.jpg",
+      "recallAt10": 0.0,
+      "recallAt50": 0.0,
+      "reciprocalRank": 0.0
+    },
+    {
+      "questionId": "000000297578.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000286907.jpg",
+      "recallAt10": 0.0,
+      "recallAt50": 0.0,
+      "reciprocalRank": 0.0
+    },
+    {
+      "questionId": "000000070774.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000015272.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    },
+    {
+      "questionId": "000000462614.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 0.25
+    },
+    {
+      "questionId": "000000208901.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 0.5
+    },
+    {
+      "questionId": "000000074209.jpg",
+      "recallAt10": 1.0,
+      "recallAt50": 1.0,
+      "reciprocalRank": 1.0
+    }
+  ]
+}

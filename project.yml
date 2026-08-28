@@ -67,6 +67,26 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Memorable.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Memorable"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  MemorableRelevanceTests:
+    type: bundle.unit-test
+    platform: iOS
+    configFiles:
+      Debug: Config/Build.xcconfig
+      Release: Config/Build.xcconfig
+    sources:
+      - path: MemorableRelevanceTests
+    resources:
+      - path: MemorableRelevanceTests/Fixtures
+    dependencies:
+      - target: Memorable
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.blockdeep.memorable.relevance-tests
+        SWIFT_VERSION: "5.10"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Memorable.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Memorable"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
   Memorable:
     build:
@@ -81,3 +101,15 @@ schemes:
         - MemorableTests
     archive:
       config: Release
+  MemorableRelevanceTests:
+    build:
+      targets:
+        Memorable: all
+        MemorableRelevanceTests: [test]
+    test:
+      config: Debug
+      targets:
+        - MemorableRelevanceTests
+      environmentVariables:
+        MEMORABLE_RELEVANCE_PERTURBATION: "$(MEMORABLE_RELEVANCE_PERTURBATION)"
+        MEMORABLE_RELEVANCE_SKIP_BASELINE: "$(MEMORABLE_RELEVANCE_SKIP_BASELINE)"

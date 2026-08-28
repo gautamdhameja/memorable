@@ -1,0 +1,713 @@
+{
+  "schemaVersion": 1,
+  "selection": "Dataset Viewer rows 0...49; first existing human answer caption per row",
+  "dataset": {
+    "repository": "LIME-DATA/COCO-Caption2017",
+    "revision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+    "config": "default",
+    "split": "train",
+    "license": "apache-2.0"
+  },
+  "entries": [
+    {
+      "rowIndex": 0,
+      "rowId": 401,
+      "questionId": "000000190236.jpg",
+      "query": "An office cubicle with four different types of computers.",
+      "expectedAssetIds": [
+        "000000190236"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000190236.jpg",
+      "licenseCode": 1,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000190236.jpg",
+      "imageSha256": "a47f287ff7334e4ce328a881d089be450ad7050e59ca199279811c6e13148a90"
+    },
+    {
+      "rowIndex": 1,
+      "rowId": 2960,
+      "questionId": "000000012667.jpg",
+      "query": "The telephone has a banana where the receiver should be.",
+      "expectedAssetIds": [
+        "000000012667"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000012667.jpg",
+      "licenseCode": 4,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000012667.jpg",
+      "imageSha256": "b7ee1f1ebdfb0a3c5d3cf9a746329af5affcb382bfd367bc9e3c814374c3d0df"
+    },
+    {
+      "rowIndex": 2,
+      "rowId": 5509,
+      "questionId": "000000482917.jpg",
+      "query": "A dog sitting between its masters feet on a footstool watching tv\n",
+      "expectedAssetIds": [
+        "000000482917"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000482917.jpg",
+      "licenseCode": 1,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000482917.jpg",
+      "imageSha256": "1aa92f3691fc61feb105e96254cacb76c75d9bf444d2d1342357dcd8ce03f9ed"
+    },
+    {
+      "rowIndex": 3,
+      "rowId": 8242,
+      "questionId": "000000289393.jpg",
+      "query": "Set of toy animals sitting in front of a red wooden wagon.",
+      "expectedAssetIds": [
+        "000000289393"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000289393.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000289393.jpg",
+      "imageSha256": "4a74b66bfcd59b13b94c8eb46bf339622f4935dd50cdce92380f803327ab62ac"
+    },
+    {
+      "rowIndex": 4,
+      "rowId": 9769,
+      "questionId": "000000338325.jpg",
+      "query": "A striped plane flying up into the sky as the sun shines behind it.",
+      "expectedAssetIds": [
+        "000000338325"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000338325.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000338325.jpg",
+      "imageSha256": "12ecb49ce4afc6df380e997f730a03e126c7a38664772c4ab0b29c0b87b2bfc6"
+    },
+    {
+      "rowIndex": 5,
+      "rowId": 12242,
+      "questionId": "000000051598.jpg",
+      "query": "A black trash bag in a restroom next to a sink.",
+      "expectedAssetIds": [
+        "000000051598"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000051598.jpg",
+      "licenseCode": 2,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000051598.jpg",
+      "imageSha256": "bfa81a991a958493c54d7be47d6082ac92a64302716c1e1c7b7be6d6fc0bdded"
+    },
+    {
+      "rowIndex": 6,
+      "rowId": 14472,
+      "questionId": "000000063740.jpg",
+      "query": "Two computers sitting on top of a desk.",
+      "expectedAssetIds": [
+        "000000063740"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000063740.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000063740.jpg",
+      "imageSha256": "fdf4a97131e29f21383464600e4fdcc9797483c74ad13646fdc2b6cbb09ee548"
+    },
+    {
+      "rowIndex": 7,
+      "rowId": 16613,
+      "questionId": "000000492937.jpg",
+      "query": "A close up of a bike brake on a bicycle.",
+      "expectedAssetIds": [
+        "000000492937"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000492937.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000492937.jpg",
+      "imageSha256": "be7141d3f2897acfa839a6e86378d4c127ec68094c283b54886bc90928dc6886"
+    },
+    {
+      "rowIndex": 8,
+      "rowId": 19206,
+      "questionId": "000000232538.jpg",
+      "query": "A yellow and blue train is next to an overhang.",
+      "expectedAssetIds": [
+        "000000232538"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000232538.jpg",
+      "licenseCode": 4,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000232538.jpg",
+      "imageSha256": "f98e06989ac61233d356d274287e488e311d47faff537ee8f64546db86c6cff6"
+    },
+    {
+      "rowIndex": 9,
+      "rowId": 21407,
+      "questionId": "000000096549.jpg",
+      "query": "An airplane on the runway either just landed or ready to take off.",
+      "expectedAssetIds": [
+        "000000096549"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000096549.jpg",
+      "licenseCode": 4,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000096549.jpg",
+      "imageSha256": "60e67b2e4ee936870d6e37fd6bc2a7c0153051ccfc1e9f021ee444c1cd48ffd0"
+    },
+    {
+      "rowIndex": 10,
+      "rowId": 25178,
+      "questionId": "000000298396.jpg",
+      "query": "Kitchen area with counter top space and dining room table. ",
+      "expectedAssetIds": [
+        "000000298396"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000298396.jpg",
+      "licenseCode": 5,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000298396.jpg",
+      "imageSha256": "cb03590a6a872f6ae61a4c40ccd194ecc20ba5ce3f2f98fb7758d6e5c5fc3f21"
+    },
+    {
+      "rowIndex": 11,
+      "rowId": 25373,
+      "questionId": "000000552883.jpg",
+      "query": "A view of a kitchen with cabinets, a sink and a clothes washer.",
+      "expectedAssetIds": [
+        "000000552883"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000552883.jpg",
+      "licenseCode": 4,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000552883.jpg",
+      "imageSha256": "f0e23c25addf7d6ecf514a442562ccde585ba83dd751d0ee27377c3b64fcc81a"
+    },
+    {
+      "rowIndex": 12,
+      "rowId": 35494,
+      "questionId": "000000127987.jpg",
+      "query": "A baseball player bobble head next to two computer monitors on a desk.",
+      "expectedAssetIds": [
+        "000000127987"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000127987.jpg",
+      "licenseCode": 1,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000127987.jpg",
+      "imageSha256": "f8359345619c314bb12056c117f9a4a02bfcaf5249e8ed8fe4d3de2e115055e5"
+    },
+    {
+      "rowIndex": 13,
+      "rowId": 41869,
+      "questionId": "000000040471.jpg",
+      "query": "An older picture of a large kitchen with white appliances.",
+      "expectedAssetIds": [
+        "000000040471"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000040471.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000040471.jpg",
+      "imageSha256": "530689c13eff5a583f8afdb20cccd51d298f001d8b4eee9500545ce10bca93c3"
+    },
+    {
+      "rowIndex": 14,
+      "rowId": 45495,
+      "questionId": "000000551304.jpg",
+      "query": "A white and gold fancy toilet and stainless trash can.",
+      "expectedAssetIds": [
+        "000000551304"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000551304.jpg",
+      "licenseCode": 4,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000551304.jpg",
+      "imageSha256": "ab271f06e51f359ee9ec06abf471b47f2421f15bd27edcdd46823bfa51e7459c"
+    },
+    {
+      "rowIndex": 15,
+      "rowId": 46501,
+      "questionId": "000000103548.jpg",
+      "query": "A herd of animals traveling down a country road surrounded by a lush green landscape.",
+      "expectedAssetIds": [
+        "000000103548"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000103548.jpg",
+      "licenseCode": 1,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000103548.jpg",
+      "imageSha256": "84ea8c1b8805683b798a40b0f9f207e921b27bd9807e626e014bde0f3824c7ad"
+    },
+    {
+      "rowIndex": 16,
+      "rowId": 54215,
+      "questionId": "000000543047.jpg",
+      "query": "A scene of an apartment with a dining table and a couple of couches.",
+      "expectedAssetIds": [
+        "000000543047"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000543047.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000543047.jpg",
+      "imageSha256": "c38a25dade4c6c278147adafae975c35b79e69d5ad61c953097f6193d6acf0a0"
+    },
+    {
+      "rowIndex": 17,
+      "rowId": 61954,
+      "questionId": "000000099054.jpg",
+      "query": "some planes on an air port run way",
+      "expectedAssetIds": [
+        "000000099054"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000099054.jpg",
+      "licenseCode": 5,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000099054.jpg",
+      "imageSha256": "9c50e864e7d48c3ccfd1c52766e20f1f8202b33991100483a634611f6e140160"
+    },
+    {
+      "rowIndex": 18,
+      "rowId": 67122,
+      "questionId": "000000489091.jpg",
+      "query": "A residential bathroom has a modern motel look with upgraded fixtures and accessories.",
+      "expectedAssetIds": [
+        "000000489091"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000489091.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000489091.jpg",
+      "imageSha256": "fc13631dedcf414c3b9b9ed12c5d747480c8da7c9c35355dfbfa16e5b209e20b"
+    },
+    {
+      "rowIndex": 19,
+      "rowId": 71900,
+      "questionId": "000000423971.jpg",
+      "query": "A toilet with an illuminated seat in a restroom.",
+      "expectedAssetIds": [
+        "000000423971"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000423971.jpg",
+      "licenseCode": 2,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000423971.jpg",
+      "imageSha256": "f878cdb234b950d594bcd09a45ce7ea674ded45007736e1a2fd11df4ef3f7a8c"
+    },
+    {
+      "rowIndex": 20,
+      "rowId": 75979,
+      "questionId": "000000026204.jpg",
+      "query": "A street filled with lots of traffic next to tall buildings.",
+      "expectedAssetIds": [
+        "000000026204"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000026204.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000026204.jpg",
+      "imageSha256": "463d094fd2d7e231b341de350e032b7298a542753bd288a8f33e0d27015c0212"
+    },
+    {
+      "rowIndex": 21,
+      "rowId": 76287,
+      "questionId": "000000085576.jpg",
+      "query": "A commercial bathroom stall with empty toilet paper holders.",
+      "expectedAssetIds": [
+        "000000085576"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000085576.jpg",
+      "licenseCode": 5,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000085576.jpg",
+      "imageSha256": "e1a58f00db357420bd3a6ed70a0f1bf8293c4747242505f0bab72ba323bd768d"
+    },
+    {
+      "rowIndex": 22,
+      "rowId": 82985,
+      "questionId": "000000224051.jpg",
+      "query": "A bike is perched on a concrete girder on the road.",
+      "expectedAssetIds": [
+        "000000224051"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000224051.jpg",
+      "licenseCode": 2,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000224051.jpg",
+      "imageSha256": "cc05697552688ecfe5a115b469c676be8d7eee9fb223c0728271473394dd2081"
+    },
+    {
+      "rowIndex": 23,
+      "rowId": 92043,
+      "questionId": "000000147518.jpg",
+      "query": "A bathroom that has magazine rack and small cabinet.",
+      "expectedAssetIds": [
+        "000000147518"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000147518.jpg",
+      "licenseCode": 5,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000147518.jpg",
+      "imageSha256": "fe92aa97e715d0e9c9b8d8c92f0aa949f776c2421658a9a689348bc7d7890b6d"
+    },
+    {
+      "rowIndex": 24,
+      "rowId": 97929,
+      "questionId": "000000243204.jpg",
+      "query": "A person is holding a spatula near slices of bread on a stove.",
+      "expectedAssetIds": [
+        "000000243204"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000243204.jpg",
+      "licenseCode": 1,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000243204.jpg",
+      "imageSha256": "b6ce34b29fc21dc073784469082e5d47e807dde12a10fb93871b880163183660"
+    },
+    {
+      "rowIndex": 25,
+      "rowId": 100329,
+      "questionId": "000000214192.jpg",
+      "query": "two motocross racers in the middle of a race",
+      "expectedAssetIds": [
+        "000000214192"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000214192.jpg",
+      "licenseCode": 1,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000214192.jpg",
+      "imageSha256": "9fe91875eda05e0bf189efd77ef95b93d390baf6b5d887ff33207f5b54f09dd9"
+    },
+    {
+      "rowIndex": 26,
+      "rowId": 104523,
+      "questionId": "000000360564.jpg",
+      "query": "A walk in shower next to a toilet with a wooden seat.",
+      "expectedAssetIds": [
+        "000000360564"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000360564.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000360564.jpg",
+      "imageSha256": "c47fedc70ce4b12dcb62d37c20fc7cf08d0f8416ce93140cd88475f5ae4e6e8c"
+    },
+    {
+      "rowIndex": 27,
+      "rowId": 108655,
+      "questionId": "000000098520.jpg",
+      "query": "A large passenger jet sitting on top of an airport runway.",
+      "expectedAssetIds": [
+        "000000098520"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000098520.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000098520.jpg",
+      "imageSha256": "ad0d61a827c95ae51898a44465685b5724f09e61fd634770af11325d030d6e37"
+    },
+    {
+      "rowIndex": 28,
+      "rowId": 112901,
+      "questionId": "000000205514.jpg",
+      "query": "The large living room has been decorated in modern furnishings.",
+      "expectedAssetIds": [
+        "000000205514"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000205514.jpg",
+      "licenseCode": 1,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000205514.jpg",
+      "imageSha256": "4a6ff9a13200db240ef472dafa35fb6d2d6bc00926caa9311c8f0d19ee595bf2"
+    },
+    {
+      "rowIndex": 29,
+      "rowId": 125942,
+      "questionId": "000000382734.jpg",
+      "query": "A bathroom being renovated with pipes in the wall",
+      "expectedAssetIds": [
+        "000000382734"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000382734.jpg",
+      "licenseCode": 4,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000382734.jpg",
+      "imageSha256": "59eca77d6d84550f8ea4242a63758d6732b1f3ae7d252f2ae2c53c0525bf6f46"
+    },
+    {
+      "rowIndex": 30,
+      "rowId": 146852,
+      "questionId": "000000170893.jpg",
+      "query": "A dog is standing next to a toilet playing with tissue",
+      "expectedAssetIds": [
+        "000000170893"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000170893.jpg",
+      "licenseCode": 1,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000170893.jpg",
+      "imageSha256": "793c78e27e4170decf72f9efa3874e9283bb38ae7009255f432e749c99bd6569"
+    },
+    {
+      "rowIndex": 31,
+      "rowId": 147561,
+      "questionId": "000000107087.jpg",
+      "query": "A black cat sits in a car and looks out.",
+      "expectedAssetIds": [
+        "000000107087"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000107087.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000107087.jpg",
+      "imageSha256": "0fe003f78f9592d4357982014d66c49879fcee6c349f5a5f7e1e65adb5511e62"
+    },
+    {
+      "rowIndex": 32,
+      "rowId": 154012,
+      "questionId": "000000255917.jpg",
+      "query": "A cluster of traffic driving towards a capital building.",
+      "expectedAssetIds": [
+        "000000255917"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000255917.jpg",
+      "licenseCode": 6,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000255917.jpg",
+      "imageSha256": "cd04c6b67806d2c85e55d487f03069d02aa5ec950a7fdd934c44ca36a336cd34"
+    },
+    {
+      "rowIndex": 33,
+      "rowId": 159770,
+      "questionId": "000000021839.jpg",
+      "query": "a person walking across the street with a traffic light above",
+      "expectedAssetIds": [
+        "000000021839"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000021839.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000021839.jpg",
+      "imageSha256": "dcd13f10aedc9c4263de494647423cc5f76fb20ef81915e4c4cec75ffeb945aa"
+    },
+    {
+      "rowIndex": 34,
+      "rowId": 169348,
+      "questionId": "000000156071.jpg",
+      "query": "A group of people standing around at a rodeo.",
+      "expectedAssetIds": [
+        "000000156071"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000156071.jpg",
+      "licenseCode": 2,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000156071.jpg",
+      "imageSha256": "ac99ec08a30b1ddb39e9672f3edb5d6a2622431ad41d25485bb17b170c94d4cd"
+    },
+    {
+      "rowIndex": 35,
+      "rowId": 172083,
+      "questionId": "000000194875.jpg",
+      "query": "Here are motorcyclists parked outside a Polish gathering spot for women",
+      "expectedAssetIds": [
+        "000000194875"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000194875.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000194875.jpg",
+      "imageSha256": "ddb3e8eb04dfbb6f840780998faa87fedcfbc151f3c619ecfa189820ec23dcd6"
+    },
+    {
+      "rowIndex": 36,
+      "rowId": 175726,
+      "questionId": "000000243495.jpg",
+      "query": "a toilet with writing under the lid ",
+      "expectedAssetIds": [
+        "000000243495"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000243495.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000243495.jpg",
+      "imageSha256": "9224690ed63fc005f980a06a812b60c0d90fd64355a7d56cbc299727c879e130"
+    },
+    {
+      "rowIndex": 37,
+      "rowId": 180163,
+      "questionId": "000000146667.jpg",
+      "query": "A woman digging through the storage compartment on her moped.",
+      "expectedAssetIds": [
+        "000000146667"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000146667.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000146667.jpg",
+      "imageSha256": "fbbb44b594681bf7974aa2b6a4c743d40f407d76d0ded21e569d397bf57d6253"
+    },
+    {
+      "rowIndex": 38,
+      "rowId": 185081,
+      "questionId": "000000458768.jpg",
+      "query": "A brightly lit kitchen with lots of natural light.",
+      "expectedAssetIds": [
+        "000000458768"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000458768.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000458768.jpg",
+      "imageSha256": "6c47d93bf1a2bf0a5ddc496f9093563f4b89ee8da39d552cb19d836de97c0232"
+    },
+    {
+      "rowIndex": 39,
+      "rowId": 186335,
+      "questionId": "000000045229.jpg",
+      "query": "A kitchen filled with a wooden cabinet and a large window.",
+      "expectedAssetIds": [
+        "000000045229"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000045229.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000045229.jpg",
+      "imageSha256": "88c956df16de14f3f912e6c47e1e14a1ab400a89dd4df6900b0966c3b45438e1"
+    },
+    {
+      "rowIndex": 40,
+      "rowId": 187008,
+      "questionId": "000000570782.jpg",
+      "query": "Three computers without screens sit on a desk.",
+      "expectedAssetIds": [
+        "000000570782"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000570782.jpg",
+      "licenseCode": 5,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000570782.jpg",
+      "imageSha256": "1be4f92c2428297402717a0ed0f3e4000dff0d3b72d24b4e897f0f3339df050b"
+    },
+    {
+      "rowIndex": 41,
+      "rowId": 189234,
+      "questionId": "000000520324.jpg",
+      "query": "Someone is driving a cart near a single engine airplane.",
+      "expectedAssetIds": [
+        "000000520324"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000520324.jpg",
+      "licenseCode": 5,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000520324.jpg",
+      "imageSha256": "8f2e6b023e6ea1b7dc838d6b33a1eb4ca830c751354fea652a45dffc3f7ae214"
+    },
+    {
+      "rowIndex": 42,
+      "rowId": 190460,
+      "questionId": "000000408112.jpg",
+      "query": "A small propeller plane sitting on top of an airport tarmac.",
+      "expectedAssetIds": [
+        "000000408112"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000408112.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000408112.jpg",
+      "imageSha256": "057eb57f71bbf7a016e0e6c520c15cbd8d3c7a8b481b0c231aa1d867b27b8b85"
+    },
+    {
+      "rowIndex": 43,
+      "rowId": 192213,
+      "questionId": "000000297578.jpg",
+      "query": "A man walking down a street smoking a cigarette.",
+      "expectedAssetIds": [
+        "000000297578"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000297578.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000297578.jpg",
+      "imageSha256": "a6a18d68f2db12da49c73a28fd023eaded1becac266f5a08a73c2ac8746c6929"
+    },
+    {
+      "rowIndex": 44,
+      "rowId": 193401,
+      "questionId": "000000286907.jpg",
+      "query": "A bathroom scene with focus on the toilet.",
+      "expectedAssetIds": [
+        "000000286907"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000286907.jpg",
+      "licenseCode": 3,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000286907.jpg",
+      "imageSha256": "afa738507b0c01e00fbeb736646d0e54b7caaddc7df9079cd35f7c39a5b44807"
+    },
+    {
+      "rowIndex": 45,
+      "rowId": 198053,
+      "questionId": "000000070774.jpg",
+      "query": "Small motorcycle with several bicycles tied to the back of it. ",
+      "expectedAssetIds": [
+        "000000070774"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000070774.jpg",
+      "licenseCode": 5,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000070774.jpg",
+      "imageSha256": "be30cd1ffc419249134fcaf864e586ed6dd9158c6a5a6aba6acb127f2d48e32e"
+    },
+    {
+      "rowIndex": 46,
+      "rowId": 198755,
+      "questionId": "000000015272.jpg",
+      "query": "A red light is a wonderful contrast to the pink leaves on trees",
+      "expectedAssetIds": [
+        "000000015272"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000015272.jpg",
+      "licenseCode": 4,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000015272.jpg",
+      "imageSha256": "a3433d9f272a2f65c998641e1e1cd8bb2dbb65e8356dde4911dfdbad1c5005d1"
+    },
+    {
+      "rowIndex": 47,
+      "rowId": 201615,
+      "questionId": "000000462614.jpg",
+      "query": "A bathroom filled with fixtures and a shower.",
+      "expectedAssetIds": [
+        "000000462614"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000462614.jpg",
+      "licenseCode": 4,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000462614.jpg",
+      "imageSha256": "398ea1fc67935f4f53db98f75764f2c78d79b1122b65384d1d09a584f104f55c"
+    },
+    {
+      "rowIndex": 48,
+      "rowId": 204462,
+      "questionId": "000000208901.jpg",
+      "query": "A large passenger jet flying through a gray sky.",
+      "expectedAssetIds": [
+        "000000208901"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000208901.jpg",
+      "licenseCode": 4,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000208901.jpg",
+      "imageSha256": "78a4f920a4f176b7223c7f8a4681fc48e53f818487f5eac87ed07d027dedbde9"
+    },
+    {
+      "rowIndex": 49,
+      "rowId": 204633,
+      "questionId": "000000074209.jpg",
+      "query": "A counter in a kitchen line with black metal stools.",
+      "expectedAssetIds": [
+        "000000074209"
+      ],
+      "cocoUrl": "http://images.cocodataset.org/val2017/000000074209.jpg",
+      "licenseCode": 1,
+      "pinnedRevision": "b14474455722b8c56eb7cdeb3f6be76fca1bba7a",
+      "localFilename": "000000074209.jpg",
+      "imageSha256": "a1b9454b129487b0472e64c061bd3e24ee673afe5c4b2292642c6ea221a3f7d7"
+    }
+  ]
+}
