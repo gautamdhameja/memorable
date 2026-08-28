@@ -75,6 +75,31 @@ final class IndexingJobQueueTests: XCTestCase {
         XCTAssertEqual(Set(executed), Set(IndexingJobKind.allCases))
     }
 
+    func testOnlyOneJobOperationIsActiveAtATime() async {
+        let queue = IndexingJobQueue()
+        let workflowID = UUID()
+        var activeCount = 0
+        var maximumActiveCount = 0
+
+        for kind in IndexingJobKind.allCases {
+            queue.enqueue(IndexingJob(
+                workflowID: workflowID,
+                kind: kind,
+                priority: .maintenance
+            ) {
+                activeCount += 1
+                maximumActiveCount = max(maximumActiveCount, activeCount)
+                await Task.yield()
+                activeCount -= 1
+                return .completed
+            })
+        }
+
+        await queue.waitUntilIdle()
+        XCTAssertEqual(maximumActiveCount, 1)
+        XCTAssertEqual(activeCount, 0)
+    }
+
     func testDependencyBlocksUntilRequiredJobCompletes() async {
         let queue = IndexingJobQueue()
         let workflowID = UUID()

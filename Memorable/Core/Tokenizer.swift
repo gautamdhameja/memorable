@@ -12,6 +12,7 @@ class CLIPTokenizer {
     private let padId: Int32
     private var cache: [String: [Int]] = [:]
     private let maxCacheSize = 1000
+    private let cacheLock = NSLock()
 
     enum TokenizerError: Error {
         case filesNotFound
@@ -103,14 +104,19 @@ class CLIPTokenizer {
     // MARK: - BPE Encoding
 
     private func encode(_ word: String) -> [Int] {
+        cacheLock.lock()
         if cache.count > maxCacheSize { cache.removeAll() }
-        if let cached = cache[word] { return cached }
+        let cached = cache[word]
+        cacheLock.unlock()
+        if let cached { return cached }
 
         // Start with individual characters (or byte fallback for unknowns)
         var symbols = initialTokens(for: word)
         if symbols.count <= 1 {
             let ids = symbols.map { tokenId(for: $0) }
+            cacheLock.lock()
             cache[word] = ids
+            cacheLock.unlock()
             return ids
         }
 
@@ -146,7 +152,9 @@ class CLIPTokenizer {
         }
 
         let ids = symbols.map { tokenId(for: $0) }
+        cacheLock.lock()
         cache[word] = ids
+        cacheLock.unlock()
         return ids
     }
 

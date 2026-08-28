@@ -1,4 +1,15 @@
+import CoreML
 import Foundation
+
+protocol CoreMLModelPredicting: AnyObject {
+    func prediction(from input: MLFeatureProvider) throws -> MLFeatureProvider
+    func predictions(
+        from inputBatch: MLBatchProvider,
+        options: MLPredictionOptions
+    ) throws -> MLBatchProvider
+}
+
+extension MLModel: CoreMLModelPredicting {}
 
 enum ModelResource: CaseIterable, Equatable {
     case imageEncoder

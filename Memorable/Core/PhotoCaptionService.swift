@@ -7,13 +7,13 @@ class PhotoCaptionService {
     private var isReady = false
     private var usedCaptions: Set<String> = []
 
-    struct Category {
+    struct Category: Sendable {
         let name: String
         let prompt: String
         let captions: [String]
     }
 
-    static let categories: [Category] = [
+    nonisolated static let categories: [Category] = [
         Category(name: "people", prompt: "a photo of people together", captions: [
             "Who were you with that day?",
             "Looks like a good time together",
@@ -225,22 +225,27 @@ class PhotoCaptionService {
     ]
 
     /// Pre-encode all category prompts. Call once after TextEncoder is ready.
-    func prepare(textEncoder: TextEncoder) {
-        categoryEmbeddings = []
-        for category in Self.categories {
-            do {
-                let embedding = try textEncoder.encode(text: category.prompt)
-                categoryEmbeddings.append((category: category.name, embedding: embedding))
-            } catch {
-                #if DEBUG
-                logger.error("[PhotoCaption] Failed to encode category '\(category.name)': \(error.localizedDescription)")
-                #endif
+    func prepare(textEncoder: TextEncoder) async {
+        let embeddings = await Task.detached {
+            var embeddings: [(category: String, embedding: [Float])] = []
+            for category in Self.categories {
+                do {
+                    let embedding = try textEncoder.encode(text: category.prompt)
+                    embeddings.append((category: category.name, embedding: embedding))
+                } catch {
+                    #if DEBUG
+                    logger.error("[PhotoCaption] Failed to encode category '\(category.name)': \(error.localizedDescription)")
+                    #endif
+                }
             }
-        }
-        isReady = !categoryEmbeddings.isEmpty
+            return embeddings
+        }.value
+
+        categoryEmbeddings = embeddings
+        isReady = !embeddings.isEmpty
 
         #if DEBUG
-        let count = categoryEmbeddings.count
+        let count = embeddings.count
         logger.info("[PhotoCaption] Prepared \(count) category embeddings")
         #endif
     }

@@ -6,22 +6,30 @@ protocol TextEmbeddingEncoding {
 }
 
 class TextEncoder: TextEmbeddingEncoding {
-    private var model: MLModel
-    private let resourceManager: ModelResourceManaging
+    private var model: CoreMLModelPredicting
+    private let modelLoader: () throws -> CoreMLModelPredicting
+    private let modelLock = NSLock()
     private let tokenizer: CLIPTokenizer
     private let contextLength: Int = 64
 
     init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) throws {
-        self.resourceManager = resourceManager
-        let config = MLModelConfiguration()
-        #if targetEnvironment(simulator)
-        config.computeUnits = .cpuOnly
-        #else
-        config.computeUnits = .all
-        #endif
-        let modelURL = try resourceManager.url(for: .textEncoder)
-        self.model = try MLModel(contentsOf: modelURL, configuration: config)
+        let loader = {
+            let modelURL = try resourceManager.url(for: .textEncoder)
+            return try MLModel(contentsOf: modelURL, configuration: Self.modelConfiguration())
+        }
+        self.modelLoader = loader
+        self.model = try loader()
         self.tokenizer = try CLIPTokenizer(contextLength: contextLength)
+    }
+
+    init(
+        model: CoreMLModelPredicting,
+        tokenizer: CLIPTokenizer,
+        modelLoader: @escaping () throws -> CoreMLModelPredicting
+    ) {
+        self.model = model
+        self.tokenizer = tokenizer
+        self.modelLoader = modelLoader
     }
 
     func encode(text: String) throws -> [Float] {
@@ -44,13 +52,12 @@ class TextEncoder: TextEmbeddingEncoding {
 
         let output: MLFeatureProvider
         do {
-            output = try model.prediction(from: inputFeatures)
+            output = try currentModel().prediction(from: inputFeatures)
         } catch {
             #if DEBUG
             logger.warning("[TextEncoder] Prediction failed, reloading model: \(error.localizedDescription)")
             #endif
-            try reloadModel()
-            output = try model.prediction(from: inputFeatures)
+            output = try reloadModel().prediction(from: inputFeatures)
         }
 
         guard let embeddingArray = output.featureValue(for: "text_embedding")?.multiArrayValue else {
@@ -77,15 +84,29 @@ class TextEncoder: TextEmbeddingEncoding {
         return embedding
     }
 
-    private func reloadModel() throws {
+    private func currentModel() -> CoreMLModelPredicting {
+        modelLock.lock()
+        defer { modelLock.unlock() }
+        return model
+    }
+
+    @discardableResult
+    private func reloadModel() throws -> CoreMLModelPredicting {
+        let reloadedModel = try modelLoader()
+        modelLock.lock()
+        model = reloadedModel
+        modelLock.unlock()
+        return reloadedModel
+    }
+
+    private static func modelConfiguration() -> MLModelConfiguration {
         let config = MLModelConfiguration()
         #if targetEnvironment(simulator)
         config.computeUnits = .cpuOnly
         #else
         config.computeUnits = .all
         #endif
-        let modelURL = try resourceManager.url(for: .textEncoder)
-        self.model = try MLModel(contentsOf: modelURL, configuration: config)
+        return config
     }
 
     enum TextEncoderError: LocalizedError {

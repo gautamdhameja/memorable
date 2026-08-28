@@ -3,20 +3,25 @@ import UIKit
 import Accelerate
 
 class ImageEncoder {
-    private var model: MLModel
-    private let resourceManager: ModelResourceManaging
+    private var model: CoreMLModelPredicting
+    private let modelLoader: () throws -> CoreMLModelPredicting
+    private let modelLock = NSLock()
 
     init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) throws {
-        self.resourceManager = resourceManager
-        // Load the compiled Core ML model from the app bundle
-        let config = MLModelConfiguration()
-        #if targetEnvironment(simulator)
-        config.computeUnits = .cpuOnly  // Simulator lacks Neural Engine / GPU
-        #else
-        config.computeUnits = .all  // Use Neural Engine + GPU + CPU
-        #endif
-        let modelURL = try resourceManager.url(for: .imageEncoder)
-        self.model = try MLModel(contentsOf: modelURL, configuration: config)
+        let loader = {
+            let modelURL = try resourceManager.url(for: .imageEncoder)
+            return try MLModel(contentsOf: modelURL, configuration: Self.modelConfiguration())
+        }
+        self.modelLoader = loader
+        self.model = try loader()
+    }
+
+    init(
+        model: CoreMLModelPredicting,
+        modelLoader: @escaping () throws -> CoreMLModelPredicting
+    ) {
+        self.model = model
+        self.modelLoader = modelLoader
     }
 
     // Encode a UIImage into a 768-dimensional normalized embedding vector
@@ -32,12 +37,11 @@ class ImageEncoder {
 
         let output: MLFeatureProvider
         do {
-            output = try model.prediction(from: inputFeatures)
+            output = try currentModel().prediction(from: inputFeatures)
         } catch let originalError {
             logger.warning("[ImageEncoder] Prediction failed, reloading model: \(originalError.localizedDescription)")
             do {
-                try reloadModel()
-                output = try model.prediction(from: inputFeatures)
+                output = try reloadModel().prediction(from: inputFeatures)
             } catch {
                 logger.error("[ImageEncoder] Prediction failed after model reload: \(error.localizedDescription)")
                 throw originalError
@@ -53,15 +57,29 @@ class ImageEncoder {
         return embedding
     }
 
-    private func reloadModel() throws {
+    private func currentModel() -> CoreMLModelPredicting {
+        modelLock.lock()
+        defer { modelLock.unlock() }
+        return model
+    }
+
+    @discardableResult
+    private func reloadModel() throws -> CoreMLModelPredicting {
+        let reloadedModel = try modelLoader()
+        modelLock.lock()
+        model = reloadedModel
+        modelLock.unlock()
+        return reloadedModel
+    }
+
+    private static func modelConfiguration() -> MLModelConfiguration {
         let config = MLModelConfiguration()
         #if targetEnvironment(simulator)
         config.computeUnits = .cpuOnly
         #else
         config.computeUnits = .all
         #endif
-        let modelURL = try resourceManager.url(for: .imageEncoder)
-        self.model = try MLModel(contentsOf: modelURL, configuration: config)
+        return config
     }
 
     private func pixelBufferToMLMultiArray(pixelBuffer: CVPixelBuffer, width: Int, height: Int) throws -> MLMultiArray {
@@ -129,13 +147,12 @@ class ImageEncoder {
         let batchProvider = MLArrayBatchProvider(array: featureProviders)
         let batchResults: MLBatchProvider
         do {
-            batchResults = try model.predictions(from: batchProvider, options: MLPredictionOptions())
+            batchResults = try currentModel().predictions(from: batchProvider, options: MLPredictionOptions())
         } catch {
             #if DEBUG
             logger.warning("[ImageEncoder] Batch prediction failed, reloading model: \(error.localizedDescription)")
             #endif
-            try reloadModel()
-            batchResults = try model.predictions(from: batchProvider, options: MLPredictionOptions())
+            batchResults = try reloadModel().predictions(from: batchProvider, options: MLPredictionOptions())
         }
 
         // Extract embeddings

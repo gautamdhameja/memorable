@@ -189,7 +189,7 @@ class AppState: ObservableObject {
             if loadedIndex {
                 if let txtEncoder = textEncoder {
                     Task { @MainActor in
-                        self.captionService.prepare(textEncoder: txtEncoder)
+                        await self.captionService.prepare(textEncoder: txtEncoder)
                     }
                 }
             }
