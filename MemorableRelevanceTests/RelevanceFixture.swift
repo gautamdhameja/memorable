@@ -43,6 +43,7 @@ struct RelevanceBaseline: Decodable {
         let recallAt10: Double
         let recallAt50: Double
         let meanReciprocalRank: Double
+        let fallbackQueryRate: Double
     }
 
     struct Query: Decodable {
@@ -176,6 +177,7 @@ struct RelevanceQueryMetrics {
     let recallAt10: Double
     let recallAt50: Double
     let reciprocalRank: Double
+    let usedFallback: Bool
 }
 
 struct RelevanceMetrics {
@@ -184,6 +186,9 @@ struct RelevanceMetrics {
     var recallAt10: Double { average(queries.map(\.recallAt10)) }
     var recallAt50: Double { average(queries.map(\.recallAt50)) }
     var meanReciprocalRank: Double { average(queries.map(\.reciprocalRank)) }
+    var fallbackQueryRate: Double {
+        average(queries.map { $0.usedFallback ? 1 : 0 })
+    }
 
     private func average(_ values: [Double]) -> Double {
         guard !values.isEmpty else { return 0 }

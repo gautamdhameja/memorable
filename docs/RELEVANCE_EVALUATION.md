@@ -19,6 +19,10 @@ The isolated `MemorableRelevanceTests` scheme uses the production
 from the default `Memorable` scheme's test action. Simulator Core ML execution
 is CPU-only, matching the production encoder configuration.
 
+The baseline also caps the fraction of queries that return only near-miss
+fallback results. This prevents a threshold regression from preserving recall
+by silently moving the entire result set out of the primary search response.
+
 To prove the gate detects a preprocessing regression, run the deliberate
 vertical-flip mode. A non-zero test result is expected:
 

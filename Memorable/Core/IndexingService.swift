@@ -482,7 +482,10 @@ class IndexingService: ObservableObject {
                 self.progress.isRunning = false
                 return .cancelled
             }
-            if self.indexRebuildRequired {
+            if Self.shouldCompleteEmptyRequiredRebuild(
+                rebuildRequired: self.indexRebuildRequired,
+                hasMediaCandidates: session.hasMediaCandidates
+            ) {
                 do {
                     let db = self.database
                     try await Task.detached(priority: .utility) {
@@ -504,6 +507,13 @@ class IndexingService: ObservableObject {
                 delayAfterDependencies: IndexingConfig.surpriseValidationDelaySeconds
             )
         }
+    }
+
+    static func shouldCompleteEmptyRequiredRebuild(
+        rebuildRequired: Bool,
+        hasMediaCandidates: Bool
+    ) -> Bool {
+        rebuildRequired && !hasMediaCandidates
     }
 
     private func enqueuePostIndexingJobs(workflowID: UUID) {

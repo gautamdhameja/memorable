@@ -81,15 +81,16 @@ final class RelevanceEvaluationTests: XCTestCase {
                 timeOfDayHours: nil,
                 hasVisualQuery: true
             ))
-            let rankedIds = (response.results.isEmpty ? response.fallbackResults : response.results)
-                .map(\.id)
+            let usedFallback = response.results.isEmpty && !response.fallbackResults.isEmpty
+            let rankedIds = (usedFallback ? response.fallbackResults : response.results).map(\.id)
             let expected = Set(entry.expectedAssetIds)
             let firstRank = rankedIds.firstIndex(where: expected.contains).map { $0 + 1 }
             return RelevanceQueryMetrics(
                 questionId: entry.questionId,
                 recallAt10: firstRank.map { $0 <= 10 ? 1 : 0 } ?? 0,
                 recallAt50: firstRank.map { $0 <= 50 ? 1 : 0 } ?? 0,
-                reciprocalRank: firstRank.map { 1.0 / Double($0) } ?? 0
+                reciprocalRank: firstRank.map { 1.0 / Double($0) } ?? 0,
+                usedFallback: usedFallback
             )
         }
         return RelevanceMetrics(queries: queryMetrics)
@@ -116,6 +117,11 @@ final class RelevanceEvaluationTests: XCTestCase {
         assertNoRegression(metrics.recallAt10, baseline.aggregate.recallAt10, baseline.tolerance, "aggregate recall@10", "all")
         assertNoRegression(metrics.recallAt50, baseline.aggregate.recallAt50, baseline.tolerance, "aggregate recall@50", "all")
         assertNoRegression(metrics.meanReciprocalRank, baseline.aggregate.meanReciprocalRank, baseline.tolerance, "aggregate MRR", "all")
+        XCTAssertLessThanOrEqual(
+            metrics.fallbackQueryRate,
+            baseline.aggregate.fallbackQueryRate + baseline.tolerance,
+            "Relevance regression for all: fallback query rate baseline=\(format(baseline.aggregate.fallbackQueryRate)), actual=\(format(metrics.fallbackQueryRate)), tolerance=\(format(baseline.tolerance))"
+        )
     }
 
     private func assertNoRegression(
@@ -146,7 +152,8 @@ final class RelevanceEvaluationTests: XCTestCase {
             "RELEVANCE aggregate "
             + "recall@10=\(format(metrics.recallAt10)) "
             + "recall@50=\(format(metrics.recallAt50)) "
-            + "MRR=\(format(metrics.meanReciprocalRank))"
+            + "MRR=\(format(metrics.meanReciprocalRank)) "
+            + "fallback_rate=\(format(metrics.fallbackQueryRate))"
         )
     }
 

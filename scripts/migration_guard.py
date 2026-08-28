@@ -52,6 +52,7 @@ DELETE_START = re.compile(
     r'["`\[]?(indexed_photos|indexed_videos|indexed_video_frames)["`\]]?\b',
     re.IGNORECASE,
 )
+UNRESOLVED_DELETE_START = re.compile(r"\bDELETE\s+FROM\s*(?:\\\(|$)", re.IGNORECASE)
 REBUILD_STATE = re.compile(
     r"\bsetAppState\s*\(\s*indexRebuildStateKey\s*,\s*value\s*:\s*\"true\"",
     re.DOTALL,
@@ -160,6 +161,11 @@ def migration_deletes(source: str) -> list[MigrationDelete]:
     for block in migration_blocks(source):
         for literal in swift_string_literals(block.body):
             matches = list(DELETE_START.finditer(literal))
+            if UNRESOLVED_DELETE_START.search(literal) and not matches:
+                raise MigrationGuardError(
+                    f"migration {block.migration_id} constructs DELETE SQL dynamically; "
+                    "use a static SQL literal so protected-table deletes can be reviewed"
+                )
             for position, match in enumerate(matches):
                 statement_end = literal.find(";", match.end())
                 next_delete = matches[position + 1].start() if position + 1 < len(matches) else len(literal)
@@ -317,6 +323,24 @@ def _git_file_at_commit(repo: Path, commit: str, path: Path) -> str | None:
     raise MigrationGuardError(result.stderr.strip() or "could not read baseline from Git")
 
 
+def bootstrap_approved_deletes(repo: Path, baseline_commit: str) -> list[MigrationDelete]:
+    addition_commits = _git(
+        repo,
+        "log",
+        "--diff-filter=A",
+        "--format=%H",
+        "HEAD",
+        "--",
+        BASELINE_PATH.as_posix(),
+    ).splitlines()
+    if addition_commits:
+        guard_parent = _git(repo, "rev-parse", f"{addition_commits[-1]}^")
+        source = _git_file_at_commit(repo, guard_parent, DATABASE_PATH) or ""
+    else:
+        source = _git_file_at_commit(repo, baseline_commit, DATABASE_PATH) or ""
+    return migration_deletes(source)
+
+
 def resolve_baseline(repo: Path, requested: str | None) -> str:
     reference = requested or os.environ.get(BASE_ENV)
     if not reference:
@@ -354,10 +378,9 @@ def check_repository(repo: Path, base: str | None, signoff: str | None) -> list[
     if approved_payload is not None:
         approved = load_delete_baseline(approved_payload)
     else:
-        # Bootstrap only: the first guard commit records all migrations that
-        # predate the guard. Once the baseline is in the target branch, added
-        # entries remain reviewable even if the working copy edits this file.
-        approved = current_baseline
+        # Bootstrap only: trust migrations that predate the commit which first
+        # added the guard baseline, never the mutable working-copy baseline.
+        approved = bootstrap_approved_deletes(repo, baseline_commit)
     current_source = (repo / DATABASE_PATH).read_text(encoding="utf-8")
     current_deletes = Counter(migration_deletes(current_source))
     stale_entries = Counter(current_baseline) - current_deletes

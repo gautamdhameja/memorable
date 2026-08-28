@@ -10,6 +10,7 @@ final class PhotoLibraryIndexingWorker {
         let alreadyIndexedVideos: Set<String>
         let isPro: Bool
         let startedAt: CFAbsoluteTime
+        let hasMediaCandidates: Bool
         var indexedMediaCount: Int
         var hitFreeLimit: Bool
 
@@ -18,6 +19,7 @@ final class PhotoLibraryIndexingWorker {
             alreadyIndexedVideos: Set<String>,
             isPro: Bool,
             startedAt: CFAbsoluteTime,
+            hasMediaCandidates: Bool,
             indexedMediaCount: Int,
             hitFreeLimit: Bool = false
         ) {
@@ -25,6 +27,7 @@ final class PhotoLibraryIndexingWorker {
             self.alreadyIndexedVideos = alreadyIndexedVideos
             self.isPro = isPro
             self.startedAt = startedAt
+            self.hasMediaCandidates = hasMediaCandidates
             self.indexedMediaCount = indexedMediaCount
             self.hitFreeLimit = hitFreeLimit
         }
@@ -104,6 +107,7 @@ final class PhotoLibraryIndexingWorker {
             alreadyIndexedVideos: alreadyIndexedVideos,
             isPro: isPro,
             startedAt: startedAt,
+            hasMediaCandidates: !photoAssets.isEmpty || !videoAssets.isEmpty,
             indexedMediaCount: alreadyIndexed.count + alreadyIndexedVideos.count
         )
 

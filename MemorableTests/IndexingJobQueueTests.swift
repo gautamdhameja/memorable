@@ -410,6 +410,58 @@ final class IndexingJobQueueTests: XCTestCase {
         )
     }
 
+    func testRequiredRebuildCompletesOnlyForAnActuallyEmptyLibrary() {
+        XCTAssertTrue(IndexingService.shouldCompleteEmptyRequiredRebuild(
+            rebuildRequired: true,
+            hasMediaCandidates: false
+        ))
+        XCTAssertFalse(IndexingService.shouldCompleteEmptyRequiredRebuild(
+            rebuildRequired: true,
+            hasMediaCandidates: true
+        ))
+        XCTAssertFalse(IndexingService.shouldCompleteEmptyRequiredRebuild(
+            rebuildRequired: false,
+            hasMediaCandidates: false
+        ))
+    }
+
+    func testCancelAllCancelsActiveAndPendingJobs() async {
+        let queue = IndexingJobQueue()
+        var activeCancelled = false
+        var pendingRan = false
+
+        queue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .indexPhotos,
+            priority: .userInitiated
+        ) {
+            do {
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+                return .completed
+            } catch {
+                activeCancelled = true
+                return .cancelled
+            }
+        })
+        await Task.yield()
+        queue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .indexVideos,
+            priority: .userInitiated
+        ) {
+            pendingRan = true
+            return .completed
+        })
+
+        queue.cancelAll()
+        await queue.waitUntilIdle()
+
+        XCTAssertTrue(activeCancelled)
+        XCTAssertFalse(pendingRan)
+        XCTAssertEqual(queue.retainedCancellationCount, 0)
+        XCTAssertEqual(queue.retainedWorkflowCount, 0)
+    }
+
     private func settleScheduledTasks(until condition: () -> Bool) async {
         for _ in 0..<100 where !condition() {
             await Task.yield()

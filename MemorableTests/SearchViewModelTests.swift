@@ -2,6 +2,12 @@ import XCTest
 @testable import Memorable
 
 final class SearchViewModelTests: XCTestCase {
+    private enum ExpectedError: LocalizedError {
+        case failure
+
+        var errorDescription: String? { "expected failure" }
+    }
+
     @MainActor
     func testEditingTextDoesNotCancelSubmittedSearch() async throws {
         let searcher = ControlledSearcher()
@@ -125,6 +131,62 @@ final class SearchViewModelTests: XCTestCase {
     @MainActor
     func testSortModeStorageKeyRemainsStable() {
         XCTAssertEqual(SearchViewModel.sortModeStorageKey, "searchSortMode")
+    }
+
+    @MainActor
+    func testPreparationFailureResetsSearchLifecycle() async {
+        let model = SearchViewModel(dependencies: .init(
+            deferEnrichmentForUserSearch: {},
+            isSemanticSearchReady: { false },
+            isIndexReady: { false },
+            isIndexLoaded: { false },
+            prepareForSearch: { throw ExpectedError.failure },
+            search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
+            detectScreenshotIDs: { _ in [] },
+            validResultIDs: { _ in [] },
+            addHistory: { _ in },
+            loadHistory: { [] },
+            clearHistory: {},
+            removeHistory: { _ in },
+            now: { 1 }
+        ))
+
+        model.setQueryText("cats")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.searchError, "Search failed: expected failure")
+        XCTAssertFalse(model.isSearching)
+        XCTAssertNil(model.activeSearchID)
+        XCTAssertTrue(model.results.isEmpty)
+    }
+
+    @MainActor
+    func testUnavailableIndexResetsSearchLifecycle() async {
+        let model = SearchViewModel(dependencies: .init(
+            deferEnrichmentForUserSearch: {},
+            isSemanticSearchReady: { false },
+            isIndexReady: { false },
+            isIndexLoaded: { false },
+            prepareForSearch: {},
+            search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
+            detectScreenshotIDs: { _ in [] },
+            validResultIDs: { _ in [] },
+            addHistory: { _ in },
+            loadHistory: { [] },
+            clearHistory: {},
+            removeHistory: { _ in },
+            now: { 1 }
+        ))
+
+        model.setQueryText("cats")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.searchError, "Index your photos before searching.")
+        XCTAssertFalse(model.isSearching)
+        XCTAssertNil(model.activeSearchID)
+        XCTAssertTrue(model.results.isEmpty)
     }
 
     @MainActor

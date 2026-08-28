@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 import unittest
 
 
@@ -11,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 from migration_guard import (  # noqa: E402
     MigrationGuardError,
     MigrationDelete,
+    check_repository,
     introduced_from_approved_baseline,
     load_delete_baseline,
     migration_deletes,
@@ -57,6 +61,68 @@ class MigrationGuardTests(unittest.TestCase):
             [item.table for item in deletes],
             ["indexed_photos", "indexed_videos", "indexed_video_frames"],
         )
+
+    def test_rejects_dynamically_constructed_delete_sql(self) -> None:
+        source = '''migrator.registerMigration("v9-dynamic") { db in
+            try db.execute(sql: "DELETE FROM " + "indexed_photos")
+        }'''
+
+        with self.assertRaisesRegex(MigrationGuardError, "constructs DELETE SQL dynamically"):
+            migration_deletes(source)
+
+    def test_bootstrap_uses_parent_of_first_baseline_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / "Memorable/Core").mkdir(parents=True)
+            (repo / "Memorable/Views").mkdir(parents=True)
+            (repo / "scripts").mkdir()
+            self._git(repo, "init", "-b", "main")
+            self._git(repo, "config", "user.email", "test@example.com")
+            self._git(repo, "config", "user.name", "Test")
+            (repo / "Memorable/Core/Database.swift").write_text(
+                migration("v1-existing", "DELETE FROM indexed_photos"), encoding="utf-8"
+            )
+            (repo / "Memorable/Views/SearchView.swift").write_text(PROMPT, encoding="utf-8")
+            self._git(repo, "add", ".")
+            self._git(repo, "commit", "-m", "base")
+            base = self._git(repo, "rev-parse", "HEAD")
+
+            (repo / "scripts/migration_delete_baseline.json").write_text(
+                json.dumps({"version": 1, "deletes": [
+                    MigrationDelete(
+                        "v1-existing", "indexed_photos", "delete from indexed_photos"
+                    ).__dict__
+                ]}),
+                encoding="utf-8",
+            )
+            self._git(repo, "add", ".")
+            self._git(repo, "commit", "-m", "add guard baseline")
+
+            database = repo / "Memorable/Core/Database.swift"
+            database.write_text(
+                database.read_text(encoding="utf-8")
+                + "\n"
+                + migration("v2-new", "DELETE FROM indexed_videos"),
+                encoding="utf-8",
+            )
+            baseline = repo / "scripts/migration_delete_baseline.json"
+            payload = json.loads(baseline.read_text(encoding="utf-8"))
+            payload["deletes"].append(
+                MigrationDelete(
+                    "v2-new", "indexed_videos", "delete from indexed_videos"
+                ).__dict__
+            )
+            baseline.write_text(json.dumps(payload), encoding="utf-8")
+
+            with self.assertRaisesRegex(MigrationGuardError, "explicit index-wipe sign-off"):
+                check_repository(repo, base, None)
+
+    @staticmethod
+    def _git(repo: Path, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments], cwd=repo, check=True, text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
 
     def test_ignores_unrelated_operational_deletes_outside_migrations(self) -> None:
         source = '''
