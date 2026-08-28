@@ -267,17 +267,36 @@ final class DatabaseTests: XCTestCase {
         XCTAssertFalse(try database.indexRebuildRequired())
     }
 
-    func testFirstPhotoBatchAfterRebuildWipeClearsRequirement() throws {
-        let database = try makeDatabaseRequiringRebuild()
+    func testInterruptedRebuildAfterFirstPhotoBatchPreservesProgressOnNextLaunch() throws {
+        let interruptedQueue = try {
+            let database = try makeDatabaseRequiringRebuild()
 
-        let completedRebuild = try database.insertPhotos(
-            [makePhoto(localIdentifier: "rebuilt-photo")],
-            completingRequiredRebuild: true
+            XCTAssertTrue(try database.indexRebuildRequired())
+
+            try database.deleteAll()
+
+            XCTAssertEqual(try database.indexedCount(), 0)
+            XCTAssertTrue(try database.indexRebuildRequired())
+
+            let completedRebuild = try database.insertPhotos(
+                [makePhoto(localIdentifier: "rebuilt-photo")],
+                completingRequiredRebuild: true
+            )
+
+            XCTAssertTrue(completedRebuild)
+            return database.dbQueue
+        }()
+
+        // The first indexing run has stopped without end-of-pass cleanup.
+        // Launch against only the database state committed before interruption.
+        let relaunchedDatabase = AppDatabase(
+            openQueue: { interruptedQueue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
         )
 
-        XCTAssertTrue(completedRebuild)
-        XCTAssertEqual(try database.indexedCount(), 1)
-        XCTAssertFalse(try database.indexRebuildRequired())
+        XCTAssertFalse(try relaunchedDatabase.indexRebuildRequired())
+        XCTAssertTrue(try relaunchedDatabase.isIndexed(localIdentifier: "rebuilt-photo"))
+        XCTAssertEqual(try relaunchedDatabase.indexedCount(), 1)
     }
 
     func testFirstVideoFrameBatchAfterRebuildWipeClearsRequirement() throws {
