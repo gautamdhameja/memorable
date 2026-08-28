@@ -4,61 +4,121 @@ import AVFoundation
 import os
 
 class PhotoLibrary {
+    private final class PhotoKitTimeoutController: Sendable {
+        private struct State: Sendable {
+            var task: Task<Void, Never>?
+            var isStopped = false
+        }
+
+        private let state = OSAllocatedUnfairLock(initialState: State())
+
+        func register(_ task: Task<Void, Never>) {
+            let shouldCancel = state.withLock { state in
+                guard !state.isStopped else { return true }
+                state.task = task
+                return false
+            }
+            if shouldCancel {
+                task.cancel()
+            }
+        }
+
+        func stop() {
+            let task = state.withLock { state in
+                state.isStopped = true
+                defer { state.task = nil }
+                return state.task
+            }
+            task?.cancel()
+        }
+    }
+
     struct VideoFrame: Sendable {
         let position: Double
         let image: UIImage
     }
 
-    private final class VideoFrameAccumulator: Sendable {
+    private final class VideoFrameCancellation: Sendable {
         private struct State {
+            var generator: AVAssetImageGenerator?
+            var isCancelled = false
+            var isFinished = false
+        }
+
+        private let state = OSAllocatedUnfairLock(uncheckedState: State())
+
+        func register(_ generator: AVAssetImageGenerator) {
+            let shouldCancel = state.withLockUnchecked { state in
+                guard !state.isCancelled, !state.isFinished else { return true }
+                state.generator = generator
+                return false
+            }
+            if shouldCancel {
+                generator.cancelAllCGImageGeneration()
+            }
+        }
+
+        func cancel() {
+            let generator = state.withLockUnchecked { state in
+                state.isCancelled = true
+                defer { state.generator = nil }
+                return state.generator
+            }
+            generator?.cancelAllCGImageGeneration()
+        }
+
+        func finish() {
+            state.withLockUnchecked {
+                $0.isFinished = true
+                $0.generator = nil
+            }
+        }
+    }
+
+    private final class VideoFrameAccumulator: Sendable {
+        private struct State: Sendable {
             var remaining: Int
             var frames: [VideoFrame]
-            var generator: AVAssetImageGenerator?
             let completion: @Sendable ([VideoFrame]?) -> Void
         }
 
         private let state: OSAllocatedUnfairLock<State>
+        private let cancellation: VideoFrameCancellation
 
         init(
             count: Int,
-            generator: AVAssetImageGenerator,
+            cancellation: VideoFrameCancellation,
             completion: @escaping @Sendable ([VideoFrame]?) -> Void
         ) {
+            self.cancellation = cancellation
             state = OSAllocatedUnfairLock(
-                uncheckedState: State(
-                    remaining: count,
-                    frames: [],
-                    generator: generator,
-                    completion: completion
-                )
+                initialState: State(remaining: count, frames: [], completion: completion)
             )
         }
 
         func receive(position: Double, image: UIImage?) {
-            let finished: (completion: @Sendable ([VideoFrame]?) -> Void, frames: [VideoFrame]?)? = state.withLockUnchecked { state in
+            let finished: (completion: @Sendable ([VideoFrame]?) -> Void, frames: [VideoFrame]?)? = state.withLock { state in
                 guard state.remaining > 0 else { return nil }
                 state.remaining -= 1
                 if let image {
                     state.frames.append(VideoFrame(position: position, image: image))
                 }
                 guard state.remaining == 0 else { return nil }
-                state.generator = nil
                 let frames = state.frames.sorted { $0.position < $1.position }
                 return (state.completion, frames.isEmpty ? nil : frames)
             }
             if let finished {
+                cancellation.finish()
                 finished.completion(finished.frames)
             }
         }
     }
 
     /// PhotoKit owns request callbacks and may invoke them from arbitrary queues.
-    /// Every mutable field is accessed under `lock`; stored video assets are only
-    /// exposed through a synchronous closure while that same lock is held.
+    /// The request identifier is always accessed under `lock`.
     fileprivate final class PhotoKitRequestToken: @unchecked Sendable {
         private let lock = NSLock()
         private var requestID: PHImageRequestID = PHInvalidImageRequestID
-        private var videoAsset: AVAsset?
 
         func set(_ requestID: PHImageRequestID) {
             lock.lock()
@@ -76,30 +136,18 @@ class PhotoLibrary {
             }
         }
 
-        func storeVideoAsset(_ asset: AVAsset) {
-            lock.lock()
-            videoAsset = asset
-            lock.unlock()
-        }
-
-        func withVideoAsset<Result>(_ operation: (AVAsset) -> Result) -> Result? {
-            lock.lock()
-            defer { lock.unlock() }
-            guard let videoAsset else { return nil }
-            return operation(videoAsset)
-        }
     }
 
     struct VideoPlaybackAsset: Sendable {
-        private let storage: PhotoKitRequestToken
+        private let asset: OSAllocatedUnfairLock<AVAsset>
 
-        fileprivate init(storage: PhotoKitRequestToken) {
-            self.storage = storage
+        fileprivate init(asset: AVAsset) {
+            self.asset = OSAllocatedUnfairLock(uncheckedState: asset)
         }
 
         @MainActor
         func makePlayer() -> AVPlayer? {
-            storage.withVideoAsset { AVPlayer(playerItem: AVPlayerItem(asset: $0)) }
+            asset.withLockUnchecked { AVPlayer(playerItem: AVPlayerItem(asset: $0)) }
         }
     }
 
@@ -214,17 +262,20 @@ class PhotoLibrary {
     ) async -> [VideoFrame]? {
         let duration = asset.duration
         guard duration > 0, !positions.isEmpty else { return nil }
+        let cancellation = VideoFrameCancellation()
+        let assetLoadTimeout = PhotoKitTimeoutController()
 
-        return await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
-            let options = PHVideoRequestOptions()
-            options.isNetworkAccessAllowed = false
-            options.deliveryMode = .highQualityFormat
-
-            return PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
-                guard !photoKitRequestDidFail(info), let avAsset else {
+        return await withPhotoKitTimeout(
+            seconds: TimeoutConfig.videoLoad,
+            timeoutController: assetLoadTimeout,
+            onCancel: { cancellation.cancel() }
+        ) { completion in
+            requestLocalVideoAsset(for: asset) { avAsset in
+                guard let avAsset else {
                     completion(nil)
                     return
                 }
+                assetLoadTimeout.stop()
 
                 let generator = AVAssetImageGenerator(asset: avAsset)
                 generator.appliesPreferredTrackTransform = true
@@ -237,7 +288,7 @@ class PhotoLibrary {
                 }
                 let accumulator = VideoFrameAccumulator(
                     count: requestedTimes.count,
-                    generator: generator,
+                    cancellation: cancellation,
                     completion: completion
                 )
                 generator.generateCGImagesAsynchronously(forTimes: requestedTimes) { requestedTime, cgImage, _, _, _ in
@@ -250,41 +301,40 @@ class PhotoLibrary {
                         image: cgImage.map(UIImage.init(cgImage:))
                     )
                 }
+                cancellation.register(generator)
             }
         }
     }
 
     static func loadVideoURL(for asset: PHAsset) async -> URL? {
         await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
-            let options = PHVideoRequestOptions()
-            options.isNetworkAccessAllowed = false
-            options.deliveryMode = .highQualityFormat
-
-            return PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
-                guard !photoKitRequestDidFail(info) else {
-                    completion(nil)
-                    return
-                }
+            requestLocalVideoAsset(for: asset) { avAsset in
                 completion((avAsset as? AVURLAsset)?.url)
             }
         }
     }
 
     static func loadVideoPlaybackAsset(for asset: PHAsset) async -> VideoPlaybackAsset? {
-        let storage = PhotoKitRequestToken()
         return await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
-            let options = PHVideoRequestOptions()
-            options.isNetworkAccessAllowed = false
-            options.deliveryMode = .highQualityFormat
-
-            return PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
-                guard !photoKitRequestDidFail(info), let avAsset else {
-                    completion(nil)
-                    return
-                }
-                storage.storeVideoAsset(avAsset)
-                completion(VideoPlaybackAsset(storage: storage))
+            requestLocalVideoAsset(for: asset) { avAsset in
+                completion(avAsset.map(VideoPlaybackAsset.init(asset:)))
             }
+        }
+    }
+
+    private static func requestLocalVideoAsset(
+        for asset: PHAsset,
+        completion: @escaping @Sendable (AVAsset?) -> Void
+    ) -> PHImageRequestID {
+        let options = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = false
+        options.deliveryMode = .highQualityFormat
+
+        return PHImageManager.default().requestAVAsset(forVideo: asset, options: options) {
+            avAsset,
+            _,
+            info in
+            completion(photoKitRequestDidFail(info) ? nil : avAsset)
         }
     }
 
@@ -345,6 +395,8 @@ class PhotoLibrary {
 
     private static func withPhotoKitTimeout<T: Sendable>(
         seconds: Double,
+        timeoutController: PhotoKitTimeoutController = PhotoKitTimeoutController(),
+        onCancel: @escaping @Sendable () -> Void = {},
         operation: @escaping (@escaping @Sendable (T?) -> Void) -> PHImageRequestID
     ) async -> T? {
         let token = PhotoKitRequestToken()
@@ -352,17 +404,25 @@ class PhotoLibrary {
             await withCheckedContinuation { continuation in
                 let guard_ = ContinuationGuard(continuation)
                 let timeoutTask = Task {
-                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    do {
+                        try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    } catch {
+                        return
+                    }
+                    onCancel()
                     token.cancel()
                     guard_.resume(returning: nil)
                 }
+                timeoutController.register(timeoutTask)
                 let requestID = operation { value in
-                    timeoutTask.cancel()
+                    timeoutController.stop()
                     guard_.resume(returning: value)
                 }
                 token.set(requestID)
             }
         } onCancel: {
+            timeoutController.stop()
+            onCancel()
             token.cancel()
         }
     }

@@ -1,4 +1,4 @@
-# Smart query session concurrency blocker
+# Smart query session concurrency
 
 ## Defect
 
@@ -20,9 +20,13 @@ current catch block treats that like any other model failure and falls back to
 the regex parser, so background validation can silently degrade a user's smart
 query parsing on iOS 26.
 
-## WP6 status
+## Fix
 
-WP6 remains blocked. This requires a separately reviewed runtime fix that either
-serializes use of the shared stateful session or gives independent searches
-independent sessions. Swift 6 settings must not be enabled until that behavior
-and its concurrent regression coverage land separately.
+`SmartQueryParser` now retains only a sendable responder factory. Every parse
+creates its own `LanguageModelSession`-backed responder, so overlapping searches
+never share a stateful session. The parser's existing fallback behavior remains
+unchanged when a response fails.
+
+Concurrent regression coverage verifies that overlapping parses use distinct
+responders. With that blocker resolved, all application and test targets now
+build with Swift 6.

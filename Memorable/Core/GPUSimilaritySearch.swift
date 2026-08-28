@@ -1,7 +1,6 @@
 import Foundation
 import Metal
 import MetalPerformanceShadersGraph
-import Accelerate
 import os
 
 protocol SimilaritySearching: AnyObject, Sendable {
@@ -29,7 +28,6 @@ final class GPUSimilaritySearch: SimilaritySearching {
         let matrixPlaceholder: MPSGraphTensor
         let queryPlaceholder: MPSGraphTensor
         let resultTensor: MPSGraphTensor
-        let n: Int
     }
 
     init?(embeddingDim: Int = EmbeddingConfig.dimensions) {
@@ -76,8 +74,7 @@ final class GPUSimilaritySearch: SimilaritySearching {
             graph: graph,
             matrixPlaceholder: matrixPlaceholder,
             queryPlaceholder: queryPlaceholder,
-            resultTensor: resultTensor,
-            n: count
+            resultTensor: resultTensor
         )
         indexState.withLockUnchecked {
             $0 = IndexState(matrixBuffer: matrixBuffer, cachedGraph: cachedGraph, count: count)
@@ -95,8 +92,7 @@ final class GPUSimilaritySearch: SimilaritySearching {
         let index = indexState.withLockUnchecked { $0 }
         guard index.count > 0,
               let cached = index.cachedGraph,
-              let matBuf = index.matrixBuffer,
-              cached.n == index.count else {
+              let matBuf = index.matrixBuffer else {
             return nil
         }
         let count = index.count
@@ -161,8 +157,7 @@ final class GPUSimilaritySearch: SimilaritySearching {
         let index = indexState.withLockUnchecked { $0 }
         guard count > 0,
               let matBuf = index.matrixBuffer,
-              let cached = index.cachedGraph,
-              cached.n == count,
+              index.cachedGraph != nil,
               index.count == count else {
             return []
         }
