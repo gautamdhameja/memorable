@@ -153,7 +153,14 @@ final class GPUSimilaritySearch: SimilaritySearching {
     /// Compute pairwise similarity for a batch of query rows against all stored embeddings.
     /// Returns an array of (rowIndex, colIndex, score) triples above the threshold.
     /// Only the upper triangle (colIndex > rowIndex) is returned to avoid duplicates.
-    func findDuplicates(embeddings: [Float16], count: Int, threshold: Float, batchSize: Int = 500) -> [(Int, Int, Float)] {
+    func findDuplicates(
+        embeddings: [Float16],
+        count: Int,
+        threshold: Float,
+        batchSize: Int = 500,
+        maximumResults: Int = DuplicateFinder.maximumRetainedPairs,
+        maximumComparisons: Int = DuplicateFinder.maximumComparisons
+    ) -> [DuplicateCandidate] {
         let index = indexState.withLockUnchecked { $0 }
         guard count > 0,
               let matBuf = index.matrixBuffer,
@@ -162,11 +169,13 @@ final class GPUSimilaritySearch: SimilaritySearching {
             return []
         }
 
-        var results: [(Int, Int, Float)] = []
+        var candidates = DuplicateCandidateHeap(capacity: maximumResults)
         let maxPhotos = min(count, 10_000)
+        var comparisons = 0
 
         // Process in batches: [batchSize, D] × [D, N] = [batchSize, N]
         for batchStart in stride(from: 0, to: maxPhotos, by: batchSize) {
+            guard !Task.isCancelled, comparisons < maximumComparisons else { break }
             let batchEnd = min(batchStart + batchSize, maxPhotos)
             let batchCount = batchEnd - batchStart
 
@@ -223,18 +232,26 @@ final class GPUSimilaritySearch: SimilaritySearching {
             let thresholdF16 = Float16(threshold)
             let resultCount = resultFloat16.count
             for col in 0..<batchCount {
+                guard !Task.isCancelled, comparisons < maximumComparisons else { break }
                 let globalCol = batchStart + col
                 for row in (globalCol + 1)..<maxPhotos {
+                    guard comparisons < maximumComparisons else { break }
+                    comparisons += 1
+                    if comparisons.isMultiple(of: 1_024), Task.isCancelled { break }
                     let index = row * batchCount + col
                     guard index < resultCount else { continue }
                     let score = resultFloat16[index]
                     if score >= thresholdF16 {
-                        results.append((globalCol, row, Float(score)))
+                        candidates.insert(DuplicateCandidate(
+                            firstIndex: globalCol,
+                            secondIndex: row,
+                            score: Float(score)
+                        ))
                     }
                 }
             }
         }
 
-        return results
+        return candidates.sortedBestFirst()
     }
 }

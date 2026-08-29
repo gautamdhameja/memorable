@@ -86,8 +86,8 @@ class AppState: ObservableObject {
     }
 
     func handleMemoryWarning() {
-        indexingService?.cancelEnrichmentForMemoryPressure()
-        searchEngine?.dropIndex()
+        indexingService?.cancelAllWorkForMemoryPressure()
+        searchEngine?.suspendForMemoryPressure()
         indexingService?.isReady = false
         readiness.markIndexUnavailable()
         semanticRuntime.markIndexUnavailable()
@@ -95,6 +95,7 @@ class AppState: ObservableObject {
 
     func retrySemanticWarmup() {
         errorMessage = nil
+        searchEngine?.resumeAfterMemoryPressure()
         semanticRuntime.startUserInitiatedWarmup()
     }
 

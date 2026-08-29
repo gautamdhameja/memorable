@@ -7,6 +7,7 @@ struct DuplicateFinderView: View {
     @State private var duplicates: [DuplicatePair] = []
     @State private var isScanning = false
     @State private var scanComplete = false
+    @State private var scanTask: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -81,32 +82,54 @@ struct DuplicateFinderView: View {
             }
             .preferredColorScheme(.dark)
         }
+        .onDisappear {
+            cancelScan(clearResults: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            cancelScan(clearResults: true)
+        }
     }
 
     private func startScan() {
+        scanTask?.cancel()
         isScanning = true
         let db = database
-        Task.detached(priority: .userInitiated) {
+        scanTask = Task.detached(priority: .userInitiated) {
             do {
                 let data = try db.loadAllEmbeddings()
+                guard !Task.isCancelled else { return }
                 let found = DuplicateFinder.findDuplicates(
                     ids: data.ids,
                     localIdentifiers: data.localIdentifiers,
                     embeddings: data.embeddings
                 )
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     duplicates = found
                     isScanning = false
                     scanComplete = true
+                    scanTask = nil
                     if !found.isEmpty { Haptics.success() }
                 }
             } catch {
+                guard !Task.isCancelled else { return }
                 logger.error("Duplicate scan failed: \(error.localizedDescription)")
                 await MainActor.run {
                     isScanning = false
                     scanComplete = true
+                    scanTask = nil
                 }
             }
+        }
+    }
+
+    private func cancelScan(clearResults: Bool) {
+        scanTask?.cancel()
+        scanTask = nil
+        isScanning = false
+        scanComplete = false
+        if clearResults {
+            duplicates.removeAll(keepingCapacity: false)
         }
     }
 }
@@ -128,7 +151,7 @@ struct DuplicatePairRow: View {
                 Circle()
                     .fill(pair.similarity > 0.98 ? Celestial.Colors.error : Celestial.Colors.amber)
                     .frame(width: 6, height: 6)
-                Text("\(Int(pair.similarity * 100))% match")
+                Text("\(matchPercent)% match")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(pair.similarity > 0.98 ? Celestial.Colors.error : Celestial.Colors.amber)
                 Spacer()
@@ -183,6 +206,11 @@ struct DuplicatePairRow: View {
         } message: {
             Text("The photo will be moved to the Recently Deleted album in Photos.")
         }
+    }
+
+    private var matchPercent: Int {
+        guard pair.similarity.isFinite else { return 0 }
+        return min(100, max(0, Int((pair.similarity * 100).rounded())))
     }
 
     private func thumbnailView(

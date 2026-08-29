@@ -243,6 +243,7 @@ class IndexingService: ObservableObject {
     }
 
     func startIndexing() {
+        searchEngine.resumeAfterMemoryPressure()
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         SurpriseQueries.clearValidated()
@@ -250,6 +251,7 @@ class IndexingService: ObservableObject {
     }
 
     func indexNewPhotosOnly() {
+        searchEngine.resumeAfterMemoryPressure()
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         newPhotosAvailable = false
@@ -257,6 +259,7 @@ class IndexingService: ObservableObject {
     }
 
     func rebuildRequiredIndex() {
+        searchEngine.resumeAfterMemoryPressure()
         guard indexRebuildRequired else {
             startIndexing()
             return
@@ -273,6 +276,7 @@ class IndexingService: ObservableObject {
         librarySession = nil
         geocodingProgress = nil
         progress.isRunning = false
+        endBackgroundTask()
     }
 
     func deferEnrichmentForUserSearch() {
@@ -284,11 +288,19 @@ class IndexingService: ObservableObject {
         )
     }
 
-    func cancelEnrichmentForMemoryPressure() {
-        cancelEnrichmentWork()
+    func cancelAllWorkForMemoryPressure() {
+        jobQueue.cancelAll()
+        librarySession = nil
+        geocodingProgress = nil
+        progress.isRunning = false
+        isReady = false
+        endBackgroundTask()
+        searchEngine.suspendForMemoryPressure()
+        onIndexUnavailable?()
     }
 
     func indexFolder(url: URL, name: String) {
+        searchEngine.resumeAfterMemoryPressure()
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         let workflowID = UUID()
@@ -376,6 +388,11 @@ class IndexingService: ObservableObject {
 
     @discardableResult
     private func reloadSearchIndex() async -> Bool {
+        guard !searchEngine.isMemoryPressureSuspended, !Task.isCancelled else {
+            isReady = false
+            onIndexUnavailable?()
+            return false
+        }
         do {
             #if DEBUG
             logger.info("[IndexingService] reloadSearchIndex start; previousIndexVersion=\(self.indexVersion), progressPhase=\(String(describing: self.progress.phase)), progressRunning=\(self.progress.isRunning)")
@@ -384,6 +401,11 @@ class IndexingService: ObservableObject {
                 try searchEngine.loadIndex()
                 return searchEngine.isIndexLoaded
             }.value
+            guard !searchEngine.isMemoryPressureSuspended, !Task.isCancelled else {
+                isReady = false
+                onIndexUnavailable?()
+                return false
+            }
             isReady = didLoad
             if didLoad {
                 indexVersion += 1
@@ -791,9 +813,17 @@ class IndexingService: ObservableObject {
 
     private func beginBackgroundTask() {
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "Indexing") { [weak self] in
-            // iOS is about to suspend — save progress and end task
-            self?.endBackgroundTask()
+            Task { @MainActor [weak self] in
+                self?.handleBackgroundTaskExpiration()
+            }
         }
+    }
+
+    func handleBackgroundTaskExpiration() {
+        #if DEBUG
+        logger.warning("[IndexingService] Background time expired; cancelling active indexing workflow")
+        #endif
+        stopIndexing()
     }
 
     private func endBackgroundTask() {

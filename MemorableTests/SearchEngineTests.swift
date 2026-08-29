@@ -4,6 +4,56 @@ import os
 
 final class SearchEngineTests: XCTestCase {
 
+    func testSearchResultsAreBoundedAndDeterministicallyOrdered() throws {
+        let photos = (0..<(SearchEngine.maximumRetainedResults + 25)).map { index in
+            FixturePhoto(
+                id: String(format: "photo-%04d", index),
+                localIdentifier: String(format: "local-%04d", index),
+                date: Date(timeIntervalSince1970: TimeInterval(index)),
+                embedding: float16Vector(first: 1)
+            )
+        }
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: SearchFixtureDatabase(photos: photos)
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(hints: hints(text: "dog"))
+
+        XCTAssertEqual(response.results.count, SearchEngine.maximumRetainedResults)
+        XCTAssertEqual(response.results.first?.id, "photo-0524")
+        XCTAssertEqual(response.results.last?.id, "photo-0025")
+    }
+
+    func testMemoryPressureSuspendsIndexReloadUntilExplicitResume() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "photo-1",
+                localIdentifier: "local-photo-1",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database
+        )
+
+        try engine.loadIndex()
+        XCTAssertTrue(engine.isIndexLoaded)
+
+        engine.suspendForMemoryPressure()
+        try engine.loadIndex()
+        XCTAssertFalse(engine.isIndexLoaded)
+        XCTAssertTrue(engine.isMemoryPressureSuspended)
+
+        engine.resumeAfterMemoryPressure()
+        try engine.loadIndex()
+        XCTAssertTrue(engine.isIndexLoaded)
+        XCTAssertFalse(engine.isMemoryPressureSuspended)
+    }
+
     func testMediaIndexRejectsMismatchedColumnLengths() throws {
         XCTAssertThrowsError(
             try MediaIndex(

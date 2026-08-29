@@ -21,6 +21,7 @@ private struct SearchIndexSnapshot: Sendable {
     var uniqueVideoCount = 0
     var photoSimilaritySearch: SimilaritySearching?
     var videoSimilaritySearch: SimilaritySearching?
+    var isMemoryPressureSuspended = false
 }
 
 private struct ScoredMedia {
@@ -35,6 +36,10 @@ final class SearchEngine: Sendable {
     private let minimumScoreThreshold = SearchConfig.minimumScoreThreshold
 
     static let maxRecommendedPhotos = IndexingConfig.largeLibraryThreshold
+    /// The UI progressively reveals results, but retaining every match can
+    /// exhaust memory for large Pro libraries. Keep a generous, deterministic
+    /// window instead.
+    static let maximumRetainedResults = SearchConfig.locationResultsCap
 
     private let injectedPhotoSimilaritySearch: SimilaritySearching?
     private let injectedVideoSimilaritySearch: SimilaritySearching?
@@ -60,12 +65,14 @@ final class SearchEngine: Sendable {
     }
 
     func loadIndex() throws {
+        guard !isMemoryPressureSuspended else { return }
         #if DEBUG
         let loadStart = CFAbsoluteTimeGetCurrent()
         #endif
 
         let photoIndex = try database.loadAllEmbeddings()
         let videoIndex = try database.loadAllVideoEmbeddings()
+        guard !isMemoryPressureSuspended else { return }
         guard photoIndex.kind == .photo, videoIndex.kind == .videoFrame else {
             logger.error("[SearchEngine] Persisted index has unexpected media kinds")
             throw SearchEngineError.corruptedIndex
@@ -88,6 +95,7 @@ final class SearchEngine: Sendable {
         }
 
         indexSnapshot.withLock {
+            guard !$0.isMemoryPressureSuspended else { return }
             $0 = SearchIndexSnapshot(
                 photos: photoIndex,
                 videos: videoIndex,
@@ -140,16 +148,37 @@ final class SearchEngine: Sendable {
         indexSnapshot.withLock { $0.photos.count + $0.videos.count > 0 }
     }
 
+    var isMemoryPressureSuspended: Bool {
+        indexSnapshot.withLock { $0.isMemoryPressureSuspended }
+    }
+
     func dropIndex() {
-        indexSnapshot.withLock { $0 = SearchIndexSnapshot() }
+        indexSnapshot.withLock {
+            let suspended = $0.isMemoryPressureSuspended
+            $0 = SearchIndexSnapshot(isMemoryPressureSuspended: suspended)
+        }
         #if DEBUG
         logger.info("[SearchEngine] Index dropped due to memory pressure")
         #endif
     }
 
+    func suspendForMemoryPressure() {
+        indexSnapshot.withLock { $0 = SearchIndexSnapshot(isMemoryPressureSuspended: true) }
+        #if DEBUG
+        logger.info("[SearchEngine] Index suspended due to memory pressure")
+        #endif
+    }
+
+    func resumeAfterMemoryPressure() {
+        indexSnapshot.withLock { $0.isMemoryPressureSuspended = false }
+    }
+
     // MARK: - Search
 
     func search(query: String) async throws -> SearchResponse {
+        guard !isMemoryPressureSuspended else {
+            return SearchResponse(results: [], fallbackResults: [], filtersApplied: nil)
+        }
         if !isIndexLoaded {
             try await Task.detached(priority: .userInitiated) { [self] in
                 try loadIndex()
@@ -397,13 +426,9 @@ final class SearchEngine: Sendable {
         // Sort by score descending. For near-identical scores (within 1%),
         // prefer more recent results. SigLIP2's sigmoid loss produces a narrow
         // score range, so the tolerance must be tight to preserve relevance ranking.
-        allResults.sort { a, b in
-            let scoreDiff = abs(a.score - b.score)
-            let maxScore = max(a.score, b.score)
-            if maxScore > 0 && scoreDiff / maxScore < 0.01 {
-                return (a.creationDate ?? .distantPast) > (b.creationDate ?? .distantPast)
-            }
-            return a.score > b.score
+        allResults.sort(by: Self.isPreferredResult)
+        if allResults.count > Self.maximumRetainedResults {
+            allResults.removeSubrange(Self.maximumRetainedResults...)
         }
 
         #if DEBUG
@@ -461,17 +486,22 @@ final class SearchEngine: Sendable {
             // Sort ALL candidates by CLIP score (not just those above threshold).
             // This way "old town" photos that scored 0.16 rank above random
             // San Diego photos that scored 0.08.
-            var candidateResults: [SearchResult] = []
-            for i in 0..<photos.count {
-                guard photoCandidateMask[i] else { continue }
-                candidateResults.append(SearchResult(
+            let photoCandidateRows = (0..<photos.count)
+                .filter { photoCandidateMask[$0] }
+                .sorted {
+                    if scores[$0] != scores[$1] { return scores[$0] > scores[$1] }
+                    return photos.localIdentifiers[$0] < photos.localIdentifiers[$1]
+                }
+                .prefix(SearchConfig.locationResultsCap)
+            var candidateResults = photoCandidateRows.map { i in
+                SearchResult(
                     id: photos.ids[i],
                     score: scores[i],
                     localIdentifier: photos.localIdentifiers[i],
                     creationDate: photos.dates[i],
                     isVideo: false,
                     bestFramePosition: nil
-                ))
+                )
             }
 
             // Also include video candidates if they passed filters
@@ -479,7 +509,7 @@ final class SearchEngine: Sendable {
 
             // Sort by CLIP score descending. All candidates get ranked by visual
             // relevance, even those below the normal threshold.
-            candidateResults.sort { $0.score > $1.score }
+            candidateResults.sort(by: Self.isPreferredResult)
             let merged = Array(candidateResults.prefix(SearchConfig.locationResultsCap))
 
             let summary = FilterSummary(
@@ -545,7 +575,15 @@ final class SearchEngine: Sendable {
             ))
         }
 
-        results.sort { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
+        results.sort {
+            let lhsDate = $0.creationDate ?? .distantPast
+            let rhsDate = $1.creationDate ?? .distantPast
+            if lhsDate != rhsDate { return lhsDate > rhsDate }
+            return $0.localIdentifier < $1.localIdentifier
+        }
+        if results.count > Self.maximumRetainedResults {
+            results.removeSubrange(Self.maximumRetainedResults...)
+        }
 
         #if DEBUG
         logger.info("[SearchEngine] locationOnlyResults: returning \(results.count) results")
@@ -861,9 +899,21 @@ final class SearchEngine: Sendable {
         case .photo:
             var rows = (0..<index.count).filter { scores[$0] >= threshold }
             if sortByScore {
-                rows.sort { scores[$0] > scores[$1] }
+                rows.sort { lhs, rhs in
+                    let lhsScore = scores[lhs]
+                    let rhsScore = scores[rhs]
+                    let scoreDiff = abs(lhsScore - rhsScore)
+                    let maxScore = max(lhsScore, rhsScore)
+                    if maxScore > 0, scoreDiff / maxScore < 0.01 {
+                        let lhsDate = index.dates[lhs] ?? .distantPast
+                        let rhsDate = index.dates[rhs] ?? .distantPast
+                        if lhsDate != rhsDate { return lhsDate > rhsDate }
+                    }
+                    if lhsScore != rhsScore { return lhsScore > rhsScore }
+                    return index.localIdentifiers[lhs] < index.localIdentifiers[rhs]
+                }
             }
-            return rows.map { row in
+            return rows.prefix(Self.maximumRetainedResults).map { row in
                 SearchResult(
                     id: index.ids[row],
                     score: scores[row],
@@ -898,7 +948,22 @@ final class SearchEngine: Sendable {
                 }
             }
             return idOrder.compactMap { bestByID[$0] }
+                .sorted(by: Self.isPreferredResult)
+                .prefix(Self.maximumRetainedResults)
+                .map { $0 }
         }
+    }
+
+    private static func isPreferredResult(_ lhs: SearchResult, _ rhs: SearchResult) -> Bool {
+        let scoreDiff = abs(lhs.score - rhs.score)
+        let maxScore = max(lhs.score, rhs.score)
+        if maxScore > 0, scoreDiff / maxScore < 0.01 {
+            let lhsDate = lhs.creationDate ?? .distantPast
+            let rhsDate = rhs.creationDate ?? .distantPast
+            if lhsDate != rhsDate { return lhsDate > rhsDate }
+        }
+        if lhs.score != rhs.score { return lhs.score > rhs.score }
+        return lhs.localIdentifier < rhs.localIdentifier
     }
 
     private func mediaPassesLocationFilter(

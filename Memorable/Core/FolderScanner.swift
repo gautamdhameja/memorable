@@ -2,6 +2,10 @@ import Foundation
 import UIKit
 
 class FolderScanner {
+    /// Folder sources are user-selected, but their trees can still be
+    /// unexpectedly large. Match the app's documented large-library ceiling
+    /// instead of buffering an unbounded number of URLs.
+    static let maximumScannedImages = IndexingConfig.largeLibraryThreshold
     // `.withSecurityScope` is unavailable on iOS. Persist the document-picker
     // bookmark and pair every access with start/stopAccessingSecurityScopedResource.
     private static let bookmarkOptions: URL.BookmarkCreationOptions = .minimalBookmark
@@ -100,9 +104,15 @@ class FolderScanner {
         return "folder:\(sourceId):\(relativePath)"
     }
 
-    // Scan a folder and return all image file URLs
-    static func scanFolder(at url: URL) -> [URL] {
+    // Scan a folder and return a bounded, sorted batch of image file URLs.
+    static func scanFolder(
+        at url: URL,
+        maximumImageCount: Int = maximumScannedImages
+    ) -> [URL] {
+        let limit = max(0, maximumImageCount)
+        guard limit > 0, !Task.isCancelled else { return [] }
         var imageURLs: [URL] = []
+        imageURLs.reserveCapacity(min(limit, 1_000))
 
         guard let enumerator = FileManager.default.enumerator(
             at: url,
@@ -113,6 +123,7 @@ class FolderScanner {
         }
 
         for case let fileURL as URL in enumerator {
+            guard !Task.isCancelled else { break }
             // Skip symlinks to prevent traversal outside the selected folder
             if (try? fileURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
                 continue
@@ -120,6 +131,7 @@ class FolderScanner {
             let ext = fileURL.pathExtension.lowercased()
             if supportedExtensions.contains(ext) {
                 imageURLs.append(fileURL)
+                if imageURLs.count == limit { break }
             }
         }
 

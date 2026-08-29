@@ -4,6 +4,23 @@ import UIKit
 
 final class ImagePreprocessingTests: XCTestCase {
 
+    func testFolderScanStopsAtConfiguredBoundAndSortsRetainedFiles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        for index in 0..<8 {
+            let file = root.appendingPathComponent(String(format: "%02d.jpg", 7 - index))
+            XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data()))
+        }
+
+        let results = FolderScanner.scanFolder(at: root, maximumImageCount: 5)
+
+        XCTAssertEqual(results.count, 5)
+        XCTAssertEqual(results.map(\.lastPathComponent), results.map(\.lastPathComponent).sorted())
+    }
+
     func testImageRequestOptionsUseHighQualityLocalExactLoading() {
         let options = PhotoLibrary.imageRequestOptions()
 

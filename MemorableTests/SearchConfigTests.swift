@@ -72,4 +72,30 @@ final class SearchConfigTests: XCTestCase {
         XCTAssertLessThan(SearchConfig.videoRelevanceCompensation, threshold,
             "Video compensation should not alone push a result over threshold")
     }
+
+    func testDuplicateFinderBoundsDenseMatchResultsDeterministically() {
+        let count = 70
+        let ids = (0..<count).map { "photo-\($0)" }
+        let localIDs = (0..<count).map { "local-\($0)" }
+        let embeddings = [Float16](repeating: 1, count: count)
+
+        let first = DuplicateFinder.findDuplicates(
+            ids: ids,
+            localIdentifiers: localIDs,
+            embeddings: embeddings,
+            embeddingDim: 1,
+            threshold: 0.5
+        )
+        let second = DuplicateFinder.findDuplicates(
+            ids: ids,
+            localIdentifiers: localIDs,
+            embeddings: embeddings,
+            embeddingDim: 1,
+            threshold: 0.5
+        )
+
+        XCTAssertEqual(first.count, DuplicateFinder.maximumRetainedPairs)
+        XCTAssertEqual(first.map(\.id), second.map(\.id))
+        XCTAssertTrue(zip(first, first.dropFirst()).allSatisfy { $0.similarity >= $1.similarity })
+    }
 }
