@@ -3,36 +3,143 @@ import UIKit
 import AVFoundation
 import os
 
-class PhotoLibrary {
-    private final class PhotoKitTimeoutController: Sendable {
-        private struct State: Sendable {
-            var task: Task<Void, Never>?
-            var isStopped = false
+final class PhotoKitRequestController<Value: Sendable>: Sendable {
+    private struct State: Sendable {
+        var continuation: ContinuationGuard<Value?>?
+        var requestID: PHImageRequestID = PHInvalidImageRequestID
+        var timeoutTask: Task<Void, Never>?
+        var timeoutGeneration: UInt = 0
+        var isFinished = false
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let cancelRequest: @Sendable (PHImageRequestID) -> Void
+    private let onCancel: @Sendable () -> Void
+
+    init(
+        cancelRequest: @escaping @Sendable (PHImageRequestID) -> Void,
+        onCancel: @escaping @Sendable () -> Void = {}
+    ) {
+        self.cancelRequest = cancelRequest
+        self.onCancel = onCancel
+    }
+
+    @discardableResult
+    func installContinuation(_ continuation: ContinuationGuard<Value?>) -> Bool {
+        let didInstall = state.withLock { state in
+            guard !state.isFinished else { return false }
+            state.continuation = continuation
+            return true
         }
-
-        private let state = OSAllocatedUnfairLock(initialState: State())
-
-        func register(_ task: Task<Void, Never>) {
-            let shouldCancel = state.withLock { state in
-                guard !state.isStopped else { return true }
-                state.task = task
-                return false
-            }
-            if shouldCancel {
-                task.cancel()
-            }
+        if !didInstall {
+            continuation.resume(returning: nil)
         }
+        return didInstall
+    }
 
-        func stop() {
-            let task = state.withLock { state in
-                state.isStopped = true
-                defer { state.task = nil }
-                return state.task
-            }
-            task?.cancel()
+    func registerRequestID(_ requestID: PHImageRequestID) {
+        let shouldCancel = state.withLock { state in
+            guard !state.isFinished else { return true }
+            state.requestID = requestID
+            return false
+        }
+        if shouldCancel, requestID != PHInvalidImageRequestID {
+            cancelRequest(requestID)
         }
     }
 
+    @discardableResult
+    func beginNextPhase() -> Bool {
+        let transition = state.withLock { state -> (didBegin: Bool, timeoutTask: Task<Void, Never>?) in
+            guard !state.isFinished else { return (false, nil) }
+            state.requestID = PHInvalidImageRequestID
+            state.timeoutGeneration &+= 1
+            defer { state.timeoutTask = nil }
+            return (true, state.timeoutTask)
+        }
+        guard transition.didBegin else { return false }
+        transition.timeoutTask?.cancel()
+        return true
+    }
+
+    func scheduleTimeout(
+        seconds: Double,
+        action: @escaping @Sendable () -> Void
+    ) {
+        let registration = state.withLock { state -> (generation: UInt, previous: Task<Void, Never>?)? in
+            guard !state.isFinished else { return nil }
+            state.timeoutGeneration &+= 1
+            defer { state.timeoutTask = nil }
+            return (state.timeoutGeneration, state.timeoutTask)
+        }
+        guard let registration else { return }
+        registration.previous?.cancel()
+
+        let timeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard let self, self.claimTimeout(generation: registration.generation) else { return }
+            action()
+        }
+
+        let shouldCancel = state.withLock { state in
+            guard !state.isFinished,
+                  state.timeoutGeneration == registration.generation else { return true }
+            state.timeoutTask = timeoutTask
+            return false
+        }
+        if shouldCancel {
+            timeoutTask.cancel()
+        }
+    }
+
+    func finish(_ value: Value?) {
+        guard let completion = takeCompletion() else { return }
+        completion.timeoutTask?.cancel()
+        completion.continuation?.resume(returning: value)
+    }
+
+    func cancel() {
+        guard let completion = takeCompletion() else { return }
+        completion.timeoutTask?.cancel()
+        if completion.requestID != PHInvalidImageRequestID {
+            cancelRequest(completion.requestID)
+        }
+        onCancel()
+        completion.continuation?.resume(returning: nil)
+    }
+
+    private func claimTimeout(generation: UInt) -> Bool {
+        state.withLock { state in
+            guard !state.isFinished, state.timeoutGeneration == generation else { return false }
+            state.timeoutTask = nil
+            return true
+        }
+    }
+
+    private func takeCompletion() -> (
+        continuation: ContinuationGuard<Value?>?,
+        requestID: PHImageRequestID,
+        timeoutTask: Task<Void, Never>?
+    )? {
+        state.withLock { state in
+            guard !state.isFinished else { return nil }
+            state.isFinished = true
+            state.timeoutGeneration &+= 1
+            defer {
+                state.continuation = nil
+                state.requestID = PHInvalidImageRequestID
+                state.timeoutTask = nil
+            }
+            return (state.continuation, state.requestID, state.timeoutTask)
+        }
+    }
+}
+
+class PhotoLibrary {
     struct VideoFrame: Sendable {
         let position: Double
         let image: UIImage
@@ -112,30 +219,19 @@ class PhotoLibrary {
                 finished.completion(finished.frames)
             }
         }
-    }
 
-    /// PhotoKit owns request callbacks and may invoke them from arbitrary queues.
-    /// The request identifier is always accessed under `lock`.
-    fileprivate final class PhotoKitRequestToken: @unchecked Sendable {
-        private let lock = NSLock()
-        private var requestID: PHImageRequestID = PHInvalidImageRequestID
-
-        func set(_ requestID: PHImageRequestID) {
-            lock.lock()
-            self.requestID = requestID
-            lock.unlock()
-        }
-
-        func cancel() {
-            lock.lock()
-            let id = requestID
-            requestID = PHInvalidImageRequestID
-            lock.unlock()
-            if id != PHInvalidImageRequestID {
-                PHImageManager.default().cancelImageRequest(id)
+        func finishAfterTimeout() {
+            let finished: (completion: @Sendable ([VideoFrame]?) -> Void, frames: [VideoFrame]?)? = state.withLock { state in
+                guard state.remaining > 0 else { return nil }
+                state.remaining = 0
+                let frames = state.frames.sorted { $0.position < $1.position }
+                return (state.completion, frames.isEmpty ? nil : frames)
+            }
+            if let finished {
+                cancellation.cancel()
+                finished.completion(finished.frames)
             }
         }
-
     }
 
     struct VideoPlaybackAsset: Sendable {
@@ -263,19 +359,17 @@ class PhotoLibrary {
         let duration = asset.duration
         guard duration > 0, !positions.isEmpty else { return nil }
         let cancellation = VideoFrameCancellation()
-        let assetLoadTimeout = PhotoKitTimeoutController()
 
-        return await withPhotoKitTimeout(
+        return await withPhotoKitRequest(
             seconds: TimeoutConfig.videoLoad,
-            timeoutController: assetLoadTimeout,
             onCancel: { cancellation.cancel() }
-        ) { completion in
+        ) { completion, requestController in
             requestLocalVideoAsset(for: asset) { avAsset in
                 guard let avAsset else {
                     completion(nil)
                     return
                 }
-                assetLoadTimeout.stop()
+                guard requestController.beginNextPhase() else { return }
 
                 let generator = AVAssetImageGenerator(asset: avAsset)
                 generator.appliesPreferredTrackTransform = true
@@ -291,6 +385,9 @@ class PhotoLibrary {
                     cancellation: cancellation,
                     completion: completion
                 )
+                requestController.scheduleTimeout(seconds: TimeoutConfig.videoLoad) {
+                    accumulator.finishAfterTimeout()
+                }
                 generator.generateCGImagesAsynchronously(forTimes: requestedTimes) { requestedTime, cgImage, _, _, _ in
                     let requestedSeconds = CMTimeGetSeconds(requestedTime)
                     let position = positions.min {
@@ -395,35 +492,38 @@ class PhotoLibrary {
 
     private static func withPhotoKitTimeout<T: Sendable>(
         seconds: Double,
-        timeoutController: PhotoKitTimeoutController = PhotoKitTimeoutController(),
-        onCancel: @escaping @Sendable () -> Void = {},
         operation: @escaping (@escaping @Sendable (T?) -> Void) -> PHImageRequestID
     ) async -> T? {
-        let token = PhotoKitRequestToken()
+        await withPhotoKitRequest(seconds: seconds, onCancel: {}) { completion, _ in
+            operation(completion)
+        }
+    }
+
+    private static func withPhotoKitRequest<T: Sendable>(
+        seconds: Double,
+        onCancel: @escaping @Sendable () -> Void,
+        operation: @escaping (
+            @escaping @Sendable (T?) -> Void,
+            PhotoKitRequestController<T>
+        ) -> PHImageRequestID
+    ) async -> T? {
+        let controller = PhotoKitRequestController<T>(
+            cancelRequest: { PHImageManager.default().cancelImageRequest($0) },
+            onCancel: onCancel
+        )
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
-                let guard_ = ContinuationGuard(continuation)
-                let timeoutTask = Task {
-                    do {
-                        try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                    } catch {
-                        return
-                    }
-                    onCancel()
-                    token.cancel()
-                    guard_.resume(returning: nil)
+                guard controller.installContinuation(ContinuationGuard(continuation)) else {
+                    return
                 }
-                timeoutController.register(timeoutTask)
-                let requestID = operation { value in
-                    timeoutController.stop()
-                    guard_.resume(returning: value)
+                controller.scheduleTimeout(seconds: seconds) { [weak controller] in
+                    controller?.cancel()
                 }
-                token.set(requestID)
+                let requestID = operation(controller.finish, controller)
+                controller.registerRequestID(requestID)
             }
         } onCancel: {
-            timeoutController.stop()
-            onCancel()
-            token.cancel()
+            controller.cancel()
         }
     }
 
