@@ -212,7 +212,42 @@ struct GeocodingCounts {
     let indexedVideos: Int
 }
 
+enum DatabaseCapabilityError: Error, Equatable {
+    case unavailable
+    case indexingUnavailableInFallback
+}
+
+enum DatabaseInitializationError: Error {
+    case persistentAndFallbackFailed(persistent: String, fallback: String)
+}
+
+/// Preserves the database API when storage initialization fails. Calls fail
+/// with a recoverable error instead of terminating the process.
+final class RecoverableDatabaseQueue: @unchecked Sendable {
+    private let queue: DatabaseQueue?
+
+    init(_ queue: DatabaseQueue?) {
+        self.queue = queue
+    }
+
+    func read<T>(_ value: (Database) throws -> T) throws -> T {
+        guard let queue else { throw DatabaseCapabilityError.unavailable }
+        return try queue.read(value)
+    }
+
+    func write<T>(_ updates: (Database) throws -> T) throws -> T {
+        guard let queue else { throw DatabaseCapabilityError.unavailable }
+        return try queue.write(updates)
+    }
+
+    func rawQueue() throws -> DatabaseQueue {
+        guard let queue else { throw DatabaseCapabilityError.unavailable }
+        return queue
+    }
+}
+
 protocol DatabaseProtocol: Sendable {
+    var allowsIndexingWrites: Bool { get }
     // Photos
     func insertPhoto(_ photo: IndexedPhoto) throws
     /// Returns true when the write atomically completes a pending required rebuild.
@@ -282,6 +317,10 @@ protocol DatabaseProtocol: Sendable {
     func deleteSmartAlbum(id: String) throws
 }
 
+extension DatabaseProtocol {
+    var allowsIndexingWrites: Bool { true }
+}
+
 // MARK: - AppDatabase
 
 final class AppDatabase: DatabaseProtocol, Sendable {
@@ -296,23 +335,64 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     private static let embeddingFormatStateKey = "embeddingFormatVersion"
     private static let currentEmbeddingFormatVersion = "orientation-correct-v1"
     private static let legacyFastFormatRebuildKey = "indexing.needsFastFormatPhotoRebuild"
-    let dbQueue: DatabaseQueue
+    private enum StorageMode {
+        case persistent
+        case inMemoryFallback
+        case unavailable
+    }
+
+    private struct OpenResult {
+        let queue: DatabaseQueue?
+        let mode: StorageMode
+        let error: DatabaseInitializationError?
+    }
+
+    let dbQueue: RecoverableDatabaseQueue
+    private let storageMode: StorageMode
+
+    var allowsIndexingWrites: Bool { storageMode == .persistent }
+    var isAvailable: Bool { storageMode != .unavailable }
 
     private init() {
-        dbQueue = Self.openMigratedDatabase(
+        let result = Self.openMigratedDatabase(
             openQueue: Self.openOnDiskDatabase,
-            migrate: { try Self.migrator.migrate($0) }
+            migrate: { try Self.migrator.migrate($0) },
+            fallbackMigrate: { try Self.migrator.migrate($0) }
         )
+        dbQueue = RecoverableDatabaseQueue(result.queue)
+        storageMode = result.mode
     }
 
     init(openQueue: () throws -> DatabaseQueue, migrate: (DatabaseQueue) throws -> Void) {
-        dbQueue = Self.openMigratedDatabase(openQueue: openQueue, migrate: migrate)
+        let result = Self.openMigratedDatabase(
+            openQueue: openQueue,
+            migrate: migrate,
+            fallbackMigrate: migrate
+        )
+        dbQueue = RecoverableDatabaseQueue(result.queue)
+        storageMode = result.mode
+    }
+
+    init(
+        openQueue: () throws -> DatabaseQueue,
+        migrate: (DatabaseQueue) throws -> Void,
+        fallbackMigrate: (DatabaseQueue) throws -> Void
+    ) throws {
+        let result = Self.openMigratedDatabase(
+            openQueue: openQueue,
+            migrate: migrate,
+            fallbackMigrate: fallbackMigrate
+        )
+        if let error = result.error { throw error }
+        dbQueue = RecoverableDatabaseQueue(result.queue)
+        storageMode = result.mode
     }
 
     private static func openMigratedDatabase(
         openQueue: () throws -> DatabaseQueue,
-        migrate: (DatabaseQueue) throws -> Void
-    ) -> DatabaseQueue {
+        migrate: (DatabaseQueue) throws -> Void,
+        fallbackMigrate: (DatabaseQueue) throws -> Void
+    ) -> OpenResult {
         Self.isInMemoryFallback = false
         do {
             let queue = try openQueue()
@@ -327,10 +407,29 @@ final class AppDatabase: DatabaseProtocol, Sendable {
             #if DEBUG
             logger.info("[Database] Migrations completed successfully")
             #endif
-            return queue
-        } catch {
-            logger.error("Database init or migration failed, using in-memory fallback: \(error.localizedDescription)")
-            return inMemoryFallbackQueue(migrate: migrate)
+            return OpenResult(queue: queue, mode: .persistent, error: nil)
+        } catch let persistentError {
+            logger.error("Database init or migration failed, using read-only in-memory fallback: \(persistentError.localizedDescription)")
+            Self.isInMemoryFallback = true
+            do {
+                let queue = try DatabaseQueue()
+                try fallbackMigrate(queue)
+                try finalizeEmbeddingFormatState(
+                    in: queue,
+                    orientationMigrationWasAlreadyApplied: false
+                )
+                return OpenResult(queue: queue, mode: .inMemoryFallback, error: nil)
+            } catch let fallbackError {
+                logger.error("In-memory database migration failed; storage is unavailable: \(fallbackError.localizedDescription)")
+                return OpenResult(
+                    queue: nil,
+                    mode: .unavailable,
+                    error: .persistentAndFallbackFailed(
+                        persistent: persistentError.localizedDescription,
+                        fallback: fallbackError.localizedDescription
+                    )
+                )
+            }
         }
     }
 
@@ -366,19 +465,6 @@ final class AppDatabase: DatabaseProtocol, Sendable {
             [.protectionKey: FileProtectionType.completeUnlessOpen],
             ofItemAtPath: url.path
         )
-    }
-
-    private static func inMemoryFallbackQueue(migrate: (DatabaseQueue) throws -> Void) -> DatabaseQueue {
-        Self.isInMemoryFallback = true
-        do {
-            let queue = try DatabaseQueue()
-            try migrate(queue)
-            return queue
-        } catch {
-            logger.error("In-memory database migration failed: \(error.localizedDescription)")
-            // Intentional force-try: in-memory DatabaseQueue allocation virtually never fails
-            return try! DatabaseQueue()
-        }
     }
 
     private static func finalizeEmbeddingFormatState(
@@ -549,6 +635,13 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         // SigLIP2 model replacement: old MobileCLIP embeddings are incompatible.
         // Clear all indexed data so the app re-indexes with the new model.
         migrator.registerMigration("v2-siglip2-model-swap") { db in
+            let existingMediaCount =
+                (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM indexed_photos") ?? 0)
+                + (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM indexed_videos") ?? 0)
+            try createAppStateTableIfNeeded(db)
+            if existingMediaCount > 0 {
+                try setAppState(indexRebuildStateKey, value: "true", in: db)
+            }
             try db.execute(sql: "DELETE FROM indexed_video_frames")
             try db.execute(sql: "DELETE FROM indexed_videos")
             try db.execute(sql: "DELETE FROM indexed_photos")
@@ -627,6 +720,7 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     // MARK: - Photos
 
     func insertPhoto(_ photo: IndexedPhoto) throws {
+        try requireIndexingWrites()
         try dbQueue.write { db in
             try photo.insert(db)
         }
@@ -638,6 +732,7 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         completingRequiredRebuild: Bool
     ) throws -> Bool {
         guard !photos.isEmpty else { return false }
+        try requireIndexingWrites()
         return try dbQueue.write { db in
             var completesRequiredRebuild = false
             if completingRequiredRebuild {
@@ -844,6 +939,7 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     // MARK: - Sources
 
     func insertSource(_ source: PhotoSource) throws {
+        try requireIndexingWrites()
         try dbQueue.write { db in
             try source.insert(db)
         }
@@ -970,6 +1066,7 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         completingRequiredRebuild: Bool
     ) throws -> Bool {
         guard !frames.isEmpty else { return false }
+        try requireIndexingWrites()
         return try dbQueue.write { db in
             var completesRequiredRebuild = false
             if completingRequiredRebuild {
@@ -1243,6 +1340,13 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     func deleteSmartAlbum(id: String) throws {
         try dbQueue.write { db in
             try db.execute(sql: "DELETE FROM smart_albums WHERE id = ?", arguments: [id])
+        }
+    }
+
+    private func requireIndexingWrites() throws {
+        guard isAvailable else { throw DatabaseCapabilityError.unavailable }
+        guard allowsIndexingWrites else {
+            throw DatabaseCapabilityError.indexingUnavailableInFallback
         }
     }
 }

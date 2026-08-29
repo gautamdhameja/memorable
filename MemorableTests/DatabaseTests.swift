@@ -58,14 +58,38 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(geocodingCounts.indexedVideos, 1)
     }
 
-    func testMigrationFailureUsesInMemoryFallbackState() throws {
+    func testMigrationFailureUsesUsableReadOnlyInMemoryFallback() throws {
+        var migrationAttempt = 0
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },
-            migrate: { _ in throw StubMigrationError.failed }
+            migrate: { queue in
+                migrationAttempt += 1
+                if migrationAttempt == 1 {
+                    throw StubMigrationError.failed
+                }
+                try AppDatabase.migrator.migrate(queue)
+            }
         )
 
         XCTAssertTrue(AppDatabase.isInMemoryFallback)
-        XCTAssertNotNil(database.dbQueue)
+        XCTAssertFalse(database.allowsIndexingWrites)
+        XCTAssertEqual(try database.indexedCount(), 0)
+        XCTAssertEqual(try database.videoIndexedCount(), 0)
+        XCTAssertThrowsError(try database.insertPhoto(makePhoto(localIdentifier: "blocked-photo"))) { error in
+            XCTAssertEqual(error as? DatabaseCapabilityError, .indexingUnavailableInFallback)
+        }
+    }
+
+    func testFailureOfPersistentAndFallbackMigrationIsRecoverable() {
+        XCTAssertThrowsError(
+            try AppDatabase(
+                openQueue: { try DatabaseQueue() },
+                migrate: { _ in throw StubMigrationError.failed },
+                fallbackMigrate: { _ in throw StubMigrationError.failed }
+            )
+        ) { error in
+            XCTAssertNotNil(error as? DatabaseInitializationError)
+        }
     }
 
     func testInsertedBasePhotoDefaultsToNeedingEnrichment() throws {
@@ -322,6 +346,20 @@ final class DatabaseTests: XCTestCase {
         XCTAssertFalse(try database.indexRebuildRequired())
     }
 
+    func testPopulatedV1DatabaseRecordsRequiredRebuildBeforeModelSwapWipe() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v1")
+        try insertLegacyPhoto(localIdentifier: "pre-model-swap-photo", into: queue)
+
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+
+        XCTAssertEqual(try database.indexedCount(), 0)
+        XCTAssertTrue(try database.indexRebuildRequired())
+    }
+
     func testInterruptedRebuildAfterFirstPhotoBatchPreservesProgressOnNextLaunch() throws {
         let interruptedQueue = try {
             let database = try makeDatabaseRequiringRebuild()
@@ -339,7 +377,7 @@ final class DatabaseTests: XCTestCase {
             )
 
             XCTAssertTrue(completedRebuild)
-            return database.dbQueue
+            return try database.dbQueue.rawQueue()
         }()
 
         // The first indexing run has stopped without end-of-pass cleanup.
