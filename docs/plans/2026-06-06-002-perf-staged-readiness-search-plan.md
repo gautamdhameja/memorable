@@ -59,7 +59,7 @@ The brainstorm also identified a packaging mismatch: `README.md` describes On-De
 
 **Privacy and Product Constraints**
 
-- R20. User photos, videos, queries, and embeddings remain on device throughout the optimization work.
+- R20. App-controlled processing keeps user photos, videos, queries, and embeddings on the device throughout the optimization work. User-initiated sharing remains an explicit exception for the selected photo and destination.
 - R21. Remote photo embedding, remote query processing, and analytics-dependent search tuning remain out of scope.
 
 ---
@@ -471,7 +471,7 @@ Model packaging work is intentionally isolated behind a resource-management seam
 
 - Update `SEARCH_SCORING.md` during U6 before using it as a tuning reference.
 - Update `README.md` during U7 so model packaging claims match `project.yml`.
-- Keep App Store privacy language aligned with the on-device-only constraint.
+- Keep App Store privacy language aligned with on-device processing, no automatic media transmission, and explicit user-initiated sharing.
 - The documented command-line build/test path remains blocked locally until the simulator/Xcode runtime mismatch noted in prior work is fixed.
 
 ---

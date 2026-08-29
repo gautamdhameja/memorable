@@ -61,15 +61,25 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(manifest.contains("Apache-2.0"))
     }
 
-    func testAppSourcesDoNotExposeADataExportAction() throws {
+    func testPhotoSharingRequiresAnExplicitUserAction() throws {
         let sources = try allAppSourceText()
+        let viewer = try contents(of: "Memorable/Views/SearchResultsViewer.swift")
+        let photoLibrary = try contents(of: "Memorable/Core/PhotoLibrary.swift")
+        let privacyPolicy = try contents(of: "PRIVACY_POLICY.txt")
 
-        XCTAssertFalse(sources.contains("UIActivityViewController"))
-        XCTAssertFalse(sources.contains("ShareLink"))
+        XCTAssertTrue(viewer.contains("Button(action: { shareCurrentPhoto() })"))
+        XCTAssertTrue(viewer.contains("private func shareCurrentPhoto()"))
+        XCTAssertTrue(viewer.contains("UIActivityViewController("))
+        XCTAssertTrue(viewer.contains("activityItems: [item.fileURL]"))
+        XCTAssertTrue(viewer.contains("PhotoLibrary.prepareShareItem(for: result)"))
+        XCTAssertTrue(viewer.contains(".sheet(item: $shareCoordinator.preparedItem)"))
+        XCTAssertTrue(viewer.contains("shareCoordinator.requestShare(for: result)"))
+        XCTAssertTrue(photoLibrary.contains("cancelRequest: { manager.cancelDataRequest($0) }"))
         XCTAssertFalse(sources.contains(".quickLookPreview"))
         XCTAssertFalse(sources.contains("UIPasteboard"))
-        XCTAssertFalse(sources.contains("Share photo"))
-        XCTAssertFalse(sources.contains("square.and.arrow.up"))
+        XCTAssertTrue(privacyPolicy.contains("only after you tap Share"))
+        XCTAssertTrue(privacyPolicy.contains("choose a destination"))
+        XCTAssertTrue(privacyPolicy.contains("does not choose a destination, start sharing automatically"))
     }
 
     func testAppSourcesDoNotCreateGeneralNetworkClients() throws {
@@ -102,7 +112,7 @@ final class ProjectConfigurationTests: XCTestCase {
         let onboarding = try contents(of: "Memorable/Views/OnboardingView.swift")
 
         XCTAssertTrue(onboarding.contains("Apple resolves photo coordinates into place names"))
-        XCTAssertTrue(onboarding.contains("Photos and search text stay on this iPhone"))
+        XCTAssertTrue(onboarding.contains("Photos and search text stay on this iPhone unless you choose Share"))
         XCTAssertFalse(onboarding.contains("nothing is uploaded"))
     }
 

@@ -40,7 +40,8 @@ class AppState: ObservableObject {
     private var currentWarmupPriority: SemanticWarmupPriority = .postPaint
     private var captionPreparationTask: Task<Void, Never>?
 
-    init() {
+    init(shareItemCleanup: () -> Void = { PhotoLibrary.cleanupShareItems() }) {
+        shareItemCleanup()
         SurpriseQueryCache.migrateLegacyDefaults()
         semanticRuntime.setWarmupLoader { [weak self] priority in
             try await self?.warmCoreSearch(priority: priority)

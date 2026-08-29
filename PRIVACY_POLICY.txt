@@ -20,7 +20,7 @@ On-device processing
 
 Memorable uses bundled Core ML models to analyze media and encode search text on your device. It stores generated embeddings, OCR text, scene labels, dates, dimensions, searchable place names, search history, and app settings locally.
 
-Photo and video contents and search query text are not sent to the developer, Apple CLGeocoder, or any AI service. The app disables network access on PhotoKit media requests. As a result, it does not fetch iCloud-only media for indexing.
+During indexing and search, photo and video contents and search query text are not sent to the developer, Apple CLGeocoder, or an AI service. The app disables network access on PhotoKit media requests. As a result, it does not fetch iCloud-only media for indexing. User-initiated sharing, described below, provides one selected photo to the destination you choose.
 
 Apple service traffic
 
@@ -33,6 +33,10 @@ Memorable uses two Apple-managed services that may use network access:
 Photo library access
 
 Memorable requests Photo Library access to index and display media locally. You can limit or revoke this access in iOS Settings.
+
+User-initiated sharing
+
+Memorable displays the iOS share sheet only after you tap Share for a photo. The app prepares a size-bounded image copy without the source file's GPS, camera, or other embedded metadata, then provides that copy to the Apple share sheet so you can choose a destination. The destination you select may transmit or store the image according to its own behavior and privacy policy. Memorable does not choose a destination, start sharing automatically, or receive information about the destination through a developer backend. PhotoKit network access remains disabled while Memorable prepares the image.
 
 Folder access
 

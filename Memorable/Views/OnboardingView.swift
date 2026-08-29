@@ -162,7 +162,7 @@ struct OnboardingView: View {
 
             Spacer()
 
-            Text("Photos and search text stay on this iPhone")
+            Text("Photos and search text stay on this iPhone unless you choose Share")
                 .font(.caption)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .frame(maxWidth: .infinity)

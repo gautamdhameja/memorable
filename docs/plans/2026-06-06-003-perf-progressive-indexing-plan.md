@@ -51,7 +51,7 @@ The pasted external spec was directionally useful but over-specified risky detai
 **Scope Preservation**
 
 - R14. Search scoring thresholds, prompt behavior, model files, and text/image embedding semantics stay unchanged.
-- R15. User photos, videos, queries, embeddings, and enrichment outputs remain on device.
+- R15. Indexing and search keep user photos, videos, queries, embeddings, and enrichment outputs on the device. A photo leaves this boundary only after the user explicitly requests sharing and chooses a destination.
 
 ---
 

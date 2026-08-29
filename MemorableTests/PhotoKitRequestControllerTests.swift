@@ -53,6 +53,25 @@ final class PhotoKitRequestControllerTests: XCTestCase {
         XCTAssertEqual(cancellations.snapshot(), [42])
     }
 
+    func testCancellationCleanupRunsExactlyOnce() async {
+        let cancellations = CancelledRequests()
+        let cleanupCount = Counter()
+        let controller = PhotoKitRequestController<Int>(
+            cancelRequest: cancellations.record,
+            onCancel: cleanupCount.increment
+        )
+        let value: Int? = await withCheckedContinuation { continuation in
+            controller.installContinuation(ContinuationGuard(continuation))
+            controller.registerRequestID(44)
+            controller.cancel()
+            controller.cancel()
+        }
+
+        XCTAssertNil(value)
+        XCTAssertEqual(cancellations.snapshot(), [44])
+        XCTAssertEqual(cleanupCount.value(), 1)
+    }
+
     func testCompletionWinsOverLaterCancellation() async {
         let cancellations = CancelledRequests()
         let controller = makeController(cancellations: cancellations)

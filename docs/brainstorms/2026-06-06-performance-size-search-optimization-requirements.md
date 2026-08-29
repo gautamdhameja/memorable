@@ -8,7 +8,7 @@ title: Performance, model size, and search quality optimization
 
 ## Summary
 
-Memorable should become usable before every AI subsystem is fully warmed, reduce its initial install and on-device model footprint, and improve search quality through measured evaluation rather than ad hoc scoring changes. The optimization work should preserve the product's privacy promise: photos, videos, queries, and embeddings stay on device.
+Memorable should become usable before every AI subsystem is fully warmed, reduce its initial install and on-device model footprint, and improve search quality through measured evaluation rather than ad hoc scoring changes. The optimization work should preserve the product's privacy promise: app-controlled processing keeps photos, videos, queries, and embeddings on the device. A photo is provided to another app or service only after the user taps Share and chooses a destination.
 
 ---
 
@@ -28,7 +28,7 @@ Search quality has a different risk profile. Smaller or lazy-loaded models can i
 - **Separate delivery size from model compression.** On-Demand Resources or model download changes solve initial install size, while Core ML compression solves local storage and load cost.
 - **Treat search quality as a measured system.** Model and scoring changes must be judged against a fixed query benchmark before shipping.
 - **Stage enrichment behind core indexing.** Embeddings make items searchable; OCR, scene labels, geocoding, captions, and Surprise Me validation can complete later.
-- **Keep privacy constraints non-negotiable.** Model download is acceptable, but photo content, queries, and embeddings must not leave the device.
+- **Keep privacy constraints non-negotiable.** Model download is acceptable, but app-controlled processing must not send photo content, queries, or embeddings off the device. User-initiated sharing remains an explicit exception for the selected photo and destination.
 
 ---
 

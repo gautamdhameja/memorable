@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum SimilaritySearchOperation {
     static func run(
@@ -17,6 +18,161 @@ enum SimilaritySearchOperation {
     }
 }
 
+private struct PhotoShareSheet: UIViewControllerRepresentable {
+    let item: PreparedPhotoShareItem
+    let onComplete: @MainActor () -> Void
+
+    @MainActor
+    final class Coordinator {
+        private let item: PreparedPhotoShareItem
+        private let onComplete: @MainActor () -> Void
+        private var didFinish = false
+
+        init(item: PreparedPhotoShareItem, onComplete: @escaping @MainActor () -> Void) {
+            self.item = item
+            self.onComplete = onComplete
+        }
+
+        func finish() {
+            guard !didFinish else { return }
+            didFinish = true
+            item.cleanup()
+            onComplete()
+        }
+
+        func cleanup() {
+            item.cleanup()
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(item: item, onComplete: onComplete)
+    }
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: [item.fileURL],
+            applicationActivities: nil
+        )
+        let coordinator = context.coordinator
+        controller.completionWithItemsHandler = { [weak coordinator] _, _, _, _ in
+            Task { @MainActor in coordinator?.finish() }
+        }
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+
+    static func dismantleUIViewController(
+        _ controller: UIActivityViewController,
+        coordinator: Coordinator
+    ) {
+        coordinator.cleanup()
+    }
+}
+
+@MainActor
+final class PhotoShareCoordinator: ObservableObject {
+    typealias Preparer = @MainActor @Sendable (SearchResult) async throws -> PreparedPhotoShareItem
+
+    @Published private(set) var isPreparing = false
+    @Published var preparedItem: PreparedPhotoShareItem?
+    @Published private(set) var errorMessage: String?
+
+    private let preparer: Preparer
+    private var preparationTask: Task<Void, Never>?
+    private var generation = 0
+    private var visibleResultID: String?
+
+    init(
+        preparer: @escaping Preparer = { result in
+            try await PhotoLibrary.prepareShareItem(for: result)
+        }
+    ) {
+        self.preparer = preparer
+    }
+
+    func requestShare(for result: SearchResult) {
+        cancelPreparation()
+        preparedItem?.cleanup()
+        preparedItem = nil
+        errorMessage = nil
+        visibleResultID = result.id
+        generation &+= 1
+        let requestGeneration = generation
+        isPreparing = true
+
+        preparationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let item = try await preparer(result)
+                guard !Task.isCancelled,
+                      requestGeneration == generation,
+                      visibleResultID == result.id else {
+                    item.cleanup()
+                    return
+                }
+                isPreparing = false
+                preparationTask = nil
+                preparedItem = item
+            } catch is CancellationError {
+                finishCancelledRequest(generation: requestGeneration)
+            } catch let error as PhotoSharePreparationError {
+                finishFailedRequest(error, generation: requestGeneration)
+            } catch {
+                logger.error("[PhotoShareCoordinator] Share preparation failed: \(error.safeDiagnosticCode)")
+                finishFailedRequest(.storageUnavailable, generation: requestGeneration)
+            }
+        }
+    }
+
+    func visibleResultDidChange(to resultID: String?) {
+        visibleResultID = resultID
+        cancelPreparation()
+    }
+
+    func cancelPreparation() {
+        generation &+= 1
+        preparationTask?.cancel()
+        preparationTask = nil
+        isPreparing = false
+    }
+
+    func cancelAll() {
+        cancelPreparation()
+        preparedItem?.cleanup()
+        preparedItem = nil
+        errorMessage = nil
+    }
+
+    func completePresentation(itemID: UUID) {
+        if preparedItem?.id == itemID {
+            preparedItem = nil
+        }
+    }
+
+    func clearError() {
+        errorMessage = nil
+    }
+
+    private func finishCancelledRequest(generation requestGeneration: Int) {
+        guard requestGeneration == generation else { return }
+        isPreparing = false
+        preparationTask = nil
+    }
+
+    private func finishFailedRequest(
+        _ error: PhotoSharePreparationError,
+        generation requestGeneration: Int
+    ) {
+        guard !Task.isCancelled, requestGeneration == generation else { return }
+        logger.error("[PhotoShareCoordinator] Share preparation failed: \(error.safeDiagnosticCode)")
+        isPreparing = false
+        preparationTask = nil
+        errorMessage = error.userMessage
+    }
+}
+
 struct SearchResultsViewer: View {
     let initialResult: SearchResult
     let allResults: [SearchResult]
@@ -29,6 +185,7 @@ struct SearchResultsViewer: View {
     @State private var findSimilarTask: Task<Void, Never>?
     @State private var findSimilarGeneration = 0
     @State private var isFindingSimilar = false
+    @StateObject private var shareCoordinator = PhotoShareCoordinator()
     @ObservedObject private var proManager = ProManager.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -95,7 +252,26 @@ struct SearchResultsViewer: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.white.opacity(0.82))
                         }
-                        Spacer().frame(width: 44)
+                        Spacer()
+                        if canShareCurrentPhoto {
+                            Button(action: { shareCurrentPhoto() }) {
+                                if shareCoordinator.isPreparing {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .tint(.white)
+                                        .frame(width: 44, height: 44)
+                                } else {
+                                    Image(systemName: "square.and.arrow.up")
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 44, height: 44)
+                                }
+                            }
+                            .disabled(shareCoordinator.isPreparing || shareCoordinator.preparedItem != nil)
+                            .accessibilityLabel("Share photo")
+                        } else {
+                            Spacer().frame(width: 44)
+                        }
                     }
                     .padding(.horizontal, 22)
                     .padding(.top, 6)
@@ -140,6 +316,22 @@ struct SearchResultsViewer: View {
         }
         .statusBar(hidden: true)
         .sheet(isPresented: $showUpgrade) { UpgradeView() }
+        .sheet(item: $shareCoordinator.preparedItem) { item in
+            PhotoShareSheet(item: item) {
+                shareCoordinator.completePresentation(itemID: item.id)
+            }
+        }
+        .alert(
+            "Unable to share photo",
+            isPresented: Binding(
+                get: { shareCoordinator.errorMessage != nil },
+                set: { if !$0 { shareCoordinator.clearError() } }
+            )
+        ) {
+            Button("OK") { shareCoordinator.clearError() }
+        } message: {
+            Text(shareCoordinator.errorMessage ?? "The photo could not be prepared.")
+        }
         .gesture(
             DragGesture(minimumDistance: 80)
                 .onEnded { value in
@@ -148,10 +340,41 @@ struct SearchResultsViewer: View {
                     }
                 }
         )
-        .onDisappear(perform: cancelFindSimilar)
+        .onDisappear {
+            cancelFindSimilar()
+            shareCoordinator.cancelAll()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
             cancelFindSimilar()
+            shareCoordinator.cancelPreparation()
         }
+        .onAppear {
+            shareCoordinator.visibleResultDidChange(to: currentResultID)
+        }
+        .onChange(of: currentResultID) {
+            shareCoordinator.visibleResultDidChange(to: currentResultID)
+        }
+    }
+
+    private var canShareCurrentPhoto: Bool {
+        guard currentIndex < displayedResults.count else { return false }
+        let result = displayedResults[currentIndex]
+        return !result.isVideo && (
+            result.sourceId == PhotoSourceType.photokit.rawValue || result.filePath != nil
+        )
+    }
+
+    private var currentResultID: String? {
+        guard currentIndex < displayedResults.count else { return nil }
+        return displayedResults[currentIndex].id
+    }
+
+    private func shareCurrentPhoto() {
+        guard currentIndex < displayedResults.count else { return }
+        let result = displayedResults[currentIndex]
+        guard !result.isVideo else { return }
+
+        shareCoordinator.requestShare(for: result)
     }
 
     private func handleFindSimilar() {
@@ -180,6 +403,7 @@ struct SearchResultsViewer: View {
 
             let photoResults = similar.filter { !$0.isVideo }
             if !photoResults.isEmpty {
+                shareCoordinator.visibleResultDidChange(to: photoResults[0].id)
                 withAnimation(.easeInOut(duration: 0.2)) {
                     displayedResults = photoResults
                     currentIndex = 0

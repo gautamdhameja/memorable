@@ -28,7 +28,7 @@ How it works
 
 Grant Photo Library access and build the local search index. Memorable indexes photos first, makes them searchable at progressive checkpoints, and then processes video frames and optional metadata enrichment.
 
-Type a scene, object, date, season, or place. Memorable parses the query and ranks the local index. Photo and video contents and search query text stay on your iPhone.
+Type a scene, object, date, season, or place. Memorable parses the query and ranks the local index. During indexing and search, photo and video contents and search query text stay on your iPhone. A photo is provided to another app or service only after you tap Share and choose a destination.
 
 Privacy
 -------
@@ -47,6 +47,7 @@ Free features
 - Search photos and videos with natural language.
 - Use locally generated OCR and scene labels to improve ranking.
 - Browse On This Day, Smart Albums, Surprise Me, and memory slideshows.
+- Share a metadata-stripped image copy through the iOS share sheet after tapping Share.
 - Index up to 500 media items for free.
 
 Pro features
@@ -93,6 +94,7 @@ App Review notes
 - The app sets PhotoKit network access to disabled, so use locally available media during review.
 - The app bundles its Core ML models and does not download model files at runtime.
 - The app has no developer backend.
-- Media GPS coordinates may be sent to Apple CLGeocoder for place-name resolution. Media contents and search query text remain on the device.
+- The app presents the iOS share sheet only after the user taps Share for a photo. It provides a size-bounded image copy without source GPS, camera, or other embedded metadata. The selected destination handles any resulting transmission.
+- Media GPS coordinates may be sent to Apple CLGeocoder for place-name resolution. During indexing, search, and geocoding, media contents and search query text remain on the device. A photo is provided to a share destination only after the user requests it.
 - StoreKit handles Pro product, entitlement, purchase, restore, refund, and transaction traffic with Apple.
 - Grant Photo Library access, wait for a searchable checkpoint, and try queries such as `people`, `food`, `outdoor`, or `car`.

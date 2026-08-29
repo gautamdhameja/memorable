@@ -40,7 +40,7 @@ All tiers can use locally generated OCR and scene labels to improve basic visual
 
 ## Understand the privacy boundary
 
-Memorable has no developer backend and includes no analytics, tracking, advertising, telemetry, or crash-upload service. Photo and video contents, generated embeddings, OCR text, and search query text stay on the device.
+Memorable has no developer backend and includes no analytics, tracking, advertising, telemetry, or crash-upload service. During indexing and search, photo and video contents, generated embeddings, OCR text, and search query text stay on the device. A photo is provided to another app or service only after the user taps Share and chooses a destination.
 
 The app uses these Apple-managed service boundaries:
 
@@ -50,6 +50,8 @@ The app uses these Apple-managed service boundaries:
 | Apple StoreKit | Product, entitlement, purchase, restore, and transaction data required by StoreKit | Offer and verify the Pro purchase |
 
 Memorable does not send photo or video contents or search query text through either boundary. The app sets `isNetworkAccessAllowed = false` for PhotoKit requests, so it does not download iCloud-only media while indexing.
+
+When a user taps Share for a photo, Memorable prepares a size-bounded image copy without the source file's GPS, camera, or other embedded metadata and provides that copy to the iOS share sheet. The user chooses the destination; Memorable does not share automatically or send the image to a developer service.
 
 The search database and folder bookmark files use complete-unless-open protection and are excluded from iCloud and device backups.
 

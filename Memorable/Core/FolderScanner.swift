@@ -70,6 +70,11 @@ enum FolderBookmarkStore {
 }
 
 class FolderScanner {
+    struct ValidatedImageSnapshot: Sendable {
+        let data: Data
+        let typeIdentifier: String
+    }
+
     /// Folder sources are user-selected, but their trees can still be
     /// unexpectedly large. Match the app's documented large-library ceiling
     /// instead of buffering an unbounded number of URLs.
@@ -168,6 +173,41 @@ class FolderScanner {
             return nil
         }
         return image
+    }
+
+    static func validatedImageSnapshotFromBookmarkedSource(
+        filePath: String,
+        sourceId: String
+    ) -> ValidatedImageSnapshot? {
+        let imageURL = URL(fileURLWithPath: filePath)
+        guard sourceId != PhotoSourceType.photokit.rawValue,
+              let folderURL = resolveBookmark(forSourceId: sourceId) else {
+            return nil
+        }
+
+        let hasAccess = folderURL.startAccessingSecurityScopedResource()
+        guard hasAccess else { return nil }
+        defer { folderURL.stopAccessingSecurityScopedResource() }
+
+        return validatedImageSnapshot(imageURL, within: folderURL)
+    }
+
+    static func validatedImageSnapshot(
+        _ imageURL: URL,
+        within folderURL: URL
+    ) -> ValidatedImageSnapshot? {
+        withValidatedImageFileDescriptor(imageURL, within: folderURL) { descriptor in
+            guard let snapshot = immutableSnapshot(for: descriptor),
+                  let source = CGImageSourceCreateWithData(snapshot as CFData, nil),
+                  let detectedType = CGImageSourceGetType(source) as String?,
+                  supportedImageTypeIdentifiers.contains(detectedType) else {
+                return nil
+            }
+            return ValidatedImageSnapshot(
+                data: snapshot,
+                typeIdentifier: detectedType
+            )
+        } ?? nil
     }
 
     /// Checks that a stored folder result is still reachable through its
