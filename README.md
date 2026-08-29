@@ -1,115 +1,146 @@
-# Memorable - AI Photo Search
+# Memorable: on-device photo search
 
-On-device AI photo and video search for iOS. Describe what you remember, find the exact photo.
+Memorable searches photos and videos on iPhone with bundled AI models. Describe a memory in natural language, and the app ranks matching media from the local search index.
 
 <p align="center">
   <img src="Memorable/Assets.xcassets/AppIcon.appiconset/icon_180.png" width="90" alt="Memorable app icon" />
 </p>
 
-## What It Does
+## How search works
 
-Type a natural language description and Memorable finds matching photos from your library:
+Memorable uses [SigLIP2](https://arxiv.org/abs/2502.14786) (Google, Apache 2.0) to encode photos, video frames, and query text as 768-dimensional embeddings. The app stores media embeddings and searchable metadata in a local SQLite database and ranks results with dot-product similarity.
 
-- "sunset at the beach last summer"
-- "birthday cake with candles"
-- "my dog playing in the snow"
-- "that hike with the waterfall"
+During initial setup, the app indexes photos first so search becomes available at progressive checkpoints. It then indexes video frames and runs deferred OCR, sharpness, scene-label, and place-name enrichment.
 
-Your photos never leave your device. No accounts, no tracking.
-
-## How It Works
-
-Memorable uses [SigLIP2](https://arxiv.org/abs/2502.14786) (Google, Apache 2.0 licensed) to encode photos and video frames into 768-dimensional embeddings, stores them in SQLite, and searches via cosine similarity. Text queries are encoded directly as raw visual queries, and the closest matches are returned.
-
-**One-time setup:** The app scans your photo library and builds a search index. A fast first pass stores base embeddings so photos become searchable in progressive checkpoints. OCR, blur scoring, scene labels, reverse geocoding, and videos continue in background passes.
-
-**Search pipeline:**
+```text
+Query -> Parse date, location, and exclusions -> Encode visual text locally
+      -> Filter local metadata -> Score local embeddings -> Apply local boosts
+      -> Merge bounded photo and video results
 ```
-Query → Season/Date/Location extraction → Raw SigLIP2 text encoding
-     → GPU/CPU dot product → Date/Location/OCR/scene boosting → matching results
-```
+
+Memorable supports queries such as:
+
+- `sunset at the beach last summer`
+- `birthday cake with candles`
+- `my dog playing in the snow`
+- `that hike with the waterfall`
 
 ## Features
 
-- **Natural language search** with raw SigLIP2 query encoding
-- **GPU-accelerated** similarity search via Metal Performance Shaders
-- **Photo + video** indexing (2-5 frames per video)
-- **Smart query parsing** — dates ("last summer"), locations ("in Paris"), negations ("dog -cat")
-- **Season detection** — "beach this winter", "flowers in spring 2024"
-- **OCR boost** — finds screenshots by text content
-- **On This Day** — memories from this date in previous years
-- **Duplicate finder** — GPU-accelerated near-duplicate detection with delete actions
-- **Smart Albums** — save searches as auto-updating collections
-- **Surprise Me** — discover random memories with validated queries
-- **Slideshow** — CLIP-captioned photo slideshow during indexing and in Memories
-- **Swipeable full-screen viewer** with pinch-to-zoom and share
-- **Freemium** — 500 indexed photos/videos free, one-time Pro purchase via StoreKit 2 (`com.blockdeep.memorable.pro.v2`)
+The free tier indexes up to 500 photos and videos and provides basic visual-text search, On This Day, Surprise Me, Smart Albums, and local memory slideshows.
 
-## Privacy
+The one-time StoreKit 2 product `com.blockdeep.memorable.pro.v2` adds:
 
-- All AI processing on-device (Core ML, Neural Engine)
-- `isNetworkAccessAllowed = false` on all PHImageManager requests
-- Database encrypted at rest (`.completeUnlessOpen`)
-- Search history stored in encrypted SQLite, not UserDefaults
-- No analytics, no telemetry, no third-party SDKs that collect data
-- Indexed media coordinates can be reverse-geocoded via Apple's CLGeocoder; search query location text is matched locally and is not sent off device
-- Privacy manifest included (`PrivacyInfo.xcprivacy`)
+- An index of up to 8,000 photos and videos.
+- Date, season, location, time-of-day, and excluded-term query parsing.
+- Find Similar and bounded near-duplicate detection.
+- Up to 32 user-selected folder sources through security-scoped bookmarks.
 
-## Requirements
+All tiers can use locally generated OCR and scene labels to improve basic visual ranking.
 
-- iOS 17.0+
-- iPhone with A14 chip or later
-- Local storage for bundled Core ML model resources
+## Understand the privacy boundary
 
-## Build
+Memorable has no developer backend and includes no analytics, tracking, advertising, telemetry, or crash-upload service. Photo and video contents, generated embeddings, OCR text, and search query text stay on the device.
 
-The project uses [XcodeGen](https://github.com/yonaskolb/XcodeGen). Install it first, then:
+The app uses these Apple-managed service boundaries:
+
+| Boundary | Data sent | Purpose |
+|---|---|---|
+| Apple CLGeocoder | GPS coordinates stored in indexed media metadata | Resolve coordinates to place names such as city and country |
+| Apple StoreKit | Product, entitlement, purchase, restore, and transaction data required by StoreKit | Offer and verify the Pro purchase |
+
+Memorable does not send photo or video contents or search query text through either boundary. The app sets `isNetworkAccessAllowed = false` for PhotoKit requests, so it does not download iCloud-only media while indexing.
+
+The search database and folder bookmark files use complete-unless-open protection and are excluded from iCloud and device backups.
+
+## Build the app
+
+Memorable requires:
+
+- iOS 17 or later
+- An iPhone with an A14 chip or later
+- Xcode 16 or later
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+- Local copies of the compiled Core ML bundles
+
+Generate and open the project:
 
 ```bash
 xcodegen generate
 open Memorable.xcodeproj
 ```
 
-For command-line verification, install the iOS Simulator runtime that matches the active Xcode. If `xcodebuild` reports `CoreSimulator is out of date` or `iOS 26.5 is not installed`, update macOS/Xcode components before running the documented simulator build and test commands.
+The repository does not track the compiled `.mlmodelc` directories. Place the image and text model bundles in `Memorable/Models/`. The build packages those directories as app resources; it does not download models at runtime.
 
-Core ML models are not included in the repository. The active app packaging strategy bundles the compiled `.mlmodelc` folders as app resources via `project.yml`; On Demand Resources or downloaded models are future packaging options, not the current build behavior. For local development, place the compiled `.mlmodelc` bundles in `Memorable/Models/`.
+## Verify bundled models
 
-### Dependencies
+The tracked `scripts/model_manifest.json` defines every allowed model file, file size, and SHA-256 digest. Dependency-aware Xcode build phases verify the source artifacts when their inputs change and verify the packaged copies after the resource phase. The build fails closed if a file is missing, changed, symbolically linked, outside the model root, or not listed in the manifest.
 
-- [GRDB.swift 7.x](https://github.com/groue/GRDB.swift) — SQLite database
-- [SwiftProtobuf 1.28+](https://github.com/apple/swift-protobuf) — SentencePiece tokenizer model deserialization
+Run the same check directly without network access:
+
+```bash
+python3 scripts/verify_models.py
+```
+
+The manifest pins the upstream model revision, records the conversion environment and tensor contract, and verifies every compiled Core ML file before and after packaging. The file hashes are the release authority for the compiled artifacts.
+
+## Run verification
+
+After changing `project.yml` or adding files, regenerate the project and run the simulator build and tests:
+
+```bash
+xcodegen generate
+xcodebuild -project Memorable.xcodeproj -scheme Memorable -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -quiet build
+xcodebuild -project Memorable.xcodeproj -scheme Memorable -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -quiet test
+```
+
+Run the pre-merge gates:
+
+```bash
+python3 scripts/premerge.py
+```
+
+The pre-merge script verifies bundled model artifacts, checks migration deletion safety, and runs the real-model relevance gate. The relevance gate may need its pinned external dataset when the local cache is incomplete; model verification itself is strictly offline.
+
+## Memory and cancellation limits
+
+Keep high-cost work bounded and cancellable:
+
+- Query parsing accepts at most 500 characters on every parser path.
+- Search retains at most 500 ranked results.
+- Duplicate detection performs at most 5,000,000 comparisons and retains at most 2,000 pairs.
+- Folder enumeration retains at most 100,000 supported image URLs and checks cancellation during traversal.
+- Folder source metadata is capped at 32 unique canonical paths. Each folder image must be 32 MiB or smaller. The app bounds directory traversal, rejects special files and symbolic links, and reads an immutable, size-bounded snapshot before ImageIO parses it.
+- Indexing uses bounded batches and one prefetched image batch.
+- PhotoKit and video loaders use cancellation-aware timeouts.
+- A memory warning cancels indexing work, drops the search index, and blocks an in-flight reload from restoring it until explicit work resumes.
+- Background-task expiration cancels the active indexing workflow.
+
+Add a deterministic limit and a cancellation check before introducing any new operation whose memory or work scales with library size.
+
+## Dependencies
+
+- [GRDB.swift 7.x](https://github.com/groue/GRDB.swift) provides SQLite access.
+- [SwiftProtobuf 1.28+](https://github.com/apple/swift-protobuf) reads the SentencePiece tokenizer model.
 
 ## Architecture
 
-```
+```text
 Core/                              Views/
-├── AppReadiness.swift             ├── ContentView.swift
-├── PerformanceMetrics.swift       ├── MainTabView.swift
-├── SemanticSearchRuntime.swift    ├── SearchView.swift (main UI)
-├── ModelResourceManager.swift     ├── MoreView.swift
-├── Database.swift (protocol+impl) ├── OnThisDayView.swift
-├── SearchEngine.swift             ├── FullScreenPhotoViewer.swift
-├── IndexingService.swift          ├── SearchResultsViewer.swift
-├── ImageEncoder.swift             ├── SourceManagerView.swift
-├── TextEncoder.swift              ├── DuplicateFinderView.swift
-├── Tokenizer.swift                ├── UpgradeView.swift
-├── GPUSimilaritySearch.swift      ├── Theme.swift (Celestial design system)
-├── QueryParser.swift              ├── MasonryGrid.swift
-├── PhotoLibrary.swift             ├── GlassModifiers.swift
-├── DuplicateFinder.swift          └── PhotoThumbnailView.swift
-├── SharedUtilities.swift
-└── ProFeatures.swift
+|- AppReadiness.swift              |- ContentView.swift
+|- Database.swift                  |- MainTabView.swift
+|- SearchEngine.swift              |- SearchView.swift
+|- IndexingService.swift           |- MoreView.swift
+|- ImageEncoder.swift              |- OnThisDayView.swift
+|- TextEncoder.swift               |- SearchResultsViewer.swift
+|- Tokenizer.swift                 |- SourceManagerView.swift
+|- GPUSimilaritySearch.swift       |- DuplicateFinderView.swift
+|- QueryParser.swift               |- UpgradeView.swift
+|- PhotoLibrary.swift              `- PhotoThumbnailView.swift
+|- FolderScanner.swift
+|- DuplicateFinder.swift
+`- ProFeatures.swift
 ```
-
-Key design decisions:
-- **DatabaseProtocol** for dependency injection and testability
-- **Float16 storage** with Float32 compute — halves memory with negligible accuracy loss
-- **GPU search** via MPSGraph matrix multiplication with CPU fallback on simulator
-- **Progressive indexing** — base embeddings become searchable before slower enrichment completes
-- **Deferred enrichment** — OCR, sharpness, and scene labels resume from persisted per-photo state
-- **Thread-safe** embedding access via NSLock with snapshot pattern
-- **Memory pressure handling** — drops index on memory warning, reloads on next search
-- **Timeout wrappers** on all PHImageManager calls to prevent hangs on corrupt assets
 
 ## License
 

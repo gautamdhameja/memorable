@@ -1,7 +1,134 @@
 import XCTest
+import AVKit
 @testable import Memorable
 
 final class SharedUtilitiesTests: XCTestCase {
+    func testLocalOnlyDirectoryIsExcludedFromBackup() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try LocalOnlyStorage.prepareDirectory(at: directory)
+
+        let values = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+    }
+
+    func testFolderBookmarkMigratesOutOfUserDefaultsAndExcludesBackup() throws {
+        let sourceID = UUID().uuidString
+        let legacyKey = AppKeys.folderBookmark(sourceId: sourceID)
+        let bookmark = Data([1, 2, 3, 4])
+        UserDefaults.standard.set(bookmark, forKey: legacyKey)
+        defer { FolderBookmarkStore.remove(for: sourceID) }
+
+        XCTAssertEqual(FolderBookmarkStore.data(for: sourceID), bookmark)
+        XCTAssertNil(UserDefaults.standard.data(forKey: legacyKey))
+        let bookmarkURL = try FolderBookmarkStore.bookmarkURL(for: sourceID)
+        let values = try bookmarkURL.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+    }
+
+    func testSurpriseMatchProfileMigratesToExcludedLocalState() throws {
+        SurpriseQueryCache.clear()
+        defer { SurpriseQueryCache.clear() }
+        UserDefaults.standard.set(
+            ["golden hour", "selfie"],
+            forKey: AppKeys.surpriseValidatedQueries
+        )
+        UserDefaults.standard.set(42, forKey: AppKeys.surpriseLastValidatedCount)
+
+        SurpriseQueryCache.migrateLegacyDefaults()
+
+        XCTAssertNil(UserDefaults.standard.object(forKey: AppKeys.surpriseValidatedQueries))
+        XCTAssertNil(UserDefaults.standard.object(forKey: AppKeys.surpriseLastValidatedCount))
+        XCTAssertEqual(
+            SurpriseQueryCache.load(),
+            .init(validatedQueries: ["golden hour", "selfie"], lastValidatedCount: 42)
+        )
+        let cacheURL = try SurpriseQueryCache.fileURL()
+        let values = try cacheURL.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+    }
+
+    func testImageLoadGenerationRejectsLateCompletionAfterMemoryPressure() {
+        XCTAssertFalse(ImageLoadGenerationPolicy.acceptsCompletion(
+            startedGeneration: 1,
+            currentGeneration: 2,
+            isCancelled: false
+        ))
+        XCTAssertFalse(ImageLoadGenerationPolicy.acceptsCompletion(
+            startedGeneration: 2,
+            currentGeneration: 2,
+            isCancelled: true
+        ))
+        XCTAssertTrue(ImageLoadGenerationPolicy.acceptsCompletion(
+            startedGeneration: 2,
+            currentGeneration: 2,
+            isCancelled: false
+        ))
+    }
+
+    func testVideoPlaybackRejectsReplacedAndCancelledLoads() {
+        XCTAssertFalse(VideoPlaybackRequestPolicy.acceptsCompletion(
+            startedGeneration: 1,
+            currentGeneration: 2,
+            isCancelled: false
+        ))
+        XCTAssertFalse(VideoPlaybackRequestPolicy.acceptsCompletion(
+            startedGeneration: 2,
+            currentGeneration: 2,
+            isCancelled: true
+        ))
+        XCTAssertTrue(VideoPlaybackRequestPolicy.acceptsCompletion(
+            startedGeneration: 2,
+            currentGeneration: 2,
+            isCancelled: false
+        ))
+    }
+
+    @MainActor
+    func testVideoPlaybackDisablesExternalRoutesAndPictureInPicture() {
+        let player = AVPlayer()
+        let controller = AVPlayerViewController()
+
+        PrivateVideoPlaybackConfiguration.apply(to: player, controller: controller)
+
+        XCTAssertFalse(player.allowsExternalPlayback)
+        XCTAssertFalse(player.usesExternalPlaybackWhileExternalScreenIsActive)
+        XCTAssertFalse(controller.allowsPictureInPicturePlayback)
+    }
+
+    @MainActor
+    func testVideoPlaybackTeardownDeactivatesAudio() {
+        let player = AVPlayer()
+        var didDeactivate = false
+
+        PrivateVideoPlaybackConfiguration.tearDown(player: player) {
+            didDeactivate = true
+        }
+
+        XCTAssertTrue(didDeactivate)
+        XCTAssertEqual(player.rate, 0)
+    }
+
+    func testMemoryPressureReleaseDropsDecodedImage() {
+        var image: UIImage? = UIImage()
+
+        MemoryPressureReleasePolicy.release(&image)
+
+        XCTAssertNil(image)
+    }
+
+    func testMemoryPressureReleaseDropsStrongResourceReference() {
+        final class Resource {}
+        var resource: Resource? = Resource()
+        let weakResource = WeakReference(resource)
+
+        MemoryPressureReleasePolicy.release(&resource)
+
+        XCTAssertNil(resource)
+        XCTAssertNil(weakResource.value)
+    }
 
     // MARK: - L2 Normalization
 
@@ -22,9 +149,15 @@ final class SharedUtilitiesTests: XCTestCase {
 
     func testL2NormalizeZeroVector() {
         var vec: [Float] = [0.0, 0.0, 0.0]
-        vec.l2Normalize()
+        XCTAssertFalse(vec.l2Normalize())
         // Should not crash, vector stays zero
         XCTAssertEqual(vec, [0.0, 0.0, 0.0])
+    }
+
+    func testL2NormalizeRejectsNonFiniteVector() {
+        var vec: [Float] = [1, .infinity]
+
+        XCTAssertFalse(vec.l2Normalize())
     }
 
     func testL2NormalizePreservesDirection() {
@@ -82,5 +215,13 @@ final class SharedUtilitiesTests: XCTestCase {
     func testSafeSubscriptEmpty() {
         let arr: [Int] = []
         XCTAssertNil(arr[safe: 0])
+    }
+}
+
+private final class WeakReference<Value: AnyObject> {
+    weak var value: Value?
+
+    init(_ value: Value?) {
+        self.value = value
     }
 }

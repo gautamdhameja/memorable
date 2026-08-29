@@ -3,6 +3,8 @@ import SwiftUI
 struct PhotoThumbnailView: View {
     let result: SearchResult
     @State private var thumbnail: UIImage?
+    @State private var imageLoadGeneration: UInt = 0
+    @State private var imageLoadTask: Task<Void, Never>?
 
     private var accessibilityDescription: String {
         let type = result.isVideo ? "Video" : "Photo"
@@ -55,34 +57,51 @@ struct PhotoThumbnailView: View {
         .accessibilityLabel(accessibilityDescription)
         .accessibilityAddTraits(.isImage)
         .task {
-            #if DEBUG
-            logger.info("[PhotoThumbnailView] start load id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo) score=\(String(format: "%.4f", result.score)) frame=\(result.bestFramePosition ?? -1)")
-            #endif
-            let loaded: UIImage?
-            if result.sourceId == PhotoSourceType.photokit.rawValue,
-               !result.isVideo,
-               let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                loaded = await PhotoLibrary.loadThumbnail(for: asset)
-            } else {
-                loaded = await PhotoLibrary.loadImage(
-                    for: result,
-                    targetSize: CGSize(width: 400, height: 400)
-                )
-            }
-            if !Task.isCancelled {
-                thumbnail = loaded
-            }
-            if thumbnail != nil {
+            imageLoadTask?.cancel()
+            let task = Task { @MainActor in
+                imageLoadGeneration &+= 1
+                let generation = imageLoadGeneration
                 #if DEBUG
-                if let thumbnail = thumbnail {
-                    logger.info("[PhotoThumbnailView] loaded thumbnail id=\(result.id) localId=\(result.localIdentifier) size=\(String(format: "%.0fx%.0f", thumbnail.size.width, thumbnail.size.height))")
+                logger.info("[PhotoThumbnailView] start load isVideo=\(result.isVideo) score=\(String(format: "%.4f", result.score)) frame=\(result.bestFramePosition ?? -1)")
+                #endif
+                let loaded: UIImage?
+                if result.sourceId == PhotoSourceType.photokit.rawValue,
+                   !result.isVideo,
+                   let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
+                    loaded = await PhotoLibrary.loadThumbnail(for: asset)
+                } else {
+                    loaded = await PhotoLibrary.loadImage(
+                        for: result,
+                        targetSize: CGSize(width: 400, height: 400)
+                    )
+                }
+                if ImageLoadGenerationPolicy.acceptsCompletion(
+                    startedGeneration: generation,
+                    currentGeneration: imageLoadGeneration,
+                    isCancelled: Task.isCancelled
+                ) {
+                    thumbnail = loaded
+                }
+                #if DEBUG
+                if let thumbnail {
+                    logger.info("[PhotoThumbnailView] loaded thumbnail size=\(String(format: "%.0fx%.0f", thumbnail.size.width, thumbnail.size.height))")
+                } else {
+                    logger.warning("[PhotoThumbnailView] media load failed isVideo=\(result.isVideo)")
                 }
                 #endif
-            } else {
-                #if DEBUG
-                logger.warning("[PhotoThumbnailView] media load failed id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo)")
-                #endif
             }
+            imageLoadTask = task
+            await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&thumbnail)
         }
     }
 }

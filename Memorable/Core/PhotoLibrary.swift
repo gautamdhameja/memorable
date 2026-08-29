@@ -3,6 +3,114 @@ import UIKit
 import AVFoundation
 import os
 
+enum PhotoThumbnailSizePolicy {
+    static func targetSize(
+        pixelWidth: Int,
+        pixelHeight: Int,
+        maxDimension: CGFloat
+    ) -> CGSize? {
+        guard pixelWidth > 0, pixelHeight > 0,
+              maxDimension.isFinite, maxDimension > 0 else {
+            return nil
+        }
+        let width = CGFloat(pixelWidth)
+        let height = CGFloat(pixelHeight)
+        let scale = maxDimension / max(width, height)
+        let size = CGSize(width: width * scale, height: height * scale)
+        guard size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0 else {
+            return nil
+        }
+        return size
+    }
+}
+
+enum FolderFileReadOperation {
+    private static let permits = CancellablePermitPool(limit: 2)
+
+    static func run<Value: Sendable>(
+        operation: @escaping @Sendable () async -> Value
+    ) async -> Value? {
+        guard await permits.acquire() else { return nil }
+        if Task.isCancelled {
+            await permits.release()
+            return nil
+        }
+        let decodeTask = Task.detached(priority: .utility) {
+            await operation()
+        }
+        let result = await withTaskCancellationHandler {
+            await decodeTask.value
+        } onCancel: {
+            decodeTask.cancel()
+        }
+        await permits.release()
+        return Task.isCancelled ? nil : result
+    }
+}
+
+enum FolderImageLoadOperation {
+    static func run(
+        operation: @escaping @Sendable () async -> UIImage?
+    ) async -> UIImage? {
+        await FolderFileReadOperation.run(operation: operation) ?? nil
+    }
+}
+
+actor CancellablePermitPool {
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+
+    private let limit: Int
+    private var available: Int
+    private var waiters: [Waiter] = []
+
+    init(limit: Int) {
+        self.limit = max(1, limit)
+        self.available = max(1, limit)
+    }
+
+    func acquire() async -> Bool {
+        guard !Task.isCancelled else { return false }
+        if available > 0 {
+            available -= 1
+            return true
+        }
+
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                waiters.append(Waiter(id: id, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id: id) }
+        }
+    }
+
+    func release() {
+        while !waiters.isEmpty {
+            let waiter = waiters.removeFirst()
+            waiter.continuation.resume(returning: true)
+            return
+        }
+        available = min(limit, available + 1)
+    }
+
+    private func cancelWaiter(id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        let waiter = waiters.remove(at: index)
+        waiter.continuation.resume(returning: false)
+    }
+}
+
 final class PhotoKitRequestController<Value: Sendable>: Sendable {
     private struct State: Sendable {
         var continuation: ContinuationGuard<Value?>?
@@ -265,13 +373,13 @@ class PhotoLibrary {
     ) async -> UIImage? {
         if result.sourceId != PhotoSourceType.photokit.rawValue {
             guard !result.isVideo, let filePath = result.filePath else { return nil }
-            return await Task.detached(priority: .utility) {
+            return await FolderImageLoadOperation.run {
                 FolderScanner.loadImageFromBookmarkedSource(
                     filePath: filePath,
                     sourceId: result.sourceId,
                     targetSize: targetSize
                 )
-            }.value
+            }
         }
 
         guard let asset = getAsset(by: result.localIdentifier) else { return nil }
@@ -328,17 +436,11 @@ class PhotoLibrary {
 
     // Get a thumbnail for display in search results — preserves original aspect ratio
     static func loadThumbnail(for asset: PHAsset, maxDimension: CGFloat = 400) async -> UIImage? {
-        // Compute target size that preserves the asset's aspect ratio
-        let assetWidth = CGFloat(asset.pixelWidth)
-        let assetHeight = CGFloat(asset.pixelHeight)
-        let targetSize: CGSize
-        if assetWidth > assetHeight {
-            let scale = maxDimension / assetWidth
-            targetSize = CGSize(width: maxDimension, height: assetHeight * scale)
-        } else {
-            let scale = maxDimension / assetHeight
-            targetSize = CGSize(width: assetWidth * scale, height: maxDimension)
-        }
+        guard let targetSize = PhotoThumbnailSizePolicy.targetSize(
+            pixelWidth: asset.pixelWidth,
+            pixelHeight: asset.pixelHeight,
+            maxDimension: maxDimension
+        ) else { return nil }
 
         return await withPhotoKitTimeout(seconds: TimeoutConfig.imageLoad) { completion in
             let options = PHImageRequestOptions()
@@ -371,6 +473,13 @@ class PhotoLibrary {
         options.predicate = NSPredicate(format: "mediaType == %d OR mediaType == %d",
                                          PHAssetMediaType.image.rawValue,
                                          PHAssetMediaType.video.rawValue)
+        return PHAsset.fetchAssets(with: options)
+    }
+
+    static func fetchMedia(ofType mediaType: PHAssetMediaType) -> PHFetchResult<PHAsset> {
+        let options = PHFetchOptions()
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        options.predicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
         return PHAsset.fetchAssets(with: options)
     }
 
@@ -431,14 +540,6 @@ class PhotoLibrary {
         }
     }
 
-    static func loadVideoURL(for asset: PHAsset) async -> URL? {
-        await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
-            requestLocalVideoAsset(for: asset) { avAsset in
-                completion((avAsset as? AVURLAsset)?.url)
-            }
-        }
-    }
-
     static func loadVideoPlaybackAsset(for asset: PHAsset) async -> VideoPlaybackAsset? {
         return await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
             requestLocalVideoAsset(for: asset) { avAsset in
@@ -460,61 +561,6 @@ class PhotoLibrary {
             _,
             info in
             completion(photoKitRequestDidFail(info) ? nil : avAsset)
-        }
-    }
-
-    // MARK: - Quick Look Support
-
-    private static let quickLookCacheDir: URL = {
-        // The iOS sandbox always provides a caches directory, but fall back to
-        // the temp directory instead of crashing if the system somehow doesn't.
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        let dir = caches.appendingPathComponent("QuickLookPreviews", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
-
-    static func getQuickLookURL(for asset: PHAsset) async -> URL? {
-        if asset.mediaType == .video {
-            return await loadVideoURL(for: asset)
-        } else {
-            return await withPhotoKitTimeout(seconds: TimeoutConfig.videoLoad) { completion in
-                let options = PHImageRequestOptions()
-                options.isNetworkAccessAllowed = false
-                options.deliveryMode = .highQualityFormat
-
-                return PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, uti, _, info in
-                    if photoKitRequestDidFail(info) {
-                        completion(nil)
-                        return
-                    }
-                    guard let data else {
-                        completion(nil)
-                        return
-                    }
-
-                    let ext: String
-                    if let uti, uti.hasPrefix("public.heic") || uti.hasPrefix("public.heif") {
-                        ext = "heic"
-                    } else if let uti, uti.contains("png") {
-                        ext = "png"
-                    } else {
-                        ext = "jpg"
-                    }
-
-                    let fileURL = quickLookCacheDir
-                        .appendingPathComponent(asset.localIdentifier.replacingOccurrences(of: "/", with: "_"))
-                        .appendingPathExtension(ext)
-
-                    do {
-                        try data.write(to: fileURL, options: .atomic)
-                        completion(fileURL)
-                    } catch {
-                        completion(nil)
-                    }
-                }
-            }
         }
     }
 
@@ -562,16 +608,4 @@ class PhotoLibrary {
         return false
     }
 
-    static func cleanupQuickLookFile(at url: URL) {
-        try? FileManager.default.removeItem(at: url)
-    }
-
-    static func cleanupAllQuickLookFiles() {
-        let dir = quickLookCacheDir
-        if let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
-            for file in files {
-                try? FileManager.default.removeItem(at: file)
-            }
-        }
-    }
 }

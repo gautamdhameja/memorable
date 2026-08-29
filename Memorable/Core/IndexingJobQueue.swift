@@ -199,6 +199,10 @@ final class IndexingJobQueue {
 
     private func start(_ job: IndexingJob) {
         let task = Task { [weak self] in
+            guard !Task.isCancelled else {
+                self?.complete(job, outcome: .cancelled)
+                return
+            }
             let outcome = await job.operation()
             self?.complete(job, outcome: outcome)
         }

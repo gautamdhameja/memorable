@@ -1,4 +1,4 @@
-# Feature: Calendar Event Memories
+# Calendar event memories
 
 **Status:** Planned (not yet implemented)
 **Priority:** Future release
@@ -14,7 +14,7 @@ Combine calendar events with photos to create rich "event memories." When enable
 > *The team traded laptops for paddles that day in Rishikesh. Between the rapids and the dal makhani, it was exactly the reset everyone needed.*
 > *23 photos from this event*
 
-## User Opt-in Flow
+## Let users opt in
 
 1. User opens **More tab → Settings section**
 2. Toggle: **"Calendar Memories"** — off by default
@@ -23,15 +23,15 @@ Combine calendar events with photos to create rich "event memories." When enable
 5. If denied: toggle reverts to off, explanation shown
 6. User can disable at any time — calendar data is cleared from memory (never stored in DB)
 
-### Why Opt-in Only
+### Require explicit access
 - Calendar access is sensitive — users should consciously choose to share it
 - Not all users want their work meetings mixed with photo memories
 - Aligns with our privacy-first positioning
 - Reduces permission fatigue on first launch (only photo access is requested initially)
 
-## Technical Architecture
+## Architecture
 
-### Calendar Access (EventKit)
+### Access calendars with EventKit
 
 ```swift
 import EventKit
@@ -65,7 +65,7 @@ class CalendarService {
 <string>Memorable can match your calendar events with photos to create event memories. Calendar data is processed on your device and never uploaded.</string>
 ```
 
-### Photo-Event Matching
+### Match photos to events
 
 ```swift
 struct EventMemory {
@@ -93,7 +93,7 @@ func matchPhotosToEvents(events: [EKEvent]) -> [EventMemory] {
 }
 ```
 
-### Event Filtering Rules
+### Filter events
 
 Not all calendar events make good memories. Filter:
 
@@ -106,7 +106,7 @@ Not all calendar events make good memories. Filter:
 | Skip all-day events without photos | Usually just reminders |
 | Keep all-day events WITH photos | Likely actual events (birthdays, trips) |
 
-### Narrative Generation (Foundation Models)
+### Generate narratives with Foundation Models
 
 On iOS 26+ devices with Foundation Models available:
 
@@ -145,7 +145,7 @@ Template-based narrative using event title + photo count + date:
 "Your trip to Rishikesh — 23 photos from June 15-17, 2024"
 ```
 
-### Photo Categories for Narrative Context
+### Provide photo categories as narrative context
 
 Reuse the existing `PhotoCaptionService` to categorize matched photos:
 ```swift
@@ -157,7 +157,7 @@ Reuse the existing `PhotoCaptionService` to categorize matched photos:
 
 This gives the Foundation Model context about what's IN the photos without sending any images.
 
-## Data Model
+## Data model
 
 **No new database tables.** Calendar events are loaded on-demand from EventKit and matched in memory. Nothing is persisted — when the user disables the feature, there's nothing to delete.
 
@@ -176,16 +176,16 @@ struct EventMemory: Identifiable {
 }
 ```
 
-### Settings Storage
+### Store settings
 
 ```swift
 // UserDefaults
 UserDefaults.standard.bool(forKey: "calendarMemoriesEnabled") // default: false
 ```
 
-## UI Design
+## UI design
 
-### Placement
+### Choose placement
 
 In the **Memories tab**, as a section between "Relive Your Memories" button and "On This Day":
 
@@ -198,7 +198,7 @@ Memories tab:
   └── On This Day
 ```
 
-### EventMemoryCard
+### Build `EventMemoryCard`
 
 ```
 ┌─────────────────────────────────┐
@@ -212,16 +212,16 @@ Memories tab:
 └─────────────────────────────────┘
 ```
 
-### Event Memory Detail View
+### Build the event memory detail view
 
 When tapped:
 - Full narrative at the top
 - Event details (title, location, date range)
 - Masonry grid of all matched photos (reuse existing layout)
-- Photos are clickable (Quick Look viewer)
+- Users can open photos in the app's full-screen viewer.
 - "Play as Slideshow" button (reuse MemorySlideshowView, scoped to these photos)
 
-### Settings UI in More Tab
+### Add settings to the More tab
 
 ```
 Section("Features") {
@@ -243,18 +243,18 @@ Section("Features") {
 }
 ```
 
-## Privacy Considerations
+## Protect calendar data
 
-| Concern | How we handle it |
+| Concern | Guidance |
 |---------|-----------------|
-| Calendar data leaves device? | Never. All processing on-device. |
-| Calendar data stored in DB? | No. Loaded on-demand from EventKit, held in memory only. |
-| What happens when user disables? | In-memory data cleared immediately. No traces. |
-| Can we read other people's shared calendars? | Yes, but we should filter to only the user's default calendar initially. |
-| Foundation Models sends calendar data to cloud? | No. On-device model only. |
-| Network requests? | None for this feature. |
+| Calendar data transfer | Keep calendar data on the device. Do not add remote processing. |
+| Database storage | Load events from EventKit on demand and retain them only in memory. |
+| Disabled access | Clear in-memory event data immediately. |
+| Shared calendars | Read only the user's default calendar in the initial implementation. |
+| Foundation Models | Use only the on-device model path. |
+| Network access | Do not add network requests for calendar processing. Existing CLGeocoder and StoreKit boundaries remain governed by the privacy policy. |
 
-## Implementation Tasks
+## Implementation tasks
 
 | Task | Effort | Description |
 |------|--------|-------------|
@@ -281,9 +281,9 @@ Section("Features") {
 - Existing masonry grid layout for detail view
 - Existing MemorySlideshowView for slideshow playback
 - Foundation Models framework (iOS 26+) for narrative generation
-- Existing FullScreenPhotoViewer (Quick Look) for photo viewing
+- Existing `SearchResultsViewer` for local photo viewing
 
-## Future Enhancements
+## Consider future enhancements
 
 - Smart event grouping: combine multi-day events that are part of the same trip
 - Location-aware matching: boost photos near the event's location
@@ -291,7 +291,6 @@ Section("Features") {
 - Yearly recap: "Your year in events" summary combining all event memories
 - Widget: "Today's memory" showing an event memory from this date in previous years
 - Calendar heatmap: visual calendar showing which days have the most photos
-- Export: share an event memory as a video/slideshow with the narrative as voiceover
 
 ## Sources
 

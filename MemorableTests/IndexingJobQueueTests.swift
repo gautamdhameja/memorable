@@ -531,6 +531,24 @@ final class IndexingJobQueueTests: XCTestCase {
         XCTAssertEqual(queue.retainedWorkflowCount, 0)
     }
 
+    func testImmediateCancelPreventsActiveOperationFromStarting() async {
+        let queue = IndexingJobQueue()
+        var operationRan = false
+
+        queue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .indexPhotos,
+            priority: .userInitiated
+        ) {
+            operationRan = true
+            return .completed
+        })
+        queue.cancelAll()
+        await queue.waitUntilIdle()
+
+        XCTAssertFalse(operationRan)
+    }
+
     private func settleScheduledTasks(until condition: () -> Bool) async {
         for _ in 0..<100 where !condition() {
             await Task.yield()

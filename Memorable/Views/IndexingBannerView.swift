@@ -28,7 +28,43 @@ struct IndexingBannerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if indexingService.progress.isRunning {
+            if indexingService.isThermallyPaused {
+                Text("INDEXING PAUSED")
+                    .font(.caption.weight(.medium))
+                    .tracking(1.2)
+                    .foregroundStyle(Celestial.Colors.amber)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "thermometer.medium")
+                    .font(.system(size: 42, weight: .light))
+                    .foregroundStyle(Celestial.Colors.amber)
+                    .padding(.top, 42)
+
+                Text("Let this iPhone cool down")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                    .padding(.top, 18)
+
+                Text("Memorable stopped background indexing at a serious thermal level. Indexing resumes automatically after the iPhone cools down.")
+                    .font(.subheadline)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .lineSpacing(4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 12)
+
+                Button("Cancel automatic resume") {
+                    indexingService.stopIndexing()
+                }
+                .font(.body.weight(.medium))
+                .foregroundStyle(Celestial.Colors.onSurface)
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Celestial.Colors.onSurface.opacity(0.16), lineWidth: 1)
+                }
+                .padding(.top, 26)
+            } else if indexingService.progress.isRunning {
                 Text("SEARCH INDEX")
                     .font(.caption.weight(.medium))
                     .tracking(1.2)

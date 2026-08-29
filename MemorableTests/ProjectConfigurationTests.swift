@@ -41,10 +41,98 @@ final class ProjectConfigurationTests: XCTestCase {
         )
     }
 
+    func testBuildVerifiesBundledModelManifest() throws {
+        let projectYAML = try contents(of: "project.yml")
+        let premerge = try contents(of: "scripts/premerge.py")
+        let manifest = try contents(of: "scripts/model_manifest.json")
+
+        XCTAssertTrue(projectYAML.contains("Verify bundled models"))
+        XCTAssertTrue(projectYAML.contains("Verify packaged models"))
+        XCTAssertTrue(projectYAML.contains("scripts/verify_models.py"))
+        XCTAssertTrue(projectYAML.contains("scripts/model_manifest.json"))
+        XCTAssertTrue(projectYAML.contains("inputFiles:"))
+        XCTAssertTrue(projectYAML.contains("outputFiles:"))
+        XCTAssertTrue(projectYAML.contains("--packaged-models-root"))
+        XCTAssertTrue(projectYAML.contains("basedOnDependencyAnalysis: true"))
+        XCTAssertFalse(projectYAML.contains("basedOnDependencyAnalysis: false"))
+        XCTAssertEqual(projectYAML.components(separatedBy: "set -eu").count - 1, 2)
+        XCTAssertTrue(premerge.contains("scripts/verify_models.py"))
+        XCTAssertTrue(manifest.contains("google/siglip2-base-patch16-224"))
+        XCTAssertTrue(manifest.contains("Apache-2.0"))
+    }
+
+    func testAppSourcesDoNotExposeADataExportAction() throws {
+        let sources = try allAppSourceText()
+
+        XCTAssertFalse(sources.contains("UIActivityViewController"))
+        XCTAssertFalse(sources.contains("ShareLink"))
+        XCTAssertFalse(sources.contains(".quickLookPreview"))
+        XCTAssertFalse(sources.contains("UIPasteboard"))
+        XCTAssertFalse(sources.contains("Share photo"))
+        XCTAssertFalse(sources.contains("square.and.arrow.up"))
+    }
+
+    func testAppSourcesDoNotCreateGeneralNetworkClients() throws {
+        let sources = try allAppSourceText()
+
+        XCTAssertFalse(sources.contains("URLSession"))
+        XCTAssertFalse(sources.contains("import Network"))
+        XCTAssertFalse(sources.contains("import WebKit"))
+        XCTAssertFalse(sources.contains("WKWebView"))
+        XCTAssertFalse(sources.contains("SFSafariViewController"))
+        XCTAssertFalse(sources.contains("NWConnection"))
+    }
+
+    func testDiagnosticLogsDoNotUseUserControlledErrorDescriptions() throws {
+        let unsafeLines = try allAppSourceText()
+            .split(separator: "\n")
+            .filter { $0.contains("logger.") && $0.contains("localizedDescription") }
+
+        XCTAssertTrue(unsafeLines.isEmpty, "Unsafe diagnostic log lines: \(unsafeLines)")
+    }
+
+    func testAppTransportSecurityDoesNotAllowArbitraryLoads() throws {
+        let infoPlist = try contents(of: "Memorable/Info.plist")
+
+        XCTAssertTrue(infoPlist.contains("<key>NSAllowsArbitraryLoads</key>"))
+        XCTAssertTrue(infoPlist.contains("<false/>"))
+    }
+
+    func testOnboardingDisclosesCoordinateGeocoding() throws {
+        let onboarding = try contents(of: "Memorable/Views/OnboardingView.swift")
+
+        XCTAssertTrue(onboarding.contains("Apple resolves photo coordinates into place names"))
+        XCTAssertTrue(onboarding.contains("Photos and search text stay on this iPhone"))
+        XCTAssertFalse(onboarding.contains("nothing is uploaded"))
+    }
+
+    func testUpgradeViewRequestsDeferredProductLoading() throws {
+        let upgradeView = try contents(of: "Memorable/Views/UpgradeView.swift")
+
+        XCTAssertTrue(upgradeView.contains("await proManager.loadProduct()"))
+    }
+
     private func contents(of relativePath: String) throws -> String {
         try String(
             contentsOf: repositoryRoot.appendingPathComponent(relativePath),
             encoding: .utf8
         )
+    }
+
+    private func allAppSourceText() throws -> String {
+        let sourceRoot = repositoryRoot.appendingPathComponent("Memorable")
+        guard let enumerator = FileManager.default.enumerator(
+            at: sourceRoot,
+            includingPropertiesForKeys: nil
+        ) else {
+            XCTFail("Unable to enumerate app sources")
+            return ""
+        }
+
+        return try enumerator
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" }
+            .map { try String(contentsOf: $0, encoding: .utf8) }
+            .joined(separator: "\n")
     }
 }

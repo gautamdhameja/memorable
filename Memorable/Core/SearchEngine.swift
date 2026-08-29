@@ -15,22 +15,153 @@ struct FilterSummary {
     let visualQuery: String
 }
 
-private struct SearchIndexSnapshot: Sendable {
-    var photos = MediaIndex(kind: .photo)
-    var videos = MediaIndex(kind: .videoFrame)
-    var uniqueVideoCount = 0
-    var photoSimilaritySearch: SimilaritySearching?
-    var videoSimilaritySearch: SimilaritySearching?
-    var isMemoryPressureSuspended = false
+private enum SearchQueryEmbeddingContext {
+    @TaskLocal static var embeddings: [String: [Float]] = [:]
 }
 
-private struct ScoredMedia {
-    let rawScores: [Float]
-    let scores: [Float]
+/// Ensures that overlapping callers share one complete replacement attempt,
+/// so waiters never build or retain their own database copy.
+private final class IndexLoadCoordinator: @unchecked Sendable {
+    private final class Flight: @unchecked Sendable {
+        let completion = DispatchGroup()
+        var error: Error?
+
+        init() {
+            completion.enter()
+        }
+    }
+
+    private let lock = NSLock()
+    private var activeFlight: Flight?
+
+    func run(_ operation: () throws -> Void) throws {
+        let flight: Flight
+        let isLeader: Bool
+
+        lock.lock()
+        if let activeFlight {
+            flight = activeFlight
+            isLeader = false
+        } else {
+            flight = Flight()
+            activeFlight = flight
+            isLeader = true
+        }
+        lock.unlock()
+
+        guard isLeader else {
+            while flight.completion.wait(timeout: .now() + .milliseconds(25)) == .timedOut {
+                try Task.checkCancellation()
+            }
+            try Task.checkCancellation()
+            lock.lock()
+            let error = flight.error
+            lock.unlock()
+            if let error { throw error }
+            return
+        }
+
+        do {
+            try operation()
+            finish(flight, error: nil)
+        } catch {
+            finish(flight, error: error)
+            throw error
+        }
+    }
+
+    private func finish(_ flight: Flight, error: Error?) {
+        lock.lock()
+        flight.error = error
+        flight.completion.leave()
+        if activeFlight === flight {
+            activeFlight = nil
+        }
+        lock.unlock()
+    }
+}
+
+/// Coordinates immutable snapshot readers with replacement construction.
+/// Reloads wait for current readers, prevent new readers, and release the old
+/// snapshot before allocating its replacement so steady-state index memory is
+/// never intentionally doubled.
+private final class SearchActivityCoordinator: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var reloadInProgress = false
+    private var activeSearches = 0
+
+    func withSearch<T>(_ operation: () throws -> T) throws -> T {
+        condition.lock()
+        while reloadInProgress {
+            _ = condition.wait(until: Date().addingTimeInterval(0.025))
+            do {
+                try Task.checkCancellation()
+            } catch {
+                condition.unlock()
+                throw error
+            }
+        }
+        activeSearches += 1
+        condition.unlock()
+
+        do {
+            let result = try operation()
+            finishSearch()
+            return result
+        } catch {
+            finishSearch()
+            throw error
+        }
+    }
+
+    func withSearchUnlessCancelled<T>(_ operation: () -> T) -> T? {
+        condition.lock()
+        while reloadInProgress {
+            if Task.isCancelled {
+                condition.unlock()
+                return nil
+            }
+            _ = condition.wait(until: Date().addingTimeInterval(0.025))
+        }
+        activeSearches += 1
+        condition.unlock()
+
+        let result = operation()
+        finishSearch()
+        return result
+    }
+
+    func withExclusiveReload(_ operation: () throws -> Void) throws {
+        condition.lock()
+        reloadInProgress = true
+        while activeSearches > 0 {
+            condition.wait()
+        }
+        condition.unlock()
+
+        defer {
+            condition.lock()
+            reloadInProgress = false
+            condition.broadcast()
+            condition.unlock()
+        }
+        try operation()
+    }
+
+    private func finishSearch() {
+        condition.lock()
+        activeSearches -= 1
+        if activeSearches == 0 {
+            condition.broadcast()
+        }
+        condition.unlock()
+    }
 }
 
 final class SearchEngine: Sendable {
     private let indexSnapshot: OSAllocatedUnfairLock<SearchIndexSnapshot>
+    private let indexLoadCoordinator = IndexLoadCoordinator()
+    private let searchActivity = SearchActivityCoordinator()
 
     private let embeddingDim = EmbeddingConfig.dimensions
     private let minimumScoreThreshold = SearchConfig.minimumScoreThreshold
@@ -39,7 +170,7 @@ final class SearchEngine: Sendable {
     /// The UI progressively reveals results, but retaining every match can
     /// exhaust memory for large Pro libraries. Keep a generous, deterministic
     /// window instead.
-    static let maximumRetainedResults = SearchConfig.locationResultsCap
+    static let maximumRetainedResults = SearchResultRanking.maximumRetainedResults
 
     private let injectedPhotoSimilaritySearch: SimilaritySearching?
     private let injectedVideoSimilaritySearch: SimilaritySearching?
@@ -66,12 +197,36 @@ final class SearchEngine: Sendable {
 
     func loadIndex() throws {
         guard !isMemoryPressureSuspended else { return }
+        try indexLoadCoordinator.run { [self] in
+            try searchActivity.withExclusiveReload {
+                guard !isMemoryPressureSuspended else { return }
+                try loadIndexOnce()
+            }
+        }
+    }
+
+    private func loadIndexOnce() throws {
         #if DEBUG
         let loadStart = CFAbsoluteTimeGetCurrent()
         #endif
 
+        // The safety-first reload contract deliberately gives up serving the
+        // previous index if construction fails. Keeping it here would double
+        // the largest allocation on every reload and can terminate the app on
+        // memory-constrained devices. A later reload repopulates the index.
+        let canLoad = indexSnapshot.withLock { snapshot in
+            guard !snapshot.isMemoryPressureSuspended else { return false }
+            snapshot = SearchIndexSnapshot()
+            return true
+        }
+        guard canLoad else { return }
+
+        try Task.checkCancellation()
         let photoIndex = try database.loadAllEmbeddings()
+        try Task.checkCancellation()
+        guard !isMemoryPressureSuspended else { return }
         let videoIndex = try database.loadAllVideoEmbeddings()
+        try Task.checkCancellation()
         guard !isMemoryPressureSuspended else { return }
         guard photoIndex.kind == .photo, videoIndex.kind == .videoFrame else {
             logger.error("[SearchEngine] Persisted index has unexpected media kinds")
@@ -89,19 +244,26 @@ final class SearchEngine: Sendable {
         newGPUSearch = injectedPhotoSimilaritySearch ?? GPUSimilaritySearch()
         newGPUVideoSearch = injectedVideoSimilaritySearch ?? GPUSimilaritySearch()
         #endif
+        try Task.checkCancellation()
+        guard !isMemoryPressureSuspended else { return }
         newGPUSearch?.buildIndex(embeddings: photoIndex.embeddings, count: photoIndex.count)
+        try Task.checkCancellation()
         if videoIndex.count > 0 {
+            guard !isMemoryPressureSuspended else { return }
             newGPUVideoSearch?.buildIndex(embeddings: videoIndex.embeddings, count: videoIndex.count)
         }
+        try Task.checkCancellation()
 
         indexSnapshot.withLock {
             guard !$0.isMemoryPressureSuspended else { return }
+            let memoryPressureGeneration = $0.memoryPressureGeneration
             $0 = SearchIndexSnapshot(
                 photos: photoIndex,
                 videos: videoIndex,
                 uniqueVideoCount: videoIndex.uniqueIDCount,
                 photoSimilaritySearch: newGPUSearch,
-                videoSimilaritySearch: videoIndex.count == 0 ? nil : newGPUVideoSearch
+                videoSimilaritySearch: videoIndex.count == 0 ? nil : newGPUVideoSearch,
+                memoryPressureGeneration: memoryPressureGeneration
             )
         }
 
@@ -163,7 +325,12 @@ final class SearchEngine: Sendable {
     }
 
     func suspendForMemoryPressure() {
-        indexSnapshot.withLock { $0 = SearchIndexSnapshot(isMemoryPressureSuspended: true) }
+        indexSnapshot.withLock {
+            $0 = SearchIndexSnapshot(
+                isMemoryPressureSuspended: true,
+                memoryPressureGeneration: $0.memoryPressureGeneration &+ 1
+            )
+        }
         #if DEBUG
         logger.info("[SearchEngine] Index suspended due to memory pressure")
         #endif
@@ -175,24 +342,58 @@ final class SearchEngine: Sendable {
 
     // MARK: - Search
 
-    func search(query: String) async throws -> SearchResponse {
-        guard !isMemoryPressureSuspended else {
+    func search(
+        query: String,
+        featurePolicy: SearchFeaturePolicy = .basic
+    ) async throws -> SearchResponse {
+        let memoryPressureGeneration = indexSnapshot.withLock { $0.memoryPressureGeneration }
+        guard isSearchGenerationActive(memoryPressureGeneration) else {
             return SearchResponse(results: [], fallbackResults: [], filtersApplied: nil)
         }
         if !isIndexLoaded {
-            try await Task.detached(priority: .userInitiated) { [self] in
+            let loadTask = Task.detached(priority: .userInitiated) { [self] in
                 try loadIndex()
-            }.value
+            }
+            try await withTaskCancellationHandler {
+                try await loadTask.value
+            } onCancel: {
+                loadTask.cancel()
+            }
         }
 
         #if DEBUG
         let searchStart = CFAbsoluteTimeGetCurrent()
-        logger.info("[SearchEngine] Search query: '\(query)'")
+        logger.info("[SearchEngine] Search started")
         #endif
 
-        let hints = await QueryParser.parse(query: query)
+        let hints = await QueryParser.parse(query: query, featurePolicy: featurePolicy)
+        try checkSearchGeneration(memoryPressureGeneration)
+        let effectiveHints = featurePolicy.enforcing(hints)
+        var precomputedEmbeddings: [String: [Float]] = [:]
+        if effectiveHints.hasVisualQuery && !isPureLocationQuery(effectiveHints) {
+            var texts = [effectiveHints.textQuery]
+            texts.append(contentsOf: effectiveHints.negativeTerms)
+            for text in texts where precomputedEmbeddings[text] == nil {
+                try checkSearchGeneration(memoryPressureGeneration)
+                let embedding = try await textEncoder.encodeCancellable(text: text)
+                try checkSearchGeneration(memoryPressureGeneration)
+                guard embedding.count == embeddingDim else {
+                    throw SearchEngineError.invalidEmbedding
+                }
+                precomputedEmbeddings[text] = embedding
+            }
+        }
 
-        let response = try hybridSearch(hints: hints)
+        let response = try SearchQueryEmbeddingContext.$embeddings.withValue(
+            precomputedEmbeddings
+        ) {
+            try hybridSearch(
+                hints: effectiveHints,
+                featurePolicy: featurePolicy,
+                memoryPressureGeneration: memoryPressureGeneration
+            )
+        }
+        try checkSearchGeneration(memoryPressureGeneration)
 
         #if DEBUG
         logger.info("[SearchEngine] Search completed in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - searchStart))s, main=\(response.results.count), fallback=\(response.fallbackResults.count), filters=\(response.filtersApplied != nil)")
@@ -215,7 +416,49 @@ final class SearchEngine: Sendable {
         return false
     }
 
-    func hybridSearch(hints: QueryHints) throws -> SearchResponse {
+    func hybridSearch(
+        hints: QueryHints,
+        featurePolicy: SearchFeaturePolicy = .basic
+    ) throws -> SearchResponse {
+        let memoryPressureGeneration = indexSnapshot.withLock { $0.memoryPressureGeneration }
+        return try hybridSearch(
+            hints: hints,
+            featurePolicy: featurePolicy,
+            memoryPressureGeneration: memoryPressureGeneration
+        )
+    }
+
+    private func hybridSearch(
+        hints: QueryHints,
+        featurePolicy: SearchFeaturePolicy,
+        memoryPressureGeneration: UInt
+    ) throws -> SearchResponse {
+        try searchActivity.withSearch {
+            try SearchCancellation.$additionalCheck.withValue({ [weak self] in
+                guard let self else { throw CancellationError() }
+                try self.checkSearchGeneration(memoryPressureGeneration)
+            }) {
+                try SearchCancellation.checkNow()
+                return try performHybridSearch(hints: featurePolicy.enforcing(hints))
+            }
+        }
+    }
+
+    private func isSearchGenerationActive(_ generation: UInt) -> Bool {
+        indexSnapshot.withLock {
+            !$0.isMemoryPressureSuspended && $0.memoryPressureGeneration == generation
+        }
+    }
+
+    private func checkSearchGeneration(_ generation: UInt) throws {
+        try Task.checkCancellation()
+        guard isSearchGenerationActive(generation) else {
+            throw CancellationError()
+        }
+    }
+
+    private func performHybridSearch(hints: QueryHints) throws -> SearchResponse {
+        try SearchCancellation.checkNow()
         let snapshot = indexSnapshot.withLock { $0 }
         let photos = snapshot.photos
         let videos = snapshot.videos
@@ -249,20 +492,20 @@ final class SearchEngine: Sendable {
             targetLoc = CLLocation(latitude: coord.lat, longitude: coord.lon)
         }
 
-        let photoCandidateMask = candidateMask(
+        let photoCandidateMask = try candidateMask(
             for: photos,
             hints: hints,
             locationMatcher: locationMatcher,
             targetLoc: targetLoc
         )
-        let videoCandidateMask = candidateMask(
+        let videoCandidateMask = try candidateMask(
             for: videos,
             hints: hints,
             locationMatcher: locationMatcher,
             targetLoc: targetLoc
         )
-        let candidateCount = photoCandidateMask.filter { $0 }.count
-        let videoCandidateCount = videoCandidateMask.filter { $0 }.count
+        let candidateCount = try trueCount(in: photoCandidateMask)
+        let videoCandidateCount = try trueCount(in: videoCandidateMask)
 
         #if DEBUG
         logger.info("[SearchEngine] Filter: \(candidateCount)/\(photos.count) photos and \(videoCandidateCount)/\(videos.count) video frames passed hard filters")
@@ -283,7 +526,7 @@ final class SearchEngine: Sendable {
         // Empty candidate set with active filters → provide fallback
         if candidateCount == 0 && videoCandidateCount == 0 && filtersActive {
             let fallbackResults = hints.hasVisualQuery
-                ? computeFallbackResults(text: hints.textQuery, index: photos, gpuSearch: photoGPU)
+                ? try computeFallbackResults(text: hints.textQuery, index: photos, gpuSearch: photoGPU)
                 : []
             let summary = FilterSummary(
                 dateDescription: hints.dateRange.map { formatDateRange($0) },
@@ -297,7 +540,7 @@ final class SearchEngine: Sendable {
         // return every matching media item sorted by date — the user wants all
         // of them, not a CLIP-ranked top-K against a meaningless city embedding.
         if isPureLocationQuery(hints) {
-            return try locationOnlyResults(media: [
+            return try SearchResultRanking.locationOnlyResults(media: [
                 (index: photos, candidateMask: photoCandidateMask),
                 (index: videos, candidateMask: videoCandidateMask),
             ])
@@ -307,10 +550,16 @@ final class SearchEngine: Sendable {
         // PHASE 3: CLIP SCORING — score all, then mask out non-candidates
         // =====================================================================
 
+        try SearchCancellation.checkNow()
         let queryEmbedding = try encodeQuery(text: hints.textQuery)
-        let negativeEmbeddings = try hints.negativeTerms.map { try textEncoder.encode(text: $0) }
+        var negativeEmbeddings: [[Float]] = []
+        negativeEmbeddings.reserveCapacity(hints.negativeTerms.count)
+        for negativeTerm in hints.negativeTerms {
+            try SearchCancellation.checkNow()
+            negativeEmbeddings.append(try encodeQuery(text: negativeTerm))
+        }
 
-        let photoScoring = scoreMedia(
+        let photoScoring = try scoreMedia(
             photos,
             candidateMask: photoCandidateMask,
             queryEmbedding: queryEmbedding,
@@ -319,7 +568,7 @@ final class SearchEngine: Sendable {
             targetLoc: targetLoc,
             gpuSearch: photoGPU
         )
-        let videoScoring = scoreMedia(
+        let videoScoring = try scoreMedia(
             videos,
             candidateMask: videoCandidateMask,
             queryEmbedding: queryEmbedding,
@@ -330,6 +579,7 @@ final class SearchEngine: Sendable {
         )
         let scores = photoScoring.scores
         let videoScores = videoScoring.scores
+        try SearchCancellation.checkNow()
 
         #if DEBUG
         // Raw CLIP score distribution BEFORE any boosts
@@ -372,8 +622,7 @@ final class SearchEngine: Sendable {
                 let raw = photoScoring.rawScores[i]
                 let boosted = scores[i]
                 let boostTotal = boosted - raw
-                let dateStr = photos.dates[i].map { ISO8601DateFormatter().string(from: $0) } ?? "no-date"
-                logger.info("[BoostDetail #\(rank+1)] raw=\(String(format: "%.4f", raw)) boosted=\(String(format: "%.4f", boosted)) boost=\(String(format: "%+.4f", boostTotal)) date=\(dateStr) id=\(photos.localIdentifiers[i].prefix(12))")
+                logger.info("[BoostDetail #\(rank+1)] raw=\(String(format: "%.4f", raw)) boosted=\(String(format: "%.4f", boosted)) boost=\(String(format: "%+.4f", boostTotal))")
             }
         }
         if !videoScoring.rawScores.isEmpty {
@@ -390,7 +639,15 @@ final class SearchEngine: Sendable {
         // PHASE 6: RANK AND RETURN
         // =====================================================================
 
-        let sorted = scores.enumerated().sorted { $0.element > $1.element }
+        let topScoredRows = try BoundedTopK.rows(
+            count: scores.count,
+            limit: SearchConfig.topK,
+            isPreferred: { lhs, rhs in
+                if scores[lhs] != scores[rhs] { return scores[lhs] > scores[rhs] }
+                return lhs < rhs
+            },
+            cancellationCheck: SearchCancellation.check
+        )
 
         // Adaptive thresholding for abstract/compound queries.
         // When no filters are active and zero candidates pass the hard
@@ -400,9 +657,10 @@ final class SearchEngine: Sendable {
         // cluster lands in the main grid instead of near-miss fallback.
         var effectiveThreshold = minimumScoreThreshold
         if !filtersActive {
-            let aboveThreshold = sorted.prefix(50).filter { $0.element >= minimumScoreThreshold }.count
-            if aboveThreshold == 0, let topScore = sorted.first?.element, topScore >= 0.06 {
-                let clusterCount = sorted.prefix(50).filter { $0.element >= topScore * 0.8 }.count
+            let aboveThreshold = topScoredRows.filter { scores[$0] >= minimumScoreThreshold }.count
+            if aboveThreshold == 0, let firstRow = topScoredRows.first, scores[firstRow] >= 0.06 {
+                let topScore = scores[firstRow]
+                let clusterCount = topScoredRows.filter { scores[$0] >= topScore * 0.8 }.count
                 if clusterCount >= 3 {
                     effectiveThreshold = topScore * 0.6
                 }
@@ -411,29 +669,37 @@ final class SearchEngine: Sendable {
 
         // No topK cap here — return every above-threshold candidate. The UI
         // layer windows to an initial visible count and lets the user expand.
-        let photoResults = try results(
+        let photoResults = try SearchResultRanking.results(
             for: photos,
             scores: scores,
             threshold: effectiveThreshold
         )
-        let videoResults = try results(
+        let videoResults = try SearchResultRanking.results(
             for: videos,
             scores: videoScores,
             threshold: minimumScoreThreshold
         )
-
-        var allResults = photoResults + videoResults
-        // Sort by score descending. For near-identical scores (within 1%),
-        // prefer more recent results. SigLIP2's sigmoid loss produces a narrow
-        // score range, so the tolerance must be tight to preserve relevance ranking.
-        allResults.sort(by: Self.isPreferredResult)
-        if allResults.count > Self.maximumRetainedResults {
-            allResults.removeSubrange(Self.maximumRetainedResults...)
+        let makeVideoNearMissResults: () throws -> [SearchResult] = {
+            var maskedScores = videoScores
+            for row in 0..<maskedScores.count {
+                try SearchCancellation.check(row)
+                if !videoCandidateMask[row] { maskedScores[row] = -.infinity }
+            }
+            return try SearchResultRanking.results(
+                for: videos,
+                scores: maskedScores,
+                threshold: Float.leastNonzeroMagnitude
+            )
         }
 
+        let allResults = try BoundedTopK.select(
+            from: photoResults + videoResults,
+            limit: Self.maximumRetainedResults,
+            isPreferred: SearchResultRanking.isPreferred,
+            cancellationCheck: SearchCancellation.check
+        )
+
         #if DEBUG
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
         let photoResultCount = photoResults.count
         let videoResultCount = videoResults.count
         let thresholdVal = self.minimumScoreThreshold
@@ -441,9 +707,8 @@ final class SearchEngine: Sendable {
 
         // Top 10 results with type and score
         for (rank, r) in allResults.prefix(10).enumerated() {
-            let dateStr = r.creationDate.map { dateFormatter.string(from: $0) } ?? "no-date"
             let type = r.isVideo ? "VIDEO" : "PHOTO"
-            logger.info("[Result #\(rank + 1)] \(type) score=\(String(format: "%.4f", r.score)) date=\(dateStr) id=\(r.localIdentifier.prefix(20))")
+            logger.info("[Result #\(rank + 1)] \(type) score=\(String(format: "%.4f", r.score))")
         }
 
         // Score range of returned results
@@ -454,12 +719,12 @@ final class SearchEngine: Sendable {
 
         // Near-miss diagnostics when results are empty or sparse
         if allResults.count < 5 {
-            let nearMissCount = min(5, sorted.count)
+            let nearMissCount = min(5, topScoredRows.count)
             logger.info("[NearMiss] Top \(nearMissCount) photo scores (below threshold or filtered):")
-            for (index, score) in sorted.prefix(nearMissCount) {
-                let dateStr = photos.dates[index].map { dateFormatter.string(from: $0) } ?? "no-date"
+            for index in topScoredRows.prefix(nearMissCount) {
+                let score = scores[index]
                 let passed = photoCandidateMask[index]
-                logger.info("[NearMiss] score=\(String(format: "%.4f", score)) passedFilter=\(passed) date=\(dateStr)")
+                logger.info("[NearMiss] score=\(String(format: "%.4f", score)) passedFilter=\(passed)")
             }
             if videos.count > 0 {
                 let topVideo = videoResults.sorted { $0.score > $1.score }.prefix(3)
@@ -467,7 +732,7 @@ final class SearchEngine: Sendable {
                     logger.info("[NearMiss] No video frames passed threshold")
                 }
                 for result in topVideo {
-                    logger.info("[NearMiss] VIDEO score=\(String(format: "%.4f", result.score)) vid=\(result.id.prefix(12)) frame=\(String(format: "%.2f", result.bestFramePosition ?? 0))")
+                    logger.info("[NearMiss] VIDEO score=\(String(format: "%.4f", result.score)) frame=\(String(format: "%.2f", result.bestFramePosition ?? 0))")
                 }
             }
         }
@@ -483,16 +748,23 @@ final class SearchEngine: Sendable {
             && Double(allResults.count) / Double(candidateCount) < SearchConfig.sparseClipMaxRatio
         if clipMatchedTooFew && filtersActive && !clipIsConfident {
             // All candidates have CLIP scores from the GPU matmul.
-            // Sort ALL candidates by CLIP score (not just those above threshold).
+            // Retain the best bounded candidate window by CLIP score, including
+            // candidates below the normal threshold.
             // This way "old town" photos that scored 0.16 rank above random
             // San Diego photos that scored 0.08.
-            let photoCandidateRows = (0..<photos.count)
-                .filter { photoCandidateMask[$0] }
-                .sorted {
-                    if scores[$0] != scores[$1] { return scores[$0] > scores[$1] }
-                    return photos.localIdentifiers[$0] < photos.localIdentifiers[$1]
-                }
-                .prefix(SearchConfig.locationResultsCap)
+            let photoCandidateRows = try BoundedTopK.rows(
+                count: photos.count,
+                limit: SearchConfig.locationResultsCap,
+                includes: { photoCandidateMask[$0] },
+                isPreferred: { lhs, rhs in
+                    if scores[lhs] != scores[rhs] { return scores[lhs] > scores[rhs] }
+                    if photos.localIdentifiers[lhs] != photos.localIdentifiers[rhs] {
+                        return photos.localIdentifiers[lhs] < photos.localIdentifiers[rhs]
+                    }
+                    return lhs < rhs
+                },
+                cancellationCheck: SearchCancellation.check
+            )
             var candidateResults = photoCandidateRows.map { i in
                 SearchResult(
                     id: photos.ids[i],
@@ -506,13 +778,18 @@ final class SearchEngine: Sendable {
                 )
             }
 
-            // Also include video candidates if they passed filters
-            candidateResults.append(contentsOf: videoResults.filter { $0.score > 0 })
+            // Also include the best frame for each video candidate, including
+            // positive scores below the normal result threshold.
+            candidateResults.append(contentsOf: try makeVideoNearMissResults())
 
-            // Sort by CLIP score descending. All candidates get ranked by visual
-            // relevance, even those below the normal threshold.
-            candidateResults.sort(by: Self.isPreferredResult)
-            let merged = Array(candidateResults.prefix(SearchConfig.locationResultsCap))
+            // Keep the top bounded CLIP-ranked candidates, including results
+            // below the normal threshold.
+            let merged = try BoundedTopK.select(
+                from: candidateResults,
+                limit: SearchConfig.locationResultsCap,
+                isPreferred: SearchResultRanking.isPreferred,
+                cancellationCheck: SearchCancellation.check
+            )
 
             let summary = FilterSummary(
                 dateDescription: hints.dateRange.map { formatDateRange($0) },
@@ -541,23 +818,36 @@ final class SearchEngine: Sendable {
         // When no results pass the threshold, show the top near-miss results as
         // fallback so the user sees "closest matches" instead of an empty screen.
         if allResults.isEmpty && hints.hasVisualQuery {
-            let nearMissResults = sorted
-                .filter { $0.element > 0 && photoCandidateMask[$0.offset] }
-                .prefix(SearchConfig.topK)
-                .map { (index, score) in
-                    SearchResult(id: photos.ids[index], score: score,
-                                 localIdentifier: photos.localIdentifiers[index],
-                                 creationDate: photos.dates[index], isVideo: false,
-                                 bestFramePosition: nil,
-                                 sourceId: photos.sourceIds[index],
-                                 filePath: photos.filePaths[index])
-                }
+            let nearMissRows = try BoundedTopK.rows(
+                count: photos.count,
+                limit: SearchConfig.topK,
+                includes: { scores[$0] > 0 && photoCandidateMask[$0] },
+                isPreferred: { lhs, rhs in
+                    if scores[lhs] != scores[rhs] { return scores[lhs] > scores[rhs] }
+                    return lhs < rhs
+                },
+                cancellationCheck: SearchCancellation.check
+            )
+            let photoNearMissResults = nearMissRows.map { index in
+                SearchResult(id: photos.ids[index], score: scores[index],
+                             localIdentifier: photos.localIdentifiers[index],
+                             creationDate: photos.dates[index], isVideo: false,
+                             bestFramePosition: nil,
+                             sourceId: photos.sourceIds[index],
+                             filePath: photos.filePaths[index])
+            }
+            let nearMissResults = try BoundedTopK.select(
+                from: photoNearMissResults + makeVideoNearMissResults(),
+                limit: SearchConfig.topK,
+                isPreferred: SearchResultRanking.isPreferred,
+                cancellationCheck: SearchCancellation.check
+            )
             let fallbackSummary = FilterSummary(
                 dateDescription: appliedSummary?.dateDescription,
                 locationDescription: appliedSummary?.locationDescription,
                 visualQuery: hints.textQuery
             )
-            return SearchResponse(results: [], fallbackResults: Array(nearMissResults), filtersApplied: fallbackSummary)
+            return SearchResponse(results: [], fallbackResults: nearMissResults, filtersApplied: fallbackSummary)
         }
 
         return SearchResponse(results: allResults, fallbackResults: [], filtersApplied: appliedSummary)
@@ -565,66 +855,56 @@ final class SearchEngine: Sendable {
 
     // MARK: - Helper Methods
 
-    private func locationOnlyResults(
-        media: [(index: MediaIndex, candidateMask: [Bool])]
-    ) throws -> SearchResponse {
-        var results: [SearchResult] = []
-        for (index, mask) in media {
-            let scores = mask.map { $0 ? Float(1) : -1 }
-            results.append(contentsOf: try self.results(
-                for: index,
-                scores: scores,
-                threshold: 1,
-                sortByScore: false
-            ))
-        }
-
-        results.sort {
-            let lhsDate = $0.creationDate ?? .distantPast
-            let rhsDate = $1.creationDate ?? .distantPast
-            if lhsDate != rhsDate { return lhsDate > rhsDate }
-            return $0.localIdentifier < $1.localIdentifier
-        }
-        if results.count > Self.maximumRetainedResults {
-            results.removeSubrange(Self.maximumRetainedResults...)
-        }
-
-        #if DEBUG
-        logger.info("[SearchEngine] locationOnlyResults: returning \(results.count) results")
-        #endif
-
-        return SearchResponse(results: results, fallbackResults: [], filtersApplied: nil)
-    }
-
     private func computeFallbackResults(
         text: String,
         index mediaIndex: MediaIndex,
         gpuSearch: SimilaritySearching?
-    ) -> [SearchResult] {
-        guard let queryEmbedding = try? encodeQuery(text: text) else { return [] }
-        let scores = scoreEmbeddings(
+    ) throws -> [SearchResult] {
+        let queryEmbedding: [Float]
+        do {
+            queryEmbedding = try encodeQuery(text: text)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return []
+        }
+        let scores = try scoreEmbeddings(
             queryEmbedding: queryEmbedding,
             matrix: mediaIndex.embeddings,
             count: mediaIndex.count,
             gpuSearch: gpuSearch
         )
 
-        let sorted = scores.enumerated().sorted { $0.element > $1.element }
-        return sorted.prefix(5)
-            .filter { $0.element >= minimumScoreThreshold }
-            .map { (row, score) in
-                SearchResult(id: mediaIndex.ids[row], score: score,
-                             localIdentifier: mediaIndex.localIdentifiers[row],
-                             creationDate: mediaIndex.dates[row], isVideo: false,
-                             bestFramePosition: nil,
-                             sourceId: mediaIndex.sourceIds[row],
-                             filePath: mediaIndex.filePaths[row])
-            }
+        let rows = try BoundedTopK.rows(
+            count: scores.count,
+            limit: 5,
+            includes: { scores[$0] >= minimumScoreThreshold },
+            isPreferred: { lhs, rhs in
+                if scores[lhs] != scores[rhs] { return scores[lhs] > scores[rhs] }
+                return lhs < rhs
+            },
+            cancellationCheck: SearchCancellation.check
+        )
+        return rows.map { row in
+            SearchResult(id: mediaIndex.ids[row], score: scores[row],
+                         localIdentifier: mediaIndex.localIdentifiers[row],
+                         creationDate: mediaIndex.dates[row], isVideo: false,
+                         bestFramePosition: nil,
+                         sourceId: mediaIndex.sourceIds[row],
+                         filePath: mediaIndex.filePaths[row])
+        }
     }
 
     // MARK: - Similar Photos
 
     func findSimilar(photoId: String, topK: Int = 50) -> [SearchResult] {
+        searchActivity.withSearchUnlessCancelled {
+            performFindSimilar(photoId: photoId, topK: topK)
+        } ?? []
+    }
+
+    private func performFindSimilar(photoId: String, topK: Int) -> [SearchResult] {
+        guard !Task.isCancelled else { return [] }
         let snapshot = indexSnapshot.withLock { $0 }
         let photos = snapshot.photos
         let ids = photos.ids
@@ -641,17 +921,22 @@ final class SearchEngine: Sendable {
         // Extract source embedding as Float32 for GPU query
         let offset = sourceIndex * embeddingDim
         var sourceEmbedding = [Float](repeating: 0, count: embeddingDim)
-        for j in 0..<embeddingDim { sourceEmbedding[j] = Float(matrix[offset + j]) }
+        for j in 0..<embeddingDim {
+            if j.isMultiple(of: SearchCancellation.checkInterval), Task.isCancelled { return [] }
+            sourceEmbedding[j] = Float(matrix[offset + j])
+        }
 
         // GPU search with CPU fallback
         var scores: [Float]
         if let gpuScores = photoGPU?.search(queryEmbedding: sourceEmbedding), gpuScores.count == count {
+            guard !Task.isCancelled else { return [] }
             scores = gpuScores
             scores[sourceIndex] = 0 // exclude self
         } else {
             scores = [Float](repeating: 0, count: count)
             var rowBuf = [Float](repeating: 0, count: embeddingDim)
             for i in 0..<count {
+                if i.isMultiple(of: SearchCancellation.checkInterval), Task.isCancelled { return [] }
                 if i == sourceIndex { continue }
                 let rowOffset = i * embeddingDim
                 for j in 0..<embeddingDim { rowBuf[j] = Float(matrix[rowOffset + j]) }
@@ -661,11 +946,21 @@ final class SearchEngine: Sendable {
             }
         }
 
-        let sorted = scores.enumerated().sorted { $0.element > $1.element }
-        let topResults = sorted.prefix(topK).filter { $0.element >= minimumScoreThreshold }
+        guard !Task.isCancelled else { return [] }
+        guard let topRows = try? BoundedTopK.rows(
+            count: scores.count,
+            limit: topK,
+            includes: { scores[$0] >= minimumScoreThreshold },
+            isPreferred: { lhs, rhs in
+                if scores[lhs] != scores[rhs] { return scores[lhs] > scores[rhs] }
+                return lhs < rhs
+            },
+            cancellationCheck: SearchCancellation.check
+        ) else { return [] }
 
-        return topResults.map { (index, score) in
-            SearchResult(
+        return topRows.map { index in
+            let score = scores[index]
+            return SearchResult(
                 id: ids[index],
                 score: score,
                 localIdentifier: localIds[index],
@@ -686,16 +981,19 @@ final class SearchEngine: Sendable {
         count: Int,
         gpuSearch: SimilaritySearching?,
         candidateMask: [Bool]? = nil
-    ) -> [Float] {
+    ) throws -> [Float] {
+        try SearchCancellation.checkNow()
         guard count > 0 else { return [] }
 
         if let gpuScores = gpuSearch?.search(queryEmbedding: queryEmbedding), gpuScores.count == count {
+            try SearchCancellation.checkNow()
             return gpuScores
         }
 
         var scores = [Float](repeating: 0, count: count)
         var rowBuf = [Float](repeating: 0, count: embeddingDim)
         for i in 0..<count {
+            try SearchCancellation.check(i)
             if let candidateMask, !candidateMask[i] { continue }
             scores[i] = scoreEmbedding(
                 queryEmbedding: queryEmbedding,
@@ -727,9 +1025,10 @@ final class SearchEngine: Sendable {
         hints: QueryHints,
         locationMatcher: LocationMatcher.Matcher?,
         targetLoc: CLLocation?
-    ) -> [Bool] {
+    ) throws -> [Bool] {
         var mask = [Bool](repeating: true, count: index.count)
         for row in 0..<index.count {
+            try SearchCancellation.check(row)
             if let dateRange = hints.dateRange {
                 guard let date = index.dates[row],
                       date >= dateRange.start,
@@ -762,27 +1061,31 @@ final class SearchEngine: Sendable {
         hints: QueryHints,
         targetLoc: CLLocation?,
         gpuSearch: SimilaritySearching?
-    ) -> ScoredMedia {
-        let rawScores = scoreEmbeddings(
+    ) throws -> ScoredMedia {
+        let rawScores = try scoreEmbeddings(
             queryEmbedding: queryEmbedding,
             matrix: index.embeddings,
             count: index.count,
             gpuSearch: gpuSearch
         )
-        let negativeScoreSets = negativeEmbeddings.map {
-            scoreEmbeddings(
-                queryEmbedding: $0,
+        var negativeScoreSets: [[Float]] = []
+        negativeScoreSets.reserveCapacity(negativeEmbeddings.count)
+        for negativeEmbedding in negativeEmbeddings {
+            try SearchCancellation.checkNow()
+            negativeScoreSets.append(try scoreEmbeddings(
+                queryEmbedding: negativeEmbedding,
                 matrix: index.embeddings,
                 count: index.count,
                 gpuSearch: gpuSearch,
                 candidateMask: candidateMask
-            )
+            ))
         }
         let queryWords = hints.textQuery.lowercased().split(separator: " ").map(String.init)
         let calendar = Calendar.current
         var scores = rawScores
 
         for row in 0..<index.count {
+            try SearchCancellation.check(row)
             guard candidateMask[row] else {
                 scores[row] = -1
                 continue
@@ -834,6 +1137,15 @@ final class SearchEngine: Sendable {
         }
 
         return ScoredMedia(rawScores: rawScores, scores: scores)
+    }
+
+    private func trueCount(in values: [Bool]) throws -> Int {
+        var count = 0
+        for (index, value) in values.enumerated() {
+            try SearchCancellation.check(index)
+            if value { count += 1 }
+        }
+        return count
     }
 
     private func photoLocationBoost(
@@ -906,87 +1218,6 @@ final class SearchEngine: Sendable {
         return hour >= range.start || hour < range.end
     }
 
-    private func results(
-        for index: MediaIndex,
-        scores: [Float],
-        threshold: Float,
-        sortByScore: Bool = true
-    ) throws -> [SearchResult] {
-        switch index.kind {
-        case .photo:
-            var rows = (0..<index.count).filter { scores[$0] >= threshold }
-            if sortByScore {
-                rows.sort { lhs, rhs in
-                    let lhsScore = scores[lhs]
-                    let rhsScore = scores[rhs]
-                    let scoreDiff = abs(lhsScore - rhsScore)
-                    let maxScore = max(lhsScore, rhsScore)
-                    if maxScore > 0, scoreDiff / maxScore < 0.01 {
-                        let lhsDate = index.dates[lhs] ?? .distantPast
-                        let rhsDate = index.dates[rhs] ?? .distantPast
-                        if lhsDate != rhsDate { return lhsDate > rhsDate }
-                    }
-                    if lhsScore != rhsScore { return lhsScore > rhsScore }
-                    return index.localIdentifiers[lhs] < index.localIdentifiers[rhs]
-                }
-            }
-            return rows.prefix(Self.maximumRetainedResults).map { row in
-                SearchResult(
-                    id: index.ids[row],
-                    score: scores[row],
-                    localIdentifier: index.localIdentifiers[row],
-                    creationDate: index.dates[row],
-                    isVideo: false,
-                    bestFramePosition: nil,
-                    sourceId: index.sourceIds[row],
-                    filePath: index.filePaths[row]
-                )
-            }
-
-        case .videoFrame:
-            var idOrder: [String] = []
-            var bestByID: [String: SearchResult] = [:]
-            for row in 0..<index.count where scores[row] >= threshold {
-                guard let framePosition = index.framePositions[row] else {
-                    throw SearchEngineError.corruptedIndex
-                }
-                let id = index.ids[row]
-                let result = SearchResult(
-                    id: id,
-                    score: scores[row],
-                    localIdentifier: index.localIdentifiers[row],
-                    creationDate: index.dates[row],
-                    isVideo: true,
-                    bestFramePosition: framePosition,
-                    sourceId: index.sourceIds[row],
-                    filePath: index.filePaths[row]
-                )
-                if let existing = bestByID[id] {
-                    if result.score > existing.score { bestByID[id] = result }
-                } else {
-                    idOrder.append(id)
-                    bestByID[id] = result
-                }
-            }
-            return idOrder.compactMap { bestByID[$0] }
-                .sorted(by: Self.isPreferredResult)
-                .prefix(Self.maximumRetainedResults)
-                .map { $0 }
-        }
-    }
-
-    private static func isPreferredResult(_ lhs: SearchResult, _ rhs: SearchResult) -> Bool {
-        let scoreDiff = abs(lhs.score - rhs.score)
-        let maxScore = max(lhs.score, rhs.score)
-        if maxScore > 0, scoreDiff / maxScore < 0.01 {
-            let lhsDate = lhs.creationDate ?? .distantPast
-            let rhsDate = rhs.creationDate ?? .distantPast
-            if lhsDate != rhsDate { return lhsDate > rhsDate }
-        }
-        if lhs.score != rhs.score { return lhs.score > rhs.score }
-        return lhs.localIdentifier < rhs.localIdentifier
-    }
-
     private func mediaPassesLocationFilter(
         hints: QueryHints,
         locationMatcher: LocationMatcher.Matcher?,
@@ -1050,7 +1281,16 @@ final class SearchEngine: Sendable {
     }
 
     private func encodeQuery(text: String) throws -> [Float] {
-        try textEncoder.encode(text: text)
+        let embedding: [Float]
+        if let precomputed = SearchQueryEmbeddingContext.embeddings[text] {
+            embedding = precomputed
+        } else {
+            embedding = try textEncoder.encode(text: text)
+        }
+        guard embedding.count == embeddingDim else {
+            throw SearchEngineError.invalidEmbedding
+        }
+        return embedding
     }
 }
 

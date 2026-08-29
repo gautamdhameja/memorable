@@ -1,100 +1,83 @@
-# Search Scoring Algorithm
+# Search scoring algorithm
 
-## Architecture: Parse, Filter, Then Score
+## Process each query locally
 
-Memorable uses SigLIP2 for raw text/image similarity. The text encoder receives
-the user's visual query directly; it does not apply CLIP-style prompt templates.
-Date and location constraints are parsed first, then applied before ranking so a
-strong visual match from the wrong time or place does not dominate the result set.
+Memorable uses SigLIP2 to compare raw query text with photo and video embeddings. The app does not add CLIP-style prompt templates. It parses date and location constraints before ranking so a strong visual match from the wrong time or place does not dominate the result set.
 
-## Pipeline
+The app caps every query parser path at 500 characters. It processes the bounded query on the device and does not send query text to CLGeocoder or another service.
 
 ```text
 Query: "sunset in San Diego last summer"
-  -> QueryParser extracts:
-     visual text="sunset", date range, location name, negative terms
-  -> Location text matches indexed reverse-geocoded metadata locally
-  -> TextEncoder encodes the raw visual text with SigLIP2
-  -> SearchEngine snapshots photo and video embedding matrices under lock
-  -> Date/location filters build candidate sets
-  -> Dot products rank photo embeddings and video frame embeddings
-  -> Additive boosts adjust location proximity, time of day, available OCR, available scene labels, and video relevance
-  -> Negative terms subtract a weighted negative similarity
-  -> Results below SearchConfig.minimumScoreThreshold are removed
-  -> Best video frame per video is kept
-  -> Photo and video results are merged and sorted
+  -> Bound input to 500 characters
+  -> Extract visual text, date range, location name, and negative terms
+  -> Match location text against local reverse-geocoded metadata
+  -> Encode raw visual text with the bundled SigLIP2 model
+  -> Snapshot photo and video embeddings under a lock
+  -> Build date and location candidate sets
+  -> Score photo and video-frame embeddings
+  -> Apply local location, time, OCR, scene-label, and video adjustments
+  -> Penalize negative-term similarity
+  -> Remove results below the minimum score
+  -> Keep the best frame for each video
+  -> Retain at most 500 merged results
 ```
 
-## Query Encoding
+## Encode raw query text
 
-SigLIP2 was trained with sigmoid loss over raw web captions. Prompt fusion such
-as averaging `"dog"`, `"a photo of dog"`, and `"a picture of dog"` is intentionally
-not used because it dilutes compositional queries. The implemented path encodes
-the parser's raw `textQuery`.
+SigLIP2 uses sigmoid loss over raw web captions. Prompt fusion such as averaging `dog`, `a photo of dog`, and `a picture of dog` can dilute compositional queries. The production path therefore encodes the parser's raw `textQuery`.
 
-## Hard Filters
+## Apply hard filters
 
-Date filters remove media outside the requested range. Media without dates is
-removed when the user asked for a date because it cannot satisfy the constraint.
+Date filters remove media outside the requested range. If the query requires a date, the app also removes media without a creation date because it cannot prove that the media satisfies the constraint.
 
-Location filters prefer reverse-geocoded string metadata when available:
-city, state, country, and full location name are matched against the parsed
-location. Query-derived location names are not sent to CLGeocoder. GPS distance
-is used only when trusted coordinates are already present in parsed hints.
+Location filters match the parsed location against locally stored city, state, country, and location-name fields. The app does not forward-geocode query text. During indexing, a separate enrichment path sends media GPS coordinates to Apple CLGeocoder and stores the returned place names locally.
 
-Pure location queries, such as `"Paris"`, skip visual scoring and return
-metadata matches sorted by date.
+Pure location queries, such as `Paris`, skip visual scoring and return matching metadata sorted by date. The engine caps this path at 500 results.
 
-## Scoring
+## Calculate scores
 
-Photo scoring uses dot product against normalized embeddings. On device, the app
-uses the GPU search path when available and CPU/vDSP fallback otherwise.
+Photo scoring calculates the dot product of normalized embeddings. Devices use the GPU path when available; the simulator uses CPU and vDSP fallbacks.
 
-Video scoring applies the same query embedding to each stored frame embedding,
-then keeps the best frame per video.
+Video scoring compares the query embedding with each stored frame embedding and keeps the best frame for each video.
 
-Boosts are additive and scaled for SigLIP2's lower cosine score range:
+The app applies these additive values:
 
-| Parameter | Current value | Purpose |
+| Parameter | Value | Purpose |
 |---|---:|---|
-| `minimumScoreThreshold` | `0.12` | Minimum score for main results |
-| `locationCloseBoost` | `0.025` | Added within 10% of radius |
-| `locationNearBoost` | `0.015` | Added within 30% of radius |
-| `timeOfDayMatchBoost` | `0.03` | Added when creation hour matches query |
-| `negativeTermWeight` | `0.3` | Subtracts weighted negative similarity |
-| `ocrBoostPerWord` | `0.08` | Adds OCR text match strength |
-| `sceneLabelBoostPerMatch` | `0.04` | Adds scene label match strength |
-| `videoRelevanceCompensation` | `0.03` | Offsets missing photo-only boosts for videos |
+| `minimumScoreThreshold` | `0.12` | Include a result in the main response |
+| `locationCloseBoost` | `0.025` | Boost media within 10% of the requested radius |
+| `locationNearBoost` | `0.015` | Boost media within 30% of the requested radius |
+| `timeOfDayMatchBoost` | `0.03` | Boost media whose creation hour matches the query |
+| `negativeTermWeight` | `0.3` | Subtract weighted negative similarity |
+| `ocrBoostPerWord` | `0.08` | Boost matching OCR text |
+| `sceneLabelBoostPerMatch` | `0.04` | Boost matching scene labels |
+| `videoRelevanceCompensation` | `0.03` | Offset photo-only enrichment boosts |
 
-OCR and scene-label boosts are enrichment-dependent. Newly indexed base photos
-can be searched by embedding before OCR and scene labels are available; those
-photos simply skip the unavailable boosts until the background enrichment pass
-updates the row.
+Newly indexed photos become searchable before enrichment completes. A photo without OCR or scene labels skips those boosts until the deferred enrichment pass updates its row.
 
-## Sparse Visual Fallback
+## Handle sparse matches
 
-For mixed visual/filter queries, the app keeps a fallback set when filters match
-but visual scores are too sparse for the main grid. This lets the UI explain
-"no dog photos in Berlin" while still showing media from Berlin separately.
+For a query that mixes visual and metadata filters, the app can keep a fallback set when metadata matches but visual scores do not produce enough main results. The UI can then explain that the requested visual content did not match while showing the relevant metadata set separately.
 
-Fallback behavior is controlled by:
-
-| Parameter | Current value | Purpose |
+| Parameter | Value | Purpose |
 |---|---:|---|
-| `locationResultsCap` | `500` | Maximum metadata/fallback results |
-| `sparseClipMinResults` | `5` | Main-result count below which fallback is considered |
-| `sparseClipMaxRatio` | `0.1` | Result/candidate ratio for sparse fallback |
-| `sparseClipMinScore` | `0.07` | Minimum top visual score for main-grid confidence |
+| `locationResultsCap` | `500` | Bound location, fallback, and merged search results |
+| `sparseClipMinResults` | `5` | Consider fallback below this main-result count |
+| `sparseClipMaxRatio` | `0.1` | Consider fallback below this result-to-candidate ratio |
+| `sparseClipMinScore` | `0.07` | Require this top visual score for main-grid confidence |
 
-## Empty Results
+If hard filters and visual ranking both fail, return an empty local result. Do not call remote processing or silently broaden the query.
 
-If both hard filters and visual ranking fail, the main result set is empty. The
-app should show a local empty state instead of falling back to remote processing
-or broadening the query silently.
+## Keep search work bounded
 
-## Evaluation Gate
+Search scores the local index but retains no more than 500 results in any response path. It checks cancellation during long-running support work, and memory-pressure handling suspends index reloads until explicit user or app work resumes.
 
-Scoring changes, model compression, and model replacement must pass the local
-search evaluation harness. Coverage includes visual queries, date filtering,
-location metadata, mixed visual/location fallback, negative terms, videos, and
-empty-result behavior.
+Duplicate search uses separate safety limits: it performs at most 5,000,000 pair comparisons and retains at most 2,000 candidate pairs. Folder enumeration checks cancellation and retains at most 100,000 supported image URLs.
+
+When you add a new scoring or enrichment path, define a deterministic work limit, bound retained output, and propagate task cancellation before integrating it.
+
+## Run the evaluation gate
+
+Run the local relevance harness after changing scoring, preprocessing, model compression, or model artifacts. The gate covers visual queries, date filtering, location metadata, mixed visual and location fallback, negative terms, videos, and empty results.
+
+See `docs/RELEVANCE_EVALUATION.md` for commands and fixture details.

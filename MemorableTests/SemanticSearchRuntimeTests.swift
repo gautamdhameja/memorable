@@ -3,6 +3,24 @@ import XCTest
 
 final class SemanticSearchRuntimeTests: XCTestCase {
 
+    func testCancelledWarmupCannotConsumePendingOnboardingIndexRequest() {
+        XCTAssertFalse(AppState.mayConsumePendingOnboardingRequest(isCancelled: true))
+        XCTAssertTrue(AppState.mayConsumePendingOnboardingRequest(isCancelled: false))
+    }
+
+    @MainActor
+    func testPreStartCancellationNeverInvokesWarmupLoader() async {
+        let runtime = SemanticSearchRuntime()
+        var loadCount = 0
+        runtime.setWarmupLoader { _ in loadCount += 1 }
+
+        runtime.startPostPaintWarmup()
+        runtime.cancelWarmupForMemoryPressure()
+        for _ in 0..<5 { await Task.yield() }
+
+        XCTAssertEqual(loadCount, 0)
+    }
+
     @MainActor
     func testPostPaintWarmupCallsLoaderOnceAcrossConcurrentWaiters() async throws {
         let runtime = SemanticSearchRuntime()
@@ -75,5 +93,98 @@ final class SemanticSearchRuntimeTests: XCTestCase {
         XCTAssertTrue(runtime.readiness.isSemanticModelReady)
         XCTAssertFalse(runtime.readiness.isSemanticSearchReady)
         XCTAssertEqual(runtime.phase, .waitingForIndex)
+    }
+
+    @MainActor
+    func testMemoryPressureCancellationStopsAnInitialWarmup() async {
+        let runtime = SemanticSearchRuntime()
+        var started = false
+        var observedCancellation = false
+        runtime.setWarmupLoader { _ in
+            started = true
+            do {
+                try await Task.sleep(nanoseconds: 10_000_000_000)
+            } catch is CancellationError {
+                observedCancellation = true
+                throw CancellationError()
+            }
+        }
+
+        runtime.startPostPaintWarmup()
+        while !started { await Task.yield() }
+        runtime.cancelWarmupForMemoryPressure()
+        for _ in 0..<10 where !observedCancellation { await Task.yield() }
+
+        XCTAssertTrue(observedCancellation)
+        XCTAssertFalse(runtime.readiness.isSemanticModelReady)
+        guard case .failed(let message) = runtime.phase else {
+            return XCTFail("Expected a recoverable paused state")
+        }
+        XCTAssertTrue(message.contains("Try Again"))
+    }
+
+    @MainActor
+    func testImmediateRetryWaitsForCancelledWarmupToDrain() async {
+        let runtime = SemanticSearchRuntime()
+        var loadCount = 0
+        var firstLoadStarted = false
+        var releaseCancellationCleanup = false
+        runtime.setWarmupLoader { _ in
+            loadCount += 1
+            if loadCount == 1 {
+                firstLoadStarted = true
+                while !Task.isCancelled { await Task.yield() }
+                while !releaseCancellationCleanup { await Task.yield() }
+                throw CancellationError()
+            }
+            runtime.markSemanticModelReady()
+            runtime.markIndexReady()
+        }
+
+        runtime.startPostPaintWarmup()
+        while !firstLoadStarted { await Task.yield() }
+        runtime.cancelWarmupForMemoryPressure()
+        runtime.startUserInitiatedWarmup()
+
+        XCTAssertEqual(loadCount, 1)
+        releaseCancellationCleanup = true
+        while loadCount < 2 { await Task.yield() }
+        while runtime.phase != .ready { await Task.yield() }
+
+        XCTAssertEqual(loadCount, 2)
+        XCTAssertTrue(runtime.readiness.isSemanticSearchReady)
+    }
+
+    @MainActor
+    func testCancelledSearchWaiterCannotRestartMemoryPressureWarmup() async {
+        let runtime = SemanticSearchRuntime()
+        var loadCount = 0
+        var firstLoadStarted = false
+        var releaseCancellationCleanup = false
+        runtime.setWarmupLoader { _ in
+            loadCount += 1
+            firstLoadStarted = true
+            while !Task.isCancelled { await Task.yield() }
+            while !releaseCancellationCleanup { await Task.yield() }
+            throw CancellationError()
+        }
+
+        runtime.startPostPaintWarmup()
+        while !firstLoadStarted { await Task.yield() }
+        runtime.cancelWarmupForMemoryPressure()
+
+        let waiter = Task { @MainActor in
+            try await runtime.prepareForSearch()
+        }
+        waiter.cancel()
+        _ = await waiter.result
+        releaseCancellationCleanup = true
+        for _ in 0..<100 { await Task.yield() }
+
+        XCTAssertEqual(loadCount, 1)
+        XCTAssertFalse(runtime.readiness.isSemanticModelReady)
+        guard case .failed = runtime.phase else {
+            return XCTFail("Expected memory-pressure cancellation to remain paused")
+        }
     }
 }

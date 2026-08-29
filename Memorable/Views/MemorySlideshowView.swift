@@ -1,5 +1,4 @@
 import SwiftUI
-import Photos
 
 struct MemorySlideshowView: View {
     let captionService: PhotoCaptionService
@@ -13,8 +12,10 @@ struct MemorySlideshowView: View {
     @State private var captionVisible = false
     @State private var showControls = true
     @State private var timerTask: Task<Void, Never>?
+    @State private var initialLoadTask: Task<Void, Never>?
     @State private var shownIds: Set<String> = []
     @State private var photoCount = 0
+    @State private var imageLoadGeneration: UInt = 0
 
     var body: some View {
         ZStack {
@@ -97,14 +98,30 @@ struct MemorySlideshowView: View {
             }
         }
         .task {
-            photoCount = (try? database.indexedCount()) ?? 0
-            await showNextPhoto()
-            guard !Task.isCancelled else { return }
-            startCycling()
+            let task = Task { @MainActor in
+                photoCount = (try? database.indexedCount()) ?? 0
+                await showNextPhoto()
+                guard !Task.isCancelled else { return }
+                startCycling()
+            }
+            initialLoadTask = task
+            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         }
         .onDisappear {
+            initialLoadTask?.cancel()
+            initialLoadTask = nil
             timerTask?.cancel()
             timerTask = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            initialLoadTask?.cancel()
+            initialLoadTask = nil
+            timerTask?.cancel()
+            timerTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&currentImage)
+            currentCaption = nil
+            shownIds.removeAll(keepingCapacity: false)
         }
     }
 
@@ -119,28 +136,42 @@ struct MemorySlideshowView: View {
     }
 
     private func showNextPhoto() async {
-        guard let photo = getRandomSharpPhoto() else { return }
+        imageLoadGeneration &+= 1
+        let generation = imageLoadGeneration
+        guard let photo = await getRandomSharpPhoto() else { return }
 
         // Fade out
         withAnimation { captionVisible = false }
         do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
         withAnimation { isVisible = false }
         do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
+        guard ImageLoadGenerationPolicy.acceptsCompletion(
+            startedGeneration: generation,
+            currentGeneration: imageLoadGeneration,
+            isCancelled: Task.isCancelled
+        ) else { return }
 
         // Load thumbnail
-        guard let asset = PhotoLibrary.getAsset(by: photo.localIdentifier) else { return }
-        // Load higher res for full-screen
-        guard let image = await PhotoLibrary.loadImage(for: asset, targetSize: CGSize(width: 800, height: 800)) else { return }
+        guard let loaded = await PhotoLibrary.loadImage(
+            for: photo.searchResult,
+            targetSize: CGSize(width: 800, height: 800)
+        ) else { return }
+        guard ImageLoadGenerationPolicy.acceptsCompletion(
+            startedGeneration: generation,
+            currentGeneration: imageLoadGeneration,
+            isCancelled: Task.isCancelled
+        ) else { return }
 
-        currentImage = image
+        currentImage = loaded
         currentDate = photo.creationDate
 
         // Caption from stored embedding
-        let embeddingFloat16 = photo.embedding.withUnsafeBytes { buf -> [Float16] in
-            let ptr = buf.bindMemory(to: Float16.self)
-            return Array(UnsafeBufferPointer(start: ptr.baseAddress, count: ptr.count))
+        if let embedding = photo.embedding.validatedFloat16Embedding() {
+            currentCaption = captionService.caption(for: embedding)
+        } else {
+            logger.error("Skipped a memory caption with a malformed embedding")
+            currentCaption = nil
         }
-        currentCaption = captionService.caption(for: embeddingFloat16)
 
         // Fade in
         withAnimation { isVisible = true }
@@ -148,18 +179,16 @@ struct MemorySlideshowView: View {
         withAnimation { captionVisible = true }
     }
 
-    private func getRandomSharpPhoto() -> IndexedPhoto? {
-        for _ in 0..<5 {
-            guard let photo = try? database.fetchRandomPhoto(sharp: true) else {
-                return nil
-            }
-            if !shownIds.contains(photo.id) {
-                shownIds.insert(photo.id)
-                if shownIds.count > 100 { shownIds.removeAll() }
-                return photo
-            }
+    private func getRandomSharpPhoto() async -> SlideshowPhoto? {
+        let database = database
+        guard let photo = try? await CancellableDetachedOperation.run({
+            try database.fetchRandomPhoto(sharp: true)
+        }) else { return nil }
+        if shownIds.contains(photo.id) {
+            shownIds.removeAll(keepingCapacity: true)
         }
-        shownIds.removeAll()
-        return try? database.fetchRandomPhoto(sharp: true)
+        shownIds.insert(photo.id)
+        if shownIds.count > 100 { shownIds.removeAll(keepingCapacity: true) }
+        return photo
     }
 }

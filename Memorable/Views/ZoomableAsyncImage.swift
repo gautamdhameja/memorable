@@ -7,6 +7,8 @@ struct ZoomableAsyncImage: View {
     var onSingleTap: (() -> Void)? = nil
 
     @State private var image: UIImage?
+    @State private var imageLoadGeneration: UInt = 0
+    @State private var imageLoadTask: Task<Void, Never>?
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
@@ -59,12 +61,27 @@ struct ZoomableAsyncImage: View {
             }
         }
         .task(id: isActive) {
+            imageLoadTask?.cancel()
             if isActive {
-                await loadImage()
+                let task = Task { @MainActor in await loadImage() }
+                imageLoadTask = task
+                await withTaskCancellationHandler {
+                    await task.value
+                } onCancel: {
+                    task.cancel()
+                }
             } else {
+                imageLoadGeneration &+= 1
                 image = nil
                 resetZoom()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&image)
+            resetZoom()
         }
     }
 
@@ -133,18 +150,47 @@ struct ZoomableAsyncImage: View {
     // MARK: - Loading
 
     private func loadImage() async {
+        imageLoadGeneration &+= 1
+        let generation = imageLoadGeneration
         let targetSize = displayTargetSize()
         let loaded = await PhotoLibrary.loadImage(for: result, targetSize: targetSize)
-        if !Task.isCancelled { image = loaded }
+        if ImageLoadGenerationPolicy.acceptsCompletion(
+            startedGeneration: generation,
+            currentGeneration: imageLoadGeneration,
+            isCancelled: Task.isCancelled
+        ) {
+            image = loaded
+        }
     }
 
     private func displayTargetSize() -> CGSize {
-        let screen = UIScreen.main.bounds.size
-        let scale = UIScreen.main.scale
-        let zoomHeadroom: CGFloat = 3
-        return CGSize(
-            width: screen.width * scale * zoomHeadroom,
-            height: screen.height * scale * zoomHeadroom
+        Self.displayTargetSize(
+            screenSize: UIScreen.main.bounds.size,
+            screenScale: UIScreen.main.scale
         )
+    }
+
+    static func displayTargetSize(
+        screenSize: CGSize,
+        screenScale: CGFloat,
+        zoomHeadroom: CGFloat = 3,
+        maximumPixelDimension: CGFloat = FolderScanner.maximumDecodedPixelDimension
+    ) -> CGSize {
+        guard screenSize.width > 0,
+              screenSize.height > 0,
+              screenScale.isFinite,
+              screenScale > 0,
+              zoomHeadroom.isFinite,
+              zoomHeadroom > 0,
+              maximumPixelDimension.isFinite,
+              maximumPixelDimension > 0 else {
+            return CGSize(width: 1, height: 1)
+        }
+        let desired = CGSize(
+            width: screenSize.width * screenScale * zoomHeadroom,
+            height: screenSize.height * screenScale * zoomHeadroom
+        )
+        let reduction = min(1, maximumPixelDimension / max(desired.width, desired.height))
+        return CGSize(width: desired.width * reduction, height: desired.height * reduction)
     }
 }

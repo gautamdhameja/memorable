@@ -9,18 +9,6 @@ final class EncoderConcurrencyTests: XCTestCase {
         case forcedPredictionFailure
     }
 
-    private final class LockedCounter: Sendable {
-        private let count = OSAllocatedUnfairLock(initialState: 0)
-
-        func increment() {
-            count.withLock { $0 += 1 }
-        }
-
-        func value() -> Int {
-            count.withLock { $0 }
-        }
-    }
-
     private final class EncodeResults: Sendable {
         private struct State {
             var embeddings: [[Float]] = []
@@ -52,14 +40,20 @@ final class EncoderConcurrencyTests: XCTestCase {
         }
 
         private let embeddingKey: String
+        private let embeddingDimensions: Int
+        private let batchOutputCount: Int?
         private let failures: OSAllocatedUnfairLock<FailureState>
 
         init(
             embeddingKey: String,
+            embeddingDimensions: Int = EmbeddingConfig.dimensions,
             predictionFailures: Int = 0,
-            batchFailures: Int = 0
+            batchFailures: Int = 0,
+            batchOutputCount: Int? = nil
         ) {
             self.embeddingKey = embeddingKey
+            self.embeddingDimensions = embeddingDimensions
+            self.batchOutputCount = batchOutputCount
             self.failures = OSAllocatedUnfairLock(
                 initialState: FailureState(
                     remainingPredictions: predictionFailures,
@@ -82,7 +76,7 @@ final class EncoderConcurrencyTests: XCTestCase {
             if consumeBatchFailure() {
                 throw TestError.forcedPredictionFailure
             }
-            let outputs = try (0..<inputBatch.count).map { _ in
+            let outputs = try (0..<(batchOutputCount ?? inputBatch.count)).map { _ in
                 try makeOutputProvider()
             }
             return MLArrayBatchProvider(array: outputs)
@@ -106,7 +100,7 @@ final class EncoderConcurrencyTests: XCTestCase {
 
         private func makeOutputProvider() throws -> MLFeatureProvider {
             let array = try MLMultiArray(
-                shape: [1, NSNumber(value: EmbeddingConfig.dimensions)],
+                shape: [1, NSNumber(value: embeddingDimensions)],
                 dataType: .float32
             )
             for index in 0..<array.count {
@@ -118,20 +112,43 @@ final class EncoderConcurrencyTests: XCTestCase {
         }
     }
 
-    func testTextEncoderConcurrentPredictionsSurviveForcedReload() throws {
+    private final class BlockingAsyncPredictionModel: CoreMLModelPredicting {
+        let probe = AsyncPredictionProbe()
+
+        func prediction(from input: MLFeatureProvider) throws -> MLFeatureProvider {
+            throw TestError.forcedPredictionFailure
+        }
+
+        func cancellablePrediction(
+            from input: MLFeatureProvider
+        ) async throws -> MLFeatureProvider {
+            await probe.markStarted()
+            do {
+                try await Task.sleep(nanoseconds: 10_000_000_000)
+                throw TestError.forcedPredictionFailure
+            } catch is CancellationError {
+                await probe.markCancelled()
+                throw CancellationError()
+            }
+        }
+
+        func predictions(
+            from inputBatch: MLBatchProvider,
+            options: MLPredictionOptions
+        ) throws -> MLBatchProvider {
+            throw TestError.forcedPredictionFailure
+        }
+    }
+
+    func testTextEncoderConcurrentPredictionFailuresFailClosed() throws {
         let initialModel = ControlledPredictionModel(
             embeddingKey: "text_embedding",
-            predictionFailures: 1
+            predictionFailures: 24
         )
-        let replacementModel = ControlledPredictionModel(embeddingKey: "text_embedding")
-        let reloadCount = LockedCounter()
         let encoder = TextEncoder(
             model: initialModel,
             tokenizer: try CLIPTokenizer()
-        ) {
-            reloadCount.increment()
-            return replacementModel
-        }
+        )
         let results = EncodeResults()
         let iterationCount = 24
 
@@ -142,23 +159,35 @@ final class EncoderConcurrencyTests: XCTestCase {
         }
 
         let snapshot = results.snapshot()
-        XCTAssertTrue(snapshot.errors.isEmpty)
-        XCTAssertEqual(snapshot.embeddings.count, iterationCount)
-        XCTAssertEqual(reloadCount.value(), 1)
-        assertNormalized(snapshot.embeddings)
+        XCTAssertTrue(snapshot.embeddings.isEmpty)
+        XCTAssertEqual(snapshot.errors.count, iterationCount)
     }
 
-    func testImageEncoderConcurrentPredictionsSurviveForcedReload() {
+    func testTextEncoderAsyncPredictionObservesCancellation() async throws {
+        let model = BlockingAsyncPredictionModel()
+        let encoder = TextEncoder(model: model, tokenizer: try CLIPTokenizer())
+        let task = Task {
+            try await encoder.encodeCancellable(text: "cancel this search")
+        }
+        for _ in 0..<2_000 where !(await model.probe.hasStarted) {
+            await Task.yield()
+        }
+        let hasStarted = await model.probe.hasStarted
+        XCTAssertTrue(hasStarted)
+
+        task.cancel()
+        _ = await task.result
+
+        let wasCancelled = await model.probe.wasCancelled
+        XCTAssertTrue(wasCancelled)
+    }
+
+    func testImageEncoderConcurrentPredictionFailuresFailClosed() {
         let initialModel = ControlledPredictionModel(
             embeddingKey: "image_embedding",
-            predictionFailures: 1
+            predictionFailures: 12
         )
-        let replacementModel = ControlledPredictionModel(embeddingKey: "image_embedding")
-        let reloadCount = LockedCounter()
-        let encoder = ImageEncoder(model: initialModel) {
-            reloadCount.increment()
-            return replacementModel
-        }
+        let encoder = ImageEncoder(model: initialModel)
         let image = makeTestImage()
         let results = EncodeResults()
         let iterationCount = 12
@@ -168,29 +197,71 @@ final class EncoderConcurrencyTests: XCTestCase {
         }
 
         let snapshot = results.snapshot()
-        XCTAssertTrue(snapshot.errors.isEmpty)
-        XCTAssertEqual(snapshot.embeddings.count, iterationCount)
-        XCTAssertEqual(reloadCount.value(), 1)
-        assertNormalized(snapshot.embeddings)
+        XCTAssertTrue(snapshot.embeddings.isEmpty)
+        XCTAssertEqual(snapshot.errors.count, iterationCount)
     }
 
-    func testImageEncoderBatchPredictionRetriesOnceAfterReload() throws {
+    func testImageEncoderBatchPredictionFailureFailsClosed() throws {
         let initialModel = ControlledPredictionModel(
             embeddingKey: "image_embedding",
             batchFailures: 1
         )
-        let replacementModel = ControlledPredictionModel(embeddingKey: "image_embedding")
-        let reloadCount = LockedCounter()
-        let encoder = ImageEncoder(model: initialModel) {
-            reloadCount.increment()
-            return replacementModel
+        let encoder = ImageEncoder(model: initialModel)
+
+        XCTAssertThrowsError(
+            try encoder.encodeBatch(images: [makeTestImage(), makeTestImage()])
+        )
+    }
+
+    func testTextEncoderRejectsShortModelOutput() throws {
+        let encoder = TextEncoder(
+            model: ControlledPredictionModel(
+                embeddingKey: "text_embedding",
+                embeddingDimensions: 1
+            ),
+            tokenizer: try CLIPTokenizer()
+        )
+
+        XCTAssertThrowsError(try encoder.encode(text: "photo")) { error in
+            XCTAssertEqual(error as? TextEncoder.TextEncoderError, .invalidEmbedding)
         }
+    }
 
-        let embeddings = try encoder.encodeBatch(images: [makeTestImage(), makeTestImage()])
+    func testImageEncoderRejectsShortModelOutput() {
+        let encoder = ImageEncoder(model: ControlledPredictionModel(
+            embeddingKey: "image_embedding",
+            embeddingDimensions: 1
+        ))
 
-        XCTAssertEqual(embeddings.count, 2)
-        XCTAssertEqual(reloadCount.value(), 1)
-        assertNormalized(embeddings)
+        XCTAssertThrowsError(try encoder.encode(image: makeTestImage())) { error in
+            XCTAssertEqual(error as? ImageEncoder.ImageEncoderError, .invalidEmbedding)
+        }
+    }
+
+    func testImageEncoderBatchRejectsShortModelOutput() {
+        let encoder = ImageEncoder(model: ControlledPredictionModel(
+            embeddingKey: "image_embedding",
+            embeddingDimensions: 1
+        ))
+
+        XCTAssertThrowsError(try encoder.encodeBatch(images: [makeTestImage()])) { error in
+            XCTAssertEqual(error as? ImageEncoder.ImageEncoderError, .invalidEmbedding)
+        }
+    }
+
+    func testImageEncoderBatchRejectsShortAndExtraResultCounts() {
+        for outputCount in [1, 3] {
+            let encoder = ImageEncoder(model: ControlledPredictionModel(
+                embeddingKey: "image_embedding",
+                batchOutputCount: outputCount
+            ))
+
+            XCTAssertThrowsError(
+                try encoder.encodeBatch(images: [makeTestImage(), makeTestImage()])
+            ) { error in
+                XCTAssertEqual(error as? ImageEncoder.ImageEncoderError, .invalidEmbedding)
+            }
+        }
     }
 
     private func assertNormalized(
@@ -211,5 +282,18 @@ final class EncoderConcurrencyTests: XCTestCase {
             UIColor.systemBlue.setFill()
             context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
         }
+    }
+}
+
+private actor AsyncPredictionProbe {
+    private(set) var hasStarted = false
+    private(set) var wasCancelled = false
+
+    func markStarted() {
+        hasStarted = true
+    }
+
+    func markCancelled() {
+        wasCancelled = true
     }
 }

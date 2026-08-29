@@ -28,6 +28,8 @@ final class SemanticSearchRuntime: ObservableObject {
     }
 
     private var warmupTask: Task<Void, Error>?
+    private var warmupGeneration: UInt64 = 0
+    private var pendingWarmupPriority: SemanticWarmupPriority?
     private var warmupLoader: ((SemanticWarmupPriority) async throws -> Void)?
     private var promotionHandler: (() -> Void)?
 
@@ -62,6 +64,13 @@ final class SemanticSearchRuntime: ObservableObject {
         #endif
     }
 
+    func cancelWarmupForMemoryPressure() {
+        warmupTask?.cancel()
+        pendingWarmupPriority = nil
+        readiness.markSemanticModelUnavailable()
+        phase = .failed("Search paused to reduce memory use. Tap Try Again when you are ready.")
+    }
+
     func markIndexWarming(promoted: Bool = false) {
         readiness.markIndexWarming()
         phase = .warmingCore(promoted: promoted)
@@ -89,9 +98,7 @@ final class SemanticSearchRuntime: ObservableObject {
     func markFailure(_ message: String) {
         readiness.markSemanticFailure(message)
         phase = .failed(message)
-        #if DEBUG
-        logger.error("[SemanticSearchRuntime] failure: \(message)")
-        #endif
+        logger.error("[SemanticSearchRuntime] semantic warmup failed")
     }
 
     func startPostPaintWarmup() {
@@ -108,6 +115,11 @@ final class SemanticSearchRuntime: ObservableObject {
     }
 
     func startUserInitiatedWarmup() {
+        if let warmupTask, warmupTask.isCancelled {
+            pendingWarmupPriority = .userInitiatedSearch
+            phase = .warmingCore(promoted: true)
+            return
+        }
         guard warmupTask == nil, !readiness.isSemanticSearchReady else {
             #if DEBUG
             logger.info("[SemanticSearchRuntime] user warmup promoted existing/ready path; hasTask=\(self.warmupTask != nil), semanticReady=\(self.readiness.isSemanticSearchReady)")
@@ -123,6 +135,7 @@ final class SemanticSearchRuntime: ObservableObject {
     }
 
     func prepareForSearch() async throws {
+        try Task.checkCancellation()
         if readiness.isSemanticSearchReady {
             #if DEBUG
             logger.info("[SemanticSearchRuntime] prepareForSearch skipped; already ready")
@@ -131,6 +144,24 @@ final class SemanticSearchRuntime: ObservableObject {
         }
         let task: Task<Void, Error>
         if let existingTask = warmupTask {
+            if existingTask.isCancelled {
+                try Task.checkCancellation()
+                let cancelledGeneration = warmupGeneration
+                pendingWarmupPriority = .userInitiatedSearch
+                phase = .warmingCore(promoted: true)
+                _ = try? await existingTask.value
+                while warmupGeneration == cancelledGeneration {
+                    try Task.checkCancellation()
+                    await Task.yield()
+                }
+                try Task.checkCancellation()
+                if readiness.isSemanticSearchReady { return }
+                guard let replacementTask = warmupTask else {
+                    throw CancellationError()
+                }
+                try await replacementTask.value
+                return
+            }
             #if DEBUG
             logger.info("[SemanticSearchRuntime] prepareForSearch promoting existing warmup")
             #endif
@@ -144,12 +175,15 @@ final class SemanticSearchRuntime: ObservableObject {
         }
         phase = .warmingCore(promoted: true)
         try await task.value
+        try Task.checkCancellation()
         #if DEBUG
         logger.info("[SemanticSearchRuntime] prepareForSearch complete; semanticReady=\(self.readiness.isSemanticSearchReady), phase=\(String(describing: self.phase))")
         #endif
     }
 
     private func startWarmup(priority: SemanticWarmupPriority) -> Task<Void, Error> {
+        warmupGeneration &+= 1
+        let generation = warmupGeneration
         let promoted = priority == .userInitiatedSearch
         phase = .warmingCore(promoted: promoted)
         #if DEBUG
@@ -157,8 +191,10 @@ final class SemanticSearchRuntime: ObservableObject {
         #endif
 
         let task = Task { [weak self] in
+            try Task.checkCancellation()
             guard let self else { return }
             guard let warmupLoader else { return }
+            try Task.checkCancellation()
             try await warmupLoader(priority)
         }
         warmupTask = task
@@ -166,16 +202,23 @@ final class SemanticSearchRuntime: ObservableObject {
         Task { [weak self] in
             do {
                 try await task.value
-                self?.finishWarmup()
+                if task.isCancelled {
+                    self?.finishCancelledWarmup(generation: generation)
+                } else {
+                    self?.finishWarmup(generation: generation)
+                }
+            } catch is CancellationError {
+                self?.finishCancelledWarmup(generation: generation)
             } catch {
-                self?.failWarmup(error)
+                self?.failWarmup(error, generation: generation)
             }
         }
 
         return task
     }
 
-    private func finishWarmup() {
+    private func finishWarmup(generation: UInt64) {
+        guard generation == warmupGeneration else { return }
         warmupTask = nil
         updatePhaseAfterReadinessChange()
         #if DEBUG
@@ -183,9 +226,22 @@ final class SemanticSearchRuntime: ObservableObject {
         #endif
     }
 
-    private func failWarmup(_ error: Error) {
+    private func failWarmup(_ error: Error, generation: UInt64) {
+        guard generation == warmupGeneration else { return }
         warmupTask = nil
         markFailure(error.localizedDescription)
+    }
+
+    private func finishCancelledWarmup(generation: UInt64) {
+        guard generation == warmupGeneration else { return }
+        warmupTask = nil
+        if let pendingWarmupPriority {
+            self.pendingWarmupPriority = nil
+            _ = startWarmup(priority: pendingWarmupPriority)
+            return
+        }
+        readiness.markSemanticModelUnavailable()
+        phase = .failed("Search paused to reduce memory use. Tap Try Again when you are ready.")
     }
 
     private func updatePhaseAfterReadinessChange() {

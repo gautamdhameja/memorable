@@ -83,25 +83,25 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             Spacer().frame(height: 122)
 
-            Text("Everything stays\non this iPhone")
+            Text("Your photos stay\non this iPhone")
                 .font(.largeTitle.bold())
                 .tracking(-0.8)
                 .foregroundStyle(Celestial.Colors.onSurface)
 
-            Text("No account. No tracking. No cloud upload.")
+            Text("No account, tracking, or photo uploads.")
                 .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .padding(.top, 16)
 
             VStack(spacing: 0) {
                 privacyRow(number: "01", text: "Indexing and search run on this iPhone")
-                privacyRow(number: "02", text: "No account, no tracking, no uploads")
+                privacyRow(number: "02", text: "Apple resolves photo coordinates into place names")
                 privacyRow(number: "03", text: "Delete the index any time")
                 CelestialHairline()
             }
             .padding(.top, 64)
 
-            Text("Searching runs on the device holding the photos, so it works with Airplane Mode on.")
+            Text("Search works offline after place names have been resolved.")
                 .font(.subheadline)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .lineSpacing(4)
@@ -162,7 +162,7 @@ struct OnboardingView: View {
 
             Spacer()
 
-            Text("Runs on device · nothing is uploaded")
+            Text("Photos and search text stay on this iPhone")
                 .font(.caption)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .frame(maxWidth: .infinity)

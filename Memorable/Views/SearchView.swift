@@ -19,6 +19,8 @@ struct SearchView: View {
     @State private var totalLibraryCount: Int = 0
     @State private var placeholderIndex: Int = 0
     @State private var placeholderTimer: Task<Void, Never>?
+    @State private var findSimilarTask: Task<Void, Never>?
+    @State private var findSimilarGeneration = 0
 
     // Keep the existing persisted key stable. SearchViewModel owns the runtime
     // sort state; this wrapper is the SwiftUI persistence adapter.
@@ -54,7 +56,12 @@ struct SearchView: View {
             isIndexReady: { indexingService.isReady },
             isIndexLoaded: { searchEngine.isIndexLoaded },
             prepareForSearch: { try await semanticRuntime.prepareForSearch() },
-            search: { query in try await searchEngine.search(query: query) },
+            search: { query in
+                try await searchEngine.search(
+                    query: query,
+                    featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro)
+                )
+            },
             detectScreenshotIDs: { searchResults in
                 let task = Task.detached {
                     guard !Task.isCancelled else { return Set<String>() }
@@ -79,15 +86,26 @@ struct SearchView: View {
             validResultIDs: { candidates in
                 let task = Task.detached {
                     guard !Task.isCancelled else { return Set<String>() }
-                    let identifiers = candidates.map(\.localIdentifier)
+                    let photoKitCandidates = candidates.filter {
+                        $0.sourceId == PhotoSourceType.photokit.rawValue
+                    }
+                    let identifiers = photoKitCandidates.map(\.localIdentifier)
                     let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
                     var validIdentifiers = Set<String>()
                     assets.enumerateObjects { asset, _, _ in
                         validIdentifiers.insert(asset.localIdentifier)
                     }
-                    return Set(candidates.compactMap { result in
-                        validIdentifiers.contains(result.localIdentifier) ? result.id : nil
-                    })
+                    return SearchResultForegroundValidator.validResultIDs(
+                        candidates: candidates,
+                        validPhotoKitIdentifiers: validIdentifiers,
+                        isFolderResultAccessible: { result in
+                            guard let filePath = result.filePath else { return false }
+                            return FolderScanner.canAccessBookmarkedImage(
+                                filePath: filePath,
+                                sourceId: result.sourceId
+                            )
+                        }
+                    )
                 }
                 return await withTaskCancellationHandler {
                     await task.value
@@ -252,6 +270,12 @@ struct SearchView: View {
             }
             .onDisappear {
                 placeholderTimer?.cancel()
+                cancelFindSimilar()
+                cancelPendingVideoPlayerPresentation()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                cancelFindSimilar()
+                viewModel.handleMemoryPressure()
             }
             .onChange(of: sortModeRaw) { _, newValue in
                 viewModel.setSortMode(rawValue: newValue)
@@ -266,7 +290,7 @@ struct SearchView: View {
             }
             .onChange(of: indexingService.indexVersion) { oldValue, newValue in
                 #if DEBUG
-                logger.info("[SearchView] indexVersion changed \(oldValue) -> \(newValue); activeSearchID=\(viewModel.activeSearchID.map(String.init) ?? "nil"), results=\(viewModel.results.count), lastResults=\(viewModel.lastResults.count), searchText='\(viewModel.queryText)'")
+                logger.info("[SearchView] indexVersion changed \(oldValue) -> \(newValue); activeSearchID=\(viewModel.activeSearchID.map(String.init) ?? "nil"), results=\(viewModel.results.count), lastResults=\(viewModel.lastResults.count)")
                 #endif
                 // SearchEngine snapshots under lock, so an in-flight submitted
                 // search can safely finish against its snapshot. Do not clear
@@ -285,7 +309,7 @@ struct SearchView: View {
                                 logger.info("[SearchView] Reloaded search index after foreground return")
                                 #endif
                             } catch {
-                                logger.error("Failed to reload index on foreground: \(error.localizedDescription)")
+                                logger.error("Failed to reload index on foreground: \(error.safeDiagnosticCode)")
                             }
                         }
                     }
@@ -420,7 +444,8 @@ struct SearchView: View {
             if !viewModel.searchHistory.isEmpty {
                 searchHistoryView
             }
-            if indexingService.hitFreeLimit && totalLibraryCount > searchEngine.totalSize {
+            if (indexingService.hitFreeLimit || indexingService.reachedDeviceIndexLimit)
+                && totalLibraryCount > searchEngine.totalSize {
                 Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
                     .font(.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
@@ -509,7 +534,13 @@ struct SearchView: View {
     // re-scan already-indexed photos (startIndexing() skips those).
     @ViewBuilder
     private var resumeIndexingButton: some View {
-        if proManager.isPro {
+        if indexingService.reachedDeviceIndexLimit {
+            Text("Memorable limits the on-device index to 8,000 photos and videos to protect device memory.")
+                .font(.caption)
+                .foregroundStyle(Celestial.Colors.outline)
+                .multilineTextAlignment(.center)
+                .padding(.top, 10)
+        } else if proManager.isPro {
             Button(action: {
                 Haptics.medium()
                 indexingService.startIndexing()
@@ -521,7 +552,7 @@ struct SearchView: View {
             .tint(Celestial.Colors.primaryDim)
             .padding(.top, 10)
             .frame(maxWidth: .infinity)
-            .accessibilityHint("Resumes indexing for media that was skipped under the free tier")
+            .accessibilityHint("Resumes indexing media that was skipped before the Pro upgrade")
         }
     }
 
@@ -819,6 +850,8 @@ struct SearchView: View {
     private struct FallbackThumbnail: View {
         let result: SearchResult
         @State private var image: UIImage?
+        @State private var imageLoadGeneration: UInt = 0
+        @State private var imageLoadTask: Task<Void, Never>?
 
         var body: some View {
             Group {
@@ -835,9 +868,29 @@ struct SearchView: View {
             .aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .task {
-                if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                    image = await PhotoLibrary.loadThumbnail(for: asset)
+                imageLoadTask?.cancel()
+                let task = Task { @MainActor in
+                    imageLoadGeneration &+= 1
+                    let generation = imageLoadGeneration
+                    let loaded = await PhotoLibrary.loadImage(
+                        for: result,
+                        targetSize: CGSize(width: 400, height: 400)
+                    )
+                    guard ImageLoadGenerationPolicy.acceptsCompletion(
+                        startedGeneration: generation,
+                        currentGeneration: imageLoadGeneration,
+                        isCancelled: Task.isCancelled
+                    ) else { return }
+                    image = loaded
                 }
+                imageLoadTask = task
+                await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                imageLoadTask?.cancel()
+                imageLoadTask = nil
+                imageLoadGeneration &+= 1
+                MemoryPressureReleasePolicy.release(&image)
             }
         }
     }
@@ -863,7 +916,8 @@ struct SearchView: View {
             .padding(.bottom, 42)
 
             if indexingService.isReady && searchEngine.totalSize > 0 {
-                if indexingService.hitFreeLimit && totalLibraryCount > searchEngine.totalSize {
+                if (indexingService.hitFreeLimit || indexingService.reachedDeviceIndexLimit)
+                    && totalLibraryCount > searchEngine.totalSize {
                     Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(Celestial.Colors.onSurface)
@@ -1109,18 +1163,19 @@ struct SearchView: View {
         PhotoThumbnailView(result: result)
             .onTapGesture { handleResultTap(result) }
             .contextMenu {
-                if proManager.isPro {
-                    Button {
-                        let similar = searchEngine.findSimilar(photoId: result.id)
-                        viewModel.applySimilarResults(similar)
-                    } label: {
-                        Label("Find Similar", systemImage: "sparkle.magnifyingglass")
-                    }
-                } else {
-                    Button {
-                        showUpgrade = true
-                    } label: {
-                        Label("Find Similar (Pro)", systemImage: "sparkles")
+                if result.supportsFindSimilar {
+                    if proManager.isPro {
+                        Button {
+                            startFindSimilar(photoID: result.id)
+                        } label: {
+                            Label("Find Similar", systemImage: "sparkle.magnifyingglass")
+                        }
+                    } else {
+                        Button {
+                            showUpgrade = true
+                        } label: {
+                            Label("Find Similar (Pro)", systemImage: "sparkles")
+                        }
                     }
                 }
             }
@@ -1130,9 +1185,30 @@ struct SearchView: View {
 
     // MARK: - Actions
 
+    private func startFindSimilar(photoID: String) {
+        findSimilarTask?.cancel()
+        findSimilarGeneration &+= 1
+        let generation = findSimilarGeneration
+        let engine = searchEngine
+        findSimilarTask = Task {
+            let similar = await SimilaritySearchOperation.run {
+                engine.findSimilar(photoId: photoID)
+            }
+            guard !Task.isCancelled, generation == findSimilarGeneration else { return }
+            viewModel.applySimilarResults(similar)
+            findSimilarTask = nil
+        }
+    }
+
+    private func cancelFindSimilar() {
+        findSimilarGeneration &+= 1
+        findSimilarTask?.cancel()
+        findSimilarTask = nil
+    }
+
     private func handleResultTap(_ result: SearchResult) {
         #if DEBUG
-        logger.info("[SearchView] result tapped id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo) score=\(String(format: "%.4f", result.score))")
+        logger.info("[SearchView] result tapped isVideo=\(result.isVideo) score=\(String(format: "%.4f", result.score))")
         #endif
         Haptics.selection()
         if result.isVideo {
@@ -1182,4 +1258,19 @@ struct SearchView: View {
         viewModel.submitSearch(saveToHistory: saveToHistory)
     }
 
+}
+
+enum SearchResultForegroundValidator {
+    static func validResultIDs(
+        candidates: [SearchResult],
+        validPhotoKitIdentifiers: Set<String>,
+        isFolderResultAccessible: (SearchResult) -> Bool
+    ) -> Set<String> {
+        Set(candidates.compactMap { result in
+            if result.sourceId == PhotoSourceType.photokit.rawValue {
+                return validPhotoKitIdentifiers.contains(result.localIdentifier) ? result.id : nil
+            }
+            return isFolderResultAccessible(result) ? result.id : nil
+        })
+    }
 }

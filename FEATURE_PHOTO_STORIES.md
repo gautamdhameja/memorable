@@ -1,4 +1,4 @@
-# Feature: Photo Timeline with Story Clustering
+# Photo timeline with story clustering
 
 **Status:** Planned (not yet implemented)
 **Priority:** Future release
@@ -13,9 +13,9 @@ Automatically group photos into "stories" or "events" based on time and location
 - "Saturday at the park" — March 8, 2025 — 12 photos
 - "Office lunch" — April 2, 2026 — 3 photos
 
-## Clustering Algorithm
+## Clustering algorithm
 
-### Rules
+### Apply clustering rules
 
 ```
 Two consecutive photos belong to the SAME story if:
@@ -32,7 +32,7 @@ A new story starts when EITHER:
    - Location jump > 5km (when GPS available)
 ```
 
-### Algorithm (single pass, O(n))
+### Use a single-pass O(n) algorithm
 
 ```
 1. Load all indexed photos sorted by creationDate ASC
@@ -46,7 +46,7 @@ A new story starts when EITHER:
 5. Save stories to database
 ```
 
-### Pseudocode
+### Review the pseudocode
 
 ```swift
 func clusterStories(photos: [IndexedPhoto]) -> [PhotoStory] {
@@ -97,7 +97,7 @@ func clusterStories(photos: [IndexedPhoto]) -> [PhotoStory] {
 }
 ```
 
-## Data Model
+## Data model
 
 ```swift
 struct PhotoStory: Codable, FetchableRecord, PersistableRecord, Identifiable {
@@ -125,24 +125,24 @@ struct StoryPhoto: Codable, FetchableRecord, PersistableRecord {
 }
 ```
 
-## Auto-Title Generation
+## Generate titles
 
 Titles are generated from metadata, no AI needed:
 
-### With GPS + Reverse Geocoding
+### Use GPS and reverse geocoding
 ```
 "Trip to Barcelona" — if spans multiple days
 "Evening in Barcelona" — if same day, evening
 "Morning at Central Park" — if same day, morning, specific place
 ```
 
-### Without GPS
+### Handle media without GPS
 ```
 "Saturday afternoon" — day of week + time of day
 "June 14, 2023" — fallback to date
 ```
 
-### Time-of-day labels
+### Add time-of-day labels
 ```
 00-06: "Late night"
 06-09: "Early morning"
@@ -153,7 +153,7 @@ Titles are generated from metadata, no AI needed:
 20-24: "Night"
 ```
 
-### Duration labels
+### Add duration labels
 ```
 Same day: "{time_of_day} in {location}"
 2-3 days: "Weekend in {location}"
@@ -161,13 +161,13 @@ Same day: "{time_of_day} in {location}"
 7+ days: "Week in {location}" or "{location}, {month} {year}"
 ```
 
-### Without location
+### Handle missing locations
 ```
 Same day: "{day_of_week} {time_of_day}"
 Multi-day: "{month} {start_day}-{end_day}, {year}"
 ```
 
-## Database Migration
+## Database migration
 
 ```swift
 migrator.registerMigration("vX_stories") { db in
@@ -195,7 +195,7 @@ migrator.registerMigration("vX_stories") { db in
 }
 ```
 
-## Cover Photo Selection
+## Select a cover photo
 
 For each story, pick the cover photo using this priority:
 1. Highest `sharpnessScore` (sharpest photo)
@@ -209,9 +209,9 @@ func selectCoverPhoto(from photos: [IndexedPhoto]) -> String {
 }
 ```
 
-## UI Design
+## UI design
 
-### Stories Tab / Section in Memories
+### Add stories to Memories
 
 ```
 ┌─────────────────────────────────┐
@@ -231,13 +231,13 @@ func selectCoverPhoto(from photos: [IndexedPhoto]) -> String {
 └─────────────────────────────────┘
 ```
 
-### Story Detail View
+### Build the story detail view
 - Masonry grid of all photos in the story
 - Story title (editable) + date range + location
 - "Play as Slideshow" button (reuses MemorySlideshowView)
 - Photos clickable (full-screen viewer)
 
-### Story Card Component
+### Build the story card
 
 ```swift
 struct StoryCardView: View {
@@ -274,9 +274,9 @@ struct StoryCardView: View {
 }
 ```
 
-## Placement Options
+## Compare placement options
 
-### Option A: Section in Memories tab (recommended)
+### Option A: Add a section to Memories (recommended)
 ```
 Memories tab:
   ├── Relive Your Memories (slideshow button)
@@ -285,21 +285,21 @@ Memories tab:
   └── On This Day
 ```
 
-### Option B: Separate tab
+### Option B: Add a separate tab
 Adds a 5th tab — feels crowded.
 
-### Option C: Inside More tab
+### Option C: Add the feature to More
 Too hidden for such a visual feature.
 
 **Recommended: Option A** — stories as a horizontal scrollable section in the Memories tab, between the slideshow button and On This Day.
 
-## When to Run Clustering
+## Schedule clustering
 
 - **After indexing completes** (same timing as face clustering and surprise query validation)
 - **Incremental**: when new photos are indexed, only re-cluster the affected time ranges
 - **On demand**: user can trigger "Refresh Stories" from settings
 
-## Performance
+## Bound performance costs
 
 - **O(n)** single-pass algorithm — sorts photos by date, then linear scan
 - For 2,900 photos: < 100ms to cluster
@@ -307,7 +307,7 @@ Too hidden for such a visual feature.
 - Reverse geocoding for titles: batch via CLGeocoder, cache results
 - Story clustering runs on `Task.detached(priority: .utility)` after indexing
 
-## Reverse Geocoding for Story Titles
+## Reverse-geocode story titles
 
 ```swift
 func reverseGeocode(latitude: Double, longitude: Double) async -> String? {
@@ -325,9 +325,11 @@ func reverseGeocode(latitude: Double, longitude: Double) async -> String? {
 }
 ```
 
+Log geocoding failures and propagate task cancellation in the production implementation. `CLGeocoder` sends the media coordinates to Apple to return a place name. Do not send photo contents, search query text, embeddings, or local identifiers with that request.
+
 **Rate limiting**: CLGeocoder has rate limits. Process stories in batches of 5-10 with 1-second delays between batches.
 
-## Implementation Tasks
+## Implementation tasks
 
 | Task | Effort | Description |
 |------|--------|-------------|
@@ -348,15 +350,14 @@ func reverseGeocode(latitude: Double, longitude: Double) async -> String? {
 
 - Existing indexed_photos table with creationDate, latitude, longitude, sharpnessScore
 - Existing masonry grid layout (MemoryMasonryGrid)
-- Existing FullScreenPhotoViewer for photo taps
+- Existing `SearchResultsViewer` for photo taps
 - Existing MemorySlideshowView for "Play as Slideshow"
 - CLGeocoder for reverse geocoding (already imported)
 
-## Future Enhancements
+## Consider future enhancements
 
 - User-editable story titles
 - Merge/split stories manually
-- Share a story as a video montage with captions
 - "This time last year" featuring stories from the same month
 - Story highlights: auto-select the 5 best photos per story using sharpness + CLIP diversity
 - Travel journal: connect stories on a map with routes

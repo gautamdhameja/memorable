@@ -14,7 +14,7 @@ This plan makes initial indexing produce searchable base embeddings faster, then
 
 ---
 
-## Problem Frame
+## Problem frame
 
 The current startup work already stages app-shell and semantic-search readiness, but first-time library indexing still does too much before each photo becomes searchable. `Memorable/Core/IndexingService.swift` loads indexing images through the same high-quality PhotoKit path used by display code, encodes a batch, then runs OCR, screenshot OCR, blur scoring, and scene classification inline before writing each `IndexedPhoto`.
 
@@ -28,7 +28,7 @@ The pasted external spec was directionally useful but over-specified risky detai
 
 **Fast Searchable Coverage**
 
-- R1. Indexing uses a fast, indexing-only PhotoKit image-loading path while preserving high-quality loading for user-facing display and Quick Look.
+- R1. Indexing uses a fast, indexing-only PhotoKit image-loading path while preserving high-quality loading in the app's user-facing viewers.
 - R2. The first pass stores base embeddings and basic metadata without waiting for OCR, blur scoring, scene labels, reverse geocoding, captions, or Surprise Me validation.
 - R3. Search becomes available against the partially indexed library once the first configured searchable checkpoint is reached.
 - R4. Progressive search checkpoints respect the current free-tier media limit and do not assume a fixed 1,000-photo threshold.
@@ -55,7 +55,7 @@ The pasted external spec was directionally useful but over-specified risky detai
 
 ---
 
-## Key Technical Decisions
+## Key technical decisions
 
 - **Use an indexing-specific image loader.** `PhotoLibrary.loadImage(for:)` is used by indexing and some user-facing paths today, so changing it globally risks lowering display quality. The implementation keeps an indexing-only request-options seam, but embedding inputs must use local high-quality PhotoKit requests because `.fastFormat` can degrade SigLIP retrieval quality on device.
 - **Make base embeddings the first-pass contract.** First-pass records should include identifier, date, GPS coordinates, dimensions, source metadata, and embedding. Enrichment fields can be nil until the second pass updates them.
@@ -67,9 +67,9 @@ The pasted external spec was directionally useful but over-specified risky detai
 
 ---
 
-## High-Level Technical Design
+## High-level technical design
 
-### Indexing Lifecycle
+### Indexing lifecycle
 
 ```mermaid
 flowchart TB
@@ -91,7 +91,7 @@ flowchart TB
   N --> O["Low-priority metadata/index refresh"]
 ```
 
-### Searchability vs. Enrichment State
+### Searchability compared with enrichment state
 
 ```mermaid
 stateDiagram-v2
@@ -106,9 +106,9 @@ stateDiagram-v2
 
 ---
 
-## Implementation Units
+## Implementation units
 
-### U1. Add Indexing Image Loading Profile
+### U1. Add an indexing image-loading profile
 
 **Goal:** Separate indexing image loading from display image loading so embedding input settings can be controlled without lowering user-facing image quality.
 
@@ -123,7 +123,7 @@ stateDiagram-v2
 - `MemorableTests/ImagePreprocessingTests.swift`
 - `MemorableTests/IndexingPolicyTests.swift`
 
-**Approach:** Add a dedicated indexing loader, or a testable request-options builder, that uses `.highQualityFormat`, `resizeMode = .exact`, `isNetworkAccessAllowed = false`, and the existing 224x224 default. Keep `loadThumbnail`, Quick Look, and full-size display paths on high-quality loading. Route first-pass embedding and thumbnail OCR input through the indexing loader without sacrificing embedding quality.
+**Approach:** Add a dedicated indexing loader, or a testable request-options builder, that uses `.highQualityFormat`, `resizeMode = .exact`, `isNetworkAccessAllowed = false`, and the existing 224x224 default. Keep thumbnail and validated full-size display paths on high-quality loading. Route first-pass embedding and thumbnail OCR input through the indexing loader without sacrificing embedding quality.
 
 **Patterns to follow:** Existing `PHImageManager` continuation handling in `PhotoLibrary.loadImage(for:)`, including the non-degraded callback guard and no-network setting.
 
@@ -136,7 +136,7 @@ stateDiagram-v2
 
 **Verification:** Indexing code no longer calls the generic high-quality image loader for 224x224 embedding inputs, while user-facing loaders remain unchanged.
 
-### U2. Persist Enrichment State and Database Update APIs
+### U2. Persist enrichment state and database update APIs
 
 **Goal:** Make enrichment resumable by adding per-photo enrichment state and update paths.
 
@@ -165,7 +165,7 @@ stateDiagram-v2
 
 **Verification:** Database tests prove enrichment state survives migration, insert, fetch, and update flows.
 
-### U3. Split Photo Indexing Into Base Pass and Enrichment Pass
+### U3. Split photo indexing into base and enrichment passes
 
 **Goal:** Make photos searchable after embedding insertion without waiting for OCR, blur scoring, or scene classification.
 
@@ -199,7 +199,7 @@ stateDiagram-v2
 
 **Verification:** The first-pass indexing path no longer calls OCR, full-res screenshot OCR, blur scoring, or scene classification before inserting base rows.
 
-### U4. Add Progressive Search Checkpoints
+### U4. Add progressive search checkpoints
 
 **Goal:** Make partial photo coverage searchable during indexing without rebuilding GPU state after every batch.
 
@@ -232,7 +232,7 @@ stateDiagram-v2
 
 **Verification:** A user can search partial indexed media during a long photo pass, and reload frequency is bounded by configuration.
 
-### U5. Improve Indexing Progress UX
+### U5. Improve the indexing progress experience
 
 **Goal:** Show users what is searchable now, what is still indexing, and roughly how long the current phase will take.
 
@@ -263,7 +263,7 @@ stateDiagram-v2
 
 **Verification:** UI copy and progress values reflect the difference between indexed, searchable, enriched, and remaining work.
 
-### U6. Add Bounded Prefetching and Batch-Size Configuration
+### U6. Add bounded prefetching and batch-size configuration
 
 **Goal:** Overlap PhotoKit image loading with Core ML encoding without increasing Neural Engine contention or memory risk.
 
@@ -291,7 +291,7 @@ stateDiagram-v2
 
 **Verification:** The indexing loop can overlap loading and encoding while keeping memory bounded and avoiding concurrent Core ML predictions.
 
-### U7. Documentation and Verification Coverage
+### U7. Update documentation and verification coverage
 
 **Goal:** Keep the implementation reviewable and preserve the product's privacy and scoring constraints.
 
@@ -323,7 +323,7 @@ stateDiagram-v2
 
 ---
 
-## Acceptance Examples
+## Acceptance examples
 
 - AE1. Partial search becomes available during a long photo pass
   - **Covers:** R3, R4, R5, R11, R12.
@@ -352,14 +352,14 @@ stateDiagram-v2
 - AE5. Display quality is not downgraded
   - **Covers:** R1, R14.
   - **Given:** Indexing uses fast 224x224 image loading.
-  - **When:** The user opens a search result or Quick Look preview.
+  - **When:** The user opens a search result in the app's full-screen viewer.
   - **Then:** User-facing display paths still request high-quality image data.
 
 ---
 
-## Scope Boundaries
+## Scope boundaries
 
-### In Scope
+### In scope
 
 - Indexing-only high-quality local image loading.
 - First-pass base embedding insertion.
@@ -368,7 +368,7 @@ stateDiagram-v2
 - Progress UI that distinguishes searchable and enriching work.
 - Bounded prefetching and config-driven batch size.
 
-### Deferred to Follow-Up Work
+### Deferred work
 
 - Raising the default batch size above 16 after profiling on A14-class devices.
 - `BGProcessingTask` support for longer background indexing windows.
@@ -376,7 +376,7 @@ stateDiagram-v2
 - True incremental Metal/GPU append support.
 - Model compression, model replacement, or packaging changes.
 
-### Out of Scope
+### Out of scope
 
 - Search scoring threshold changes.
 - Prompt-template changes.
@@ -385,7 +385,7 @@ stateDiagram-v2
 
 ---
 
-## System-Wide Impact
+## System-wide impact
 
 This plan changes the lifecycle of indexed photos. A photo can be unindexed, base-indexed and searchable, or fully enriched. Search must remain correct in all three states, and UI copy must stop implying that all searchable media are fully enriched.
 
@@ -393,7 +393,7 @@ The database gains persistent enrichment state, so migrations and fixture databa
 
 ---
 
-## Risks and Mitigations
+## Risks and mitigations
 
 - **Risk: More frequent index reloads could hurt indexing throughput.** Mitigate with explicit checkpoint thresholds and minimum reload spacing.
 - **Risk: Deferred OCR temporarily lowers text-heavy screenshot recall.** Mitigate by making progress copy clear and by scheduling enrichment promptly after base indexing is idle.
@@ -403,7 +403,7 @@ The database gains persistent enrichment state, so migrations and fixture databa
 
 ---
 
-## Sources and Research
+## Sources and research
 
 - `docs/brainstorms/2026-06-06-performance-size-search-optimization-requirements.md` requires base embeddings to become searchable before enrichment work runs.
 - `Memorable/Core/IndexingService.swift` currently loads images in parallel per batch, encodes them, then runs OCR, screenshot OCR, blur scoring, and scene classification inline before inserting photo rows.

@@ -8,6 +8,7 @@ struct PerformanceMetric: Equatable {
 @MainActor
 final class PerformanceMetrics {
     static let shared = PerformanceMetrics()
+    static let completedMetricLimit = 100
 
     private var starts: [String: CFAbsoluteTime] = [:]
     private(set) var completed: [PerformanceMetric] = []
@@ -21,6 +22,9 @@ final class PerformanceMetrics {
         guard let start = starts.removeValue(forKey: name) else { return nil }
         let metric = PerformanceMetric(name: name, durationSeconds: now - start)
         completed.append(metric)
+        if completed.count > Self.completedMetricLimit {
+            completed.removeFirst(completed.count - Self.completedMetricLimit)
+        }
         #if DEBUG
         logger.info("[Perf] \(name): \(String(format: "%.3f", metric.durationSeconds))s")
         #endif

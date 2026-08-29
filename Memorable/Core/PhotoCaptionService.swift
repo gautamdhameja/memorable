@@ -3,9 +3,22 @@ import Accelerate
 
 @MainActor
 class PhotoCaptionService {
+    private typealias CategoryEmbedding = (category: String, embedding: [Float])
+
     private var categoryEmbeddings: [(category: String, embedding: [Float])] = []
     private var isReady = false
     private var usedCaptions: Set<String> = []
+    private var preparationTask: Task<[CategoryEmbedding], Error>?
+    private var preparationGeneration: UInt = 0
+
+    func releaseMemory() {
+        preparationGeneration &+= 1
+        preparationTask?.cancel()
+        preparationTask = nil
+        categoryEmbeddings.removeAll(keepingCapacity: false)
+        usedCaptions.removeAll(keepingCapacity: false)
+        isReady = false
+    }
 
     struct Category: Sendable {
         let name: String
@@ -226,20 +239,65 @@ class PhotoCaptionService {
 
     /// Pre-encode all category prompts. Call once after TextEncoder is ready.
     func prepare(textEncoder: TextEncoder) async {
-        let embeddings = await Task.detached {
-            var embeddings: [(category: String, embedding: [Float])] = []
-            for category in Self.categories {
+        await prepare(categories: Self.categories) { prompt in
+            try await textEncoder.encodeCancellable(text: prompt)
+        }
+    }
+
+    /// Internal seam for deterministic cancellation coverage without loading
+    /// the bundled text model.
+    func prepare(
+        categories: [Category],
+        encodePrompt: @escaping @Sendable (String) async throws -> [Float]
+    ) async {
+        preparationTask?.cancel()
+        preparationGeneration &+= 1
+        let generation = preparationGeneration
+
+        let task = Task.detached(priority: .utility) { () throws -> [CategoryEmbedding] in
+            var embeddings: [CategoryEmbedding] = []
+            embeddings.reserveCapacity(categories.count)
+
+            for category in categories {
+                try Task.checkCancellation()
                 do {
-                    let embedding = try textEncoder.encode(text: category.prompt)
+                    let embedding = try await encodePrompt(category.prompt)
+                    try Task.checkCancellation()
                     embeddings.append((category: category.name, embedding: embedding))
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch {
-                    #if DEBUG
-                    logger.error("[PhotoCaption] Failed to encode category '\(category.name)': \(error.localizedDescription)")
-                    #endif
+                    logger.error("[PhotoCaption] Failed to encode a category: \(error.safeDiagnosticCode)")
                 }
             }
+            try Task.checkCancellation()
             return embeddings
-        }.value
+        }
+        preparationTask = task
+
+        defer {
+            if preparationGeneration == generation {
+                preparationTask = nil
+            }
+        }
+
+        let embeddings: [CategoryEmbedding]
+        do {
+            embeddings = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            logger.error("[PhotoCaption] Category preparation failed: \(error.safeDiagnosticCode)")
+            return
+        }
+
+        guard !Task.isCancelled, preparationGeneration == generation else {
+            return
+        }
 
         categoryEmbeddings = embeddings
         isReady = !embeddings.isEmpty

@@ -1,5 +1,4 @@
 import SwiftUI
-import Photos
 
 struct IndexingSlideshowView: View {
     let captionService: PhotoCaptionService
@@ -11,7 +10,9 @@ struct IndexingSlideshowView: View {
     @State private var isVisible = false
     @State private var captionVisible = false
     @State private var timerTask: Task<Void, Never>?
+    @State private var initialLoadTask: Task<Void, Never>?
     @State private var shownIds: Set<String> = []
+    @State private var imageLoadGeneration: UInt = 0
 
     var body: some View {
         ZStack {
@@ -68,16 +69,31 @@ struct IndexingSlideshowView: View {
         }
         .padding(.horizontal, 32)
         .task {
-            // Wait for some photos to be indexed before starting
-            await waitForIndexedPhotos()
-            guard !Task.isCancelled else { return }
-            await showNextPhoto()
-            guard !Task.isCancelled else { return }
-            startCycling()
+            let task = Task { @MainActor in
+                await waitForIndexedPhotos()
+                guard !Task.isCancelled else { return }
+                await showNextPhoto()
+                guard !Task.isCancelled else { return }
+                startCycling()
+            }
+            initialLoadTask = task
+            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         }
         .onDisappear {
+            initialLoadTask?.cancel()
+            initialLoadTask = nil
             timerTask?.cancel()
             timerTask = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            initialLoadTask?.cancel()
+            initialLoadTask = nil
+            timerTask?.cancel()
+            timerTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&currentImage)
+            currentCaption = nil
+            shownIds.removeAll(keepingCapacity: false)
         }
     }
 
@@ -103,28 +119,43 @@ struct IndexingSlideshowView: View {
     }
 
     private func showNextPhoto() async {
+        imageLoadGeneration &+= 1
+        let generation = imageLoadGeneration
         // Get a random indexed photo from the database
-        guard let photo = getRandomIndexedPhoto() else { return }
+        guard let photo = await getRandomIndexedPhoto() else { return }
 
         // Fade out current
         withAnimation { captionVisible = false }
         do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }
         withAnimation { isVisible = false }
         do { try await Task.sleep(nanoseconds: 400_000_000) } catch { return }
+        guard ImageLoadGenerationPolicy.acceptsCompletion(
+            startedGeneration: generation,
+            currentGeneration: imageLoadGeneration,
+            isCancelled: Task.isCancelled
+        ) else { return }
 
         // Load thumbnail
-        guard let asset = PhotoLibrary.getAsset(by: photo.localIdentifier) else { return }
-        guard let image = await PhotoLibrary.loadThumbnail(for: asset) else { return }
+        guard let loaded = await PhotoLibrary.loadImage(
+            for: photo.searchResult,
+            targetSize: CGSize(width: 800, height: 800)
+        ) else { return }
+        guard ImageLoadGenerationPolicy.acceptsCompletion(
+            startedGeneration: generation,
+            currentGeneration: imageLoadGeneration,
+            isCancelled: Task.isCancelled
+        ) else { return }
 
-        currentImage = image
+        currentImage = loaded
         currentDate = photo.creationDate
 
         // Generate caption from the stored embedding (zero extra encoding!)
-        let embeddingFloat16 = photo.embedding.withUnsafeBytes { buf -> [Float16] in
-            let ptr = buf.bindMemory(to: Float16.self)
-            return Array(UnsafeBufferPointer(start: ptr.baseAddress, count: ptr.count))
+        if let embedding = photo.embedding.validatedFloat16Embedding() {
+            currentCaption = captionService.caption(for: embedding)
+        } else {
+            logger.error("Skipped an indexing caption with a malformed embedding")
+            currentCaption = nil
         }
-        currentCaption = captionService.caption(for: embeddingFloat16)
 
         // Fade in photo
         withAnimation { isVisible = true }
@@ -134,20 +165,16 @@ struct IndexingSlideshowView: View {
         withAnimation { captionVisible = true }
     }
 
-    private func getRandomIndexedPhoto() -> IndexedPhoto? {
-        // Try up to 5 times to find an unshown photo
-        for _ in 0..<5 {
-            guard let photo = try? database.fetchRandomPhoto(sharp: true) else {
-                return nil
-            }
-            if !shownIds.contains(photo.id) {
-                shownIds.insert(photo.id)
-                if shownIds.count > 50 { shownIds.removeAll() }
-                return photo
-            }
+    private func getRandomIndexedPhoto() async -> SlideshowPhoto? {
+        let database = database
+        guard let photo = try? await CancellableDetachedOperation.run({
+            try database.fetchRandomPhoto(sharp: true)
+        }) else { return nil }
+        if shownIds.contains(photo.id) {
+            shownIds.removeAll(keepingCapacity: true)
         }
-        // All attempts returned already-shown photos. Reset and return whatever we get.
-        shownIds.removeAll()
-        return try? database.fetchRandomPhoto(sharp: true)
+        shownIds.insert(photo.id)
+        if shownIds.count > 50 { shownIds.removeAll(keepingCapacity: true) }
+        return photo
     }
 }

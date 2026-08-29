@@ -210,6 +210,9 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func indexedMediaCounts() throws -> IndexedMediaCounts {
         IndexedMediaCounts(photos: manifest.entries.count, videos: 0)
     }
+    func photoLibraryIndexedMediaCounts() throws -> IndexedMediaCounts {
+        IndexedMediaCounts(photos: manifest.entries.count, videos: 0)
+    }
     func allIndexedMediaIdentifiers() throws -> IndexedMediaIdentifiers {
         IndexedMediaIdentifiers(
             photos: Set(manifest.entries.flatMap(\.expectedAssetIds)),
@@ -242,6 +245,10 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
         return index
     }
 
+    func loadEmbeddingsForDuplicateScan(limit: Int) throws -> MediaIndex {
+        try loadAllEmbeddings()
+    }
+
     func loadAllVideoEmbeddings() throws -> MediaIndex {
         MediaIndex(kind: .videoFrame)
     }
@@ -254,7 +261,7 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func deleteAll() throws {}
     func deletePhoto(localIdentifier: String) throws {}
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws {}
-    func fetchRandomPhoto(sharp: Bool) throws -> IndexedPhoto? { nil }
+    func fetchRandomPhoto(sharp: Bool) throws -> SlideshowPhoto? { nil }
     func photosNeedingEnrichment(limit: Int) throws -> [PhotoEnrichmentCandidate] { [] }
     func photosNeedingEnrichmentCount() throws -> Int { 0 }
     func updatePhotoEnrichment(_ updates: [PhotoEnrichmentUpdate]) throws {}
@@ -265,6 +272,13 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func allIndexedVideoIdentifiers() throws -> Set<String> { [] }
     func deleteOrphanedVideos(localIdentifiers: Set<String>) throws {}
     func trimToLimit(_ limit: Int) throws {}
+    func reconcileFreeTier(_ limit: Int) throws -> FreeTierReconciliationResult {
+        FreeTierReconciliationResult(
+            retainedMediaCount: min(manifest.entries.count, max(0, limit)),
+            didTrimMedia: manifest.entries.count > max(0, limit),
+            removedFolderSourceIDs: []
+        )
+    }
     func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func geocodingCounts() throws -> GeocodingCounts {
@@ -276,7 +290,7 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func listSources() throws -> [PhotoSource] { [] }
     func deleteSource(_ id: String) throws {}
     func updateSourceStats(_ id: String, photoCount: Int) throws {}
-    func onThisDayPhotos() throws -> [(year: Int, ids: [String])] { [] }
+    func onThisDayPhotos() throws -> [(year: Int, photos: [IndexedPhotoReference])] { [] }
     func addSearchHistory(_ query: String) throws {}
     func loadSearchHistory() throws -> [String] { [] }
     func clearSearchHistory() throws {}

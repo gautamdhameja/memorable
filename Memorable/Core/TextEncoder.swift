@@ -4,32 +4,40 @@ import os
 
 protocol TextEmbeddingEncoding: Sendable {
     func encode(text: String) throws -> [Float]
+    func encodeCancellable(text: String) async throws -> [Float]
+}
+
+extension TextEmbeddingEncoding {
+    func encodeCancellable(text: String) async throws -> [Float] {
+        try Task.checkCancellation()
+        return try encode(text: text)
+    }
 }
 
 final class TextEncoder: TextEmbeddingEncoding, Sendable {
     private let model: OSAllocatedUnfairLock<any CoreMLModelPredicting>
-    private let modelLoader: @Sendable () throws -> any CoreMLModelPredicting
     private let tokenizer: CLIPTokenizer
     private let contextLength: Int = 64
+    private static let predictionPermits = CancellablePermitPool(limit: 1)
 
-    init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) throws {
-        let loader: @Sendable () throws -> any CoreMLModelPredicting = {
-            let modelURL = try resourceManager.url(for: .textEncoder)
-            return try MLModel(contentsOf: modelURL, configuration: Self.modelConfiguration())
-        }
-        self.modelLoader = loader
-        self.model = OSAllocatedUnfairLock(initialState: try loader())
+    init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) async throws {
+        try Task.checkCancellation()
+        let modelURL = try resourceManager.url(for: .textEncoder)
+        let loadedModel = try await MLModel.load(
+            contentsOf: modelURL,
+            configuration: Self.modelConfiguration()
+        )
+        try Task.checkCancellation()
+        self.model = OSAllocatedUnfairLock(initialState: loadedModel)
         self.tokenizer = try CLIPTokenizer(contextLength: contextLength)
     }
 
     init(
         model: any CoreMLModelPredicting,
-        tokenizer: CLIPTokenizer,
-        modelLoader: @escaping @Sendable () throws -> any CoreMLModelPredicting
+        tokenizer: CLIPTokenizer
     ) {
         self.model = OSAllocatedUnfairLock(initialState: model)
         self.tokenizer = tokenizer
-        self.modelLoader = modelLoader
     }
 
     func encode(text: String) throws -> [Float] {
@@ -37,8 +45,7 @@ final class TextEncoder: TextEmbeddingEncoding, Sendable {
 
         #if DEBUG
         let nonPadTokens = tokenIds.filter { $0 != 0 }
-        let idPreview = nonPadTokens.map { String($0) }.joined(separator: ", ")
-        logger.info("[TextEncoder] '\(text.prefix(60))' -> \(nonPadTokens.count) tokens, ids=[\(idPreview)]")
+        logger.info("[TextEncoder] Encoded \(nonPadTokens.count) non-padding tokens")
         #endif
 
         let inputArray = try MLMultiArray(shape: [1, NSNumber(value: contextLength)], dataType: .int32)
@@ -50,21 +57,16 @@ final class TextEncoder: TextEmbeddingEncoding, Sendable {
             "input_ids": MLFeatureValue(multiArray: inputArray)
         ])
 
-        let output: MLFeatureProvider
-        do {
-            output = try currentModel().prediction(from: inputFeatures)
-        } catch {
-            #if DEBUG
-            logger.warning("[TextEncoder] Prediction failed, reloading model: \(error.localizedDescription)")
-            #endif
-            output = try reloadModel().prediction(from: inputFeatures)
-        }
+        let output = try currentModel().prediction(from: inputFeatures)
 
         guard let embeddingArray = output.featureValue(for: "text_embedding")?.multiArrayValue else {
             throw TextEncoderError.outputExtractionFailed
         }
 
         var embedding = embeddingArray.toFloatArray()
+        guard embedding.count == EmbeddingConfig.dimensions else {
+            throw TextEncoderError.invalidEmbedding
+        }
 
         #if DEBUG
         var rawNorm: Float = 0
@@ -72,7 +74,7 @@ final class TextEncoder: TextEmbeddingEncoding, Sendable {
         rawNorm = sqrt(rawNorm)
         #endif
 
-        embedding.l2Normalize()
+        guard embedding.l2Normalize() else { throw TextEncoderError.invalidEmbedding }
 
         #if DEBUG
         var finalNorm: Float = 0
@@ -84,15 +86,51 @@ final class TextEncoder: TextEmbeddingEncoding, Sendable {
         return embedding
     }
 
-    private func currentModel() -> any CoreMLModelPredicting {
-        model.withLock { $0 }
+    func encodeCancellable(text: String) async throws -> [Float] {
+        try Task.checkCancellation()
+        let tokenIds = tokenizer.tokenize(
+            text: text.lowercased(),
+            maxLength: contextLength
+        )
+        let inputArray = try MLMultiArray(
+            shape: [1, NSNumber(value: contextLength)],
+            dataType: .int32
+        )
+        for (index, tokenID) in tokenIds.enumerated() {
+            inputArray[index] = NSNumber(value: tokenID)
+        }
+        let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
+            "input_ids": MLFeatureValue(multiArray: inputArray),
+        ])
+        guard await Self.predictionPermits.acquire() else {
+            throw CancellationError()
+        }
+
+        let output: MLFeatureProvider
+        do {
+            try Task.checkCancellation()
+            output = try await currentModel().cancellablePrediction(from: inputFeatures)
+            await Self.predictionPermits.release()
+        } catch {
+            await Self.predictionPermits.release()
+            throw error
+        }
+        try Task.checkCancellation()
+        guard let embeddingArray = output.featureValue(
+            for: "text_embedding"
+        )?.multiArrayValue else {
+            throw TextEncoderError.outputExtractionFailed
+        }
+        var embedding = embeddingArray.toFloatArray()
+        guard embedding.count == EmbeddingConfig.dimensions,
+              embedding.l2Normalize() else {
+            throw TextEncoderError.invalidEmbedding
+        }
+        return embedding
     }
 
-    @discardableResult
-    private func reloadModel() throws -> any CoreMLModelPredicting {
-        let reloadedModel = try modelLoader()
-        model.withLock { $0 = reloadedModel }
-        return reloadedModel
+    private func currentModel() -> any CoreMLModelPredicting {
+        model.withLock { $0 }
     }
 
     private static func modelConfiguration() -> MLModelConfiguration {
@@ -105,9 +143,10 @@ final class TextEncoder: TextEmbeddingEncoding, Sendable {
         return config
     }
 
-    enum TextEncoderError: LocalizedError {
+    enum TextEncoderError: LocalizedError, Equatable {
         case modelNotFound
         case outputExtractionFailed
+        case invalidEmbedding
 
         var errorDescription: String? {
             switch self {
@@ -115,6 +154,8 @@ final class TextEncoder: TextEmbeddingEncoding, Sendable {
                 return "The text analysis model could not be found. Please reinstall the app."
             case .outputExtractionFailed:
                 return "The text analysis model returned an unexpected result."
+            case .invalidEmbedding:
+                return "The text analysis model returned an invalid embedding."
             }
         }
     }

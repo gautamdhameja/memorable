@@ -1,6 +1,23 @@
 import Foundation
 import FoundationModels
 
+enum SmartQueryOutputPolicy {
+    static let maximumVisualCharacters = QueryInputPolicy.maximumCharacterCount
+    static let maximumLocationCharacters = 200
+    static let maximumDateCharacters = 64
+    static let maximumNegativeTerms = QueryInputPolicy.maximumNegativeTerms
+    static let maximumNegativeTermCharacters = QueryInputPolicy.maximumNegativeTermScalars
+
+    static func bounded(_ value: String, maximumCharacters: Int) -> String {
+        QueryInputPolicy.bounded(
+            value,
+            maximumUnicodeScalars: maximumCharacters,
+            maximumUTF8Bytes: maximumCharacters * 4
+        )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 // Structured output from the on-device language model
 @available(iOS 26.0, *)
 @Generable
@@ -82,7 +99,15 @@ struct SmartQueryParser: Sendable {
             isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             let fallbackFormatter = ISO8601DateFormatter()
 
-            if let startStr = parsed.startDate, let endStr = parsed.endDate {
+            if let rawStart = parsed.startDate, let rawEnd = parsed.endDate {
+                let startStr = SmartQueryOutputPolicy.bounded(
+                    rawStart,
+                    maximumCharacters: SmartQueryOutputPolicy.maximumDateCharacters
+                )
+                let endStr = SmartQueryOutputPolicy.bounded(
+                    rawEnd,
+                    maximumCharacters: SmartQueryOutputPolicy.maximumDateCharacters
+                )
                 let start = isoFormatter.date(from: startStr) ?? fallbackFormatter.date(from: startStr)
                 let end = isoFormatter.date(from: endStr) ?? fallbackFormatter.date(from: endStr)
                 if let start, let end {
@@ -93,8 +118,16 @@ struct SmartQueryParser: Sendable {
             // Sanity check: if the original query is short and FM split it
             // across visual + location, it likely misunderstood a compound
             // proper noun (e.g. "Hoover Dam" -> visual="dam", location="Hoover")
-            var visualDesc = parsed.visualDescription
-            var locName = parsed.locationName
+            var visualDesc = SmartQueryOutputPolicy.bounded(
+                parsed.visualDescription,
+                maximumCharacters: SmartQueryOutputPolicy.maximumVisualCharacters
+            )
+            var locName = parsed.locationName.map {
+                SmartQueryOutputPolicy.bounded(
+                    $0,
+                    maximumCharacters: SmartQueryOutputPolicy.maximumLocationCharacters
+                )
+            }
             var landmarkRecombined = false
             let originalWordCount = query.trimmingCharacters(in: .whitespaces)
                 .split(separator: " ").count
@@ -141,21 +174,37 @@ struct SmartQueryParser: Sendable {
                 let fallbackHints = QueryParserFallback.parse(query: query)
                 locationHint = fallbackHints.locationHint
             }
+            locationHint = locationHint.map {
+                SmartQueryOutputPolicy.bounded(
+                    $0,
+                    maximumCharacters: SmartQueryOutputPolicy.maximumLocationCharacters
+                )
+            }
 
             #if DEBUG
-            logger.info("[SmartParser] FM visual='\(hasVisual ? visual : "a photo")', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), hasVisual=\(hasVisual)")
+            logger.info("[SmartParser] Parsed query; visual=\(hasVisual), location=\(locationHint != nil), date=\(dateRange != nil)")
             #endif
+
+            let negativeTerms = parsed.negativeTerms
+                .prefix(SmartQueryOutputPolicy.maximumNegativeTerms)
+                .map {
+                    SmartQueryOutputPolicy.bounded(
+                        $0,
+                        maximumCharacters: SmartQueryOutputPolicy.maximumNegativeTermCharacters
+                    )
+                }
+                .filter { !$0.isEmpty }
 
             return QueryHints(
                 textQuery: hasVisual ? visual : "a photo",
                 dateRange: dateRange,
                 locationHint: locationHint,
-                negativeTerms: parsed.negativeTerms,
+                negativeTerms: negativeTerms,
                 timeOfDayHours: timeOfDayHours,
                 hasVisualQuery: hasVisual
             )
         } catch {
-            logger.error("Foundation model parse failed: \(error.localizedDescription), falling back to regex")
+            logger.error("Foundation model parse failed: \(error.safeDiagnosticCode), falling back to regex")
             return QueryParserFallback.parse(query: query)
         }
     }
@@ -167,8 +216,15 @@ enum QueryParser {
     @available(iOS 26.0, *)
     private static let smartParser = SmartQueryParser()
 
-    static func parse(query: String) async -> QueryHints {
+    static func parse(
+        query: String,
+        featurePolicy: SearchFeaturePolicy = .basic
+    ) async -> QueryHints {
         let query = QueryInputPolicy.bounded(query)
+        guard featurePolicy.allowsAdvancedQueryFeatures else {
+            let text = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return QueryHints(textQuery: text.isEmpty ? "a photo" : text, hasVisualQuery: !text.isEmpty)
+        }
         if #available(iOS 26.0, *),
            smartParser.isAvailable {
             return await smartParser.parse(query: query)
@@ -177,7 +233,16 @@ enum QueryParser {
     }
 
     // Synchronous fallback for callers that can't await
-    static func parseSync(query: String) -> QueryHints {
-        QueryParserFallback.parse(query: query)
+    static func parseSync(
+        query: String,
+        featurePolicy: SearchFeaturePolicy = .basic
+    ) -> QueryHints {
+        guard featurePolicy.allowsAdvancedQueryFeatures else {
+            let text = QueryInputPolicy.bounded(query)
+                .lowercased()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return QueryHints(textQuery: text.isEmpty ? "a photo" : text, hasVisualQuery: !text.isEmpty)
+        }
+        return QueryParserFallback.parse(query: query)
     }
 }

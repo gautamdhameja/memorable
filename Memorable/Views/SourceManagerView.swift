@@ -7,6 +7,7 @@ struct SourceManagerView: View {
     @State private var sources: [PhotoSource] = []
     @State private var showFolderPicker = false
     @State private var showUpgrade = false
+    @State private var showIndexLimit = false
     @State private var deleteError: String?
     @ObservedObject private var proManager = ProManager.shared
 
@@ -74,20 +75,24 @@ struct SourceManagerView: View {
                     }
                     .onDelete { offsets in
                         let folderSources = sources.filter { $0.type == PhotoSourceType.folder.rawValue }
-                        for offset in offsets {
-                            let source = folderSources[offset]
-                            do {
-                                try database.deleteSource(source.id)
-                            } catch {
-                                deleteError = "Failed to delete \(source.name): \(error.localizedDescription)"
-                                logger.error("Failed to delete source \(source.id): \(error.localizedDescription)")
+                        let selectedSources = offsets.map { folderSources[$0] }
+                        Task {
+                            for source in selectedSources {
+                                do {
+                                    try await indexingService.deleteFolderSource(id: source.id)
+                                } catch {
+                                    deleteError = "Failed to delete \(source.name): \(error.localizedDescription)"
+                                    logger.error("Failed to delete a source: \(error.safeDiagnosticCode)")
+                                }
                             }
+                            await loadSources()
                         }
-                        loadSources()
                     }
 
                     Button(action: {
-                        if proManager.isPro {
+                        if indexingService.reachedDeviceIndexLimit {
+                            showIndexLimit = true
+                        } else if proManager.isPro {
                             showFolderPicker = true
                         } else {
                             showUpgrade = true
@@ -108,14 +113,12 @@ struct SourceManagerView: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .sheet(isPresented: $showFolderPicker) {
             FolderPickerView { url in
-                let name = url.lastPathComponent
-                    .filter { !$0.isNewline && $0 != "\0" }
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let name = FolderDisplayNamePolicy.sanitized(url.lastPathComponent)
                 indexingService.indexFolder(url: url, name: name)
                 showFolderPicker = false
             }
         }
-        .onAppear { loadSources() }
+        .task { await loadSources() }
         .sheet(isPresented: $showUpgrade) {
             UpgradeView()
         }
@@ -127,13 +130,24 @@ struct SourceManagerView: View {
         } message: {
             Text(deleteError ?? "")
         }
+        .alert("Index limit reached", isPresented: $showIndexLimit) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Memorable limits the on-device index to 8,000 photos and videos to protect device memory.")
+        }
+        .onChange(of: indexingService.reachedDeviceIndexLimit) { _, reached in
+            if reached { showIndexLimit = true }
+        }
     }
 
-    private func loadSources() {
+    private func loadSources() async {
         do {
-            sources = try database.listSources()
+            let db = database
+            sources = try await Task.detached(priority: .utility) {
+                try db.listSources()
+            }.value
         } catch {
-            logger.error("Failed to load sources: \(error.localizedDescription)")
+            logger.error("Failed to load sources: \(error.safeDiagnosticCode)")
             sources = []
         }
     }

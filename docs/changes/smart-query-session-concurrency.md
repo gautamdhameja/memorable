@@ -1,6 +1,6 @@
 # Smart query session concurrency
 
-## Defect
+## Problem
 
 Swift 6 migration exposed a second pre-existing concurrency defect in the smart
 query path. `QueryParser` stores one process-wide `SmartQueryParser`, which in
@@ -20,7 +20,7 @@ current catch block treats that like any other model failure and falls back to
 the regex parser, so background validation can silently degrade a user's smart
 query parsing on iOS 26.
 
-## Fix
+## Resolution
 
 `SmartQueryParser` now retains only a sendable responder factory. Every parse
 creates its own `LanguageModelSession`-backed responder, so overlapping searches

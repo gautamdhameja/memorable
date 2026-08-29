@@ -28,6 +28,17 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPastedQueryIsBoundedBeforeItCanBeStoredOrSearched() {
+        let model = makeModel(search: { _ in Self.response(ids: []) })
+        let oversized = String(repeating: "x", count: QueryInputPolicy.maximumCharacterCount + 1_000)
+
+        model.setQueryText(oversized)
+
+        XCTAssertEqual(model.queryText.count, QueryInputPolicy.maximumCharacterCount)
+        XCTAssertEqual(model.normalizedQuery.count, QueryInputPolicy.maximumCharacterCount)
+    }
+
+    @MainActor
     func testOnlyNewerSubmittedSearchSupersedesOlderSearch() async throws {
         let searcher = ControlledSearcher()
         let model = makeModel(search: searcher.search)
@@ -51,6 +62,24 @@ final class SearchViewModelTests: XCTestCase {
 
         XCTAssertEqual(model.results.map(\.id), ["second-result"])
         XCTAssertEqual(model.lastSearchedQuery, "second")
+    }
+
+    @MainActor
+    func testMemoryPressureCancelsSearchAndRejectsLateResults() async throws {
+        let searcher = ControlledSearcher()
+        let model = makeModel(search: searcher.search)
+        model.setQueryText("large search")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "large search")
+
+        model.handleMemoryPressure()
+        await searcher.complete(query: "large search", with: response(id: "late-result"))
+        await Task.yield()
+
+        XCTAssertFalse(model.isSearching)
+        XCTAssertNil(model.activeSearchID)
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertTrue(model.lastResults.isEmpty)
     }
 
     @MainActor
@@ -131,6 +160,28 @@ final class SearchViewModelTests: XCTestCase {
     @MainActor
     func testSortModeStorageKeyRemainsStable() {
         XCTAssertEqual(SearchViewModel.sortModeStorageKey, "searchSortMode")
+    }
+
+    func testForegroundValidationPartitionsPhotoKitAndFolderResults() {
+        let candidates = [
+            Self.result(id: "photo-valid"),
+            Self.result(id: "photo-missing"),
+            Self.folderResult(id: "folder-valid", sourceId: "folder-a"),
+            Self.folderResult(id: "folder-missing", sourceId: "folder-b"),
+        ]
+        var checkedFolderIDs: [String] = []
+
+        let validIDs = SearchResultForegroundValidator.validResultIDs(
+            candidates: candidates,
+            validPhotoKitIdentifiers: ["photo-valid"],
+            isFolderResultAccessible: { result in
+                checkedFolderIDs.append(result.id)
+                return result.id == "folder-valid"
+            }
+        )
+
+        XCTAssertEqual(validIDs, ["photo-valid", "folder-valid"])
+        XCTAssertEqual(checkedFolderIDs, ["folder-valid", "folder-missing"])
     }
 
     @MainActor
@@ -232,6 +283,19 @@ final class SearchViewModelTests: XCTestCase {
             creationDate: date,
             isVideo: isVideo,
             bestFramePosition: nil
+        )
+    }
+
+    private static func folderResult(id: String, sourceId: String) -> SearchResult {
+        SearchResult(
+            id: id,
+            score: 0.9,
+            localIdentifier: "folder:\(sourceId):\(id).jpg",
+            creationDate: nil,
+            isVideo: false,
+            bestFramePosition: nil,
+            sourceId: sourceId,
+            filePath: "/selected/\(id).jpg"
         )
     }
 }

@@ -27,7 +27,10 @@ final class SearchEvaluationTests: XCTestCase {
         let range = DateRange(start: Date(timeIntervalSince1970: 500), end: Date(timeIntervalSince1970: 2_000))
 
         try engine.loadIndex()
-        let response = try engine.hybridSearch(hints: hints(text: "dog", dateRange: range))
+        let response = try engine.hybridSearch(
+            hints: hints(text: "dog", dateRange: range),
+            featurePolicy: .pro
+        )
 
         XCTAssertEqual(response.results.map(\.id), ["in-range"])
     }
@@ -40,7 +43,10 @@ final class SearchEvaluationTests: XCTestCase {
         let engine = SearchEngine(textEncoder: FakeTextEncoder(["Paris": floatVector(first: 0)]), database: database)
 
         try engine.loadIndex()
-        let response = try engine.hybridSearch(hints: hints(text: "Paris", locationHint: "Paris", hasVisualQuery: false))
+        let response = try engine.hybridSearch(
+            hints: hints(text: "Paris", locationHint: "Paris", hasVisualQuery: false),
+            featurePolicy: .pro
+        )
 
         XCTAssertEqual(response.results.map(\.id), ["paris"])
     }
@@ -53,7 +59,10 @@ final class SearchEvaluationTests: XCTestCase {
         let engine = SearchEngine(textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]), database: database)
 
         try engine.loadIndex()
-        let response = try engine.hybridSearch(hints: hints(text: "dog", locationHint: "Berlin"))
+        let response = try engine.hybridSearch(
+            hints: hints(text: "dog", locationHint: "Berlin"),
+            featurePolicy: .pro
+        )
 
         XCTAssertTrue(response.results.isEmpty)
         XCTAssertEqual(response.fallbackResults.map(\.id), ["berlin-distractor"])
@@ -71,7 +80,10 @@ final class SearchEvaluationTests: XCTestCase {
 
         try engine.loadIndex()
         let positive = try engine.hybridSearch(hints: hints(text: "dog"))
-        let negative = try engine.hybridSearch(hints: hints(text: "dog", negativeTerms: ["cat"]))
+        let negative = try engine.hybridSearch(
+            hints: hints(text: "dog", negativeTerms: ["cat"]),
+            featurePolicy: .pro
+        )
 
         XCTAssertLessThan(negative.results[0].score, positive.results[0].score)
     }

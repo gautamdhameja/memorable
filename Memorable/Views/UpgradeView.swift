@@ -22,20 +22,20 @@ struct UpgradeView: View {
                         .foregroundStyle(Celestial.Colors.amber)
                         .padding(.top, 34)
 
-                    Text("Index your whole\nlibrary, once")
+                    Text("Search more of\nyour library")
                         .font(.title.bold())
                         .tracking(-0.7)
                         .foregroundStyle(Celestial.Colors.onSurface)
                         .padding(.top, 16)
 
-                    Text("Move beyond the free 500-item index and keep every new memory searchable.")
+                    Text("Move beyond the free 500-item index and make up to 8,000 photos and videos searchable.")
                         .font(.body)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         .lineSpacing(5)
                         .padding(.top, 14)
 
                     VStack(spacing: 0) {
-                        proFeature("Unlimited indexing", detail: "Your whole library and everything you add later")
+                        proFeature("Larger index", detail: "Search up to 8,000 photos and videos")
                         proFeature("Find similar", detail: "Start from a photo instead of a description")
                         proFeature("Negative search", detail: "Leave things out, like “beach -crowds”")
                         proFeature("Folder sources", detail: "Index photos outside the Photos library")

@@ -6,17 +6,46 @@ import UIKit
 import SwiftUI
 import Photos
 
+extension Error {
+    /// Returns a diagnostic category without user-controlled description text.
+    var safeDiagnosticCode: String {
+        let error = self as NSError
+        return "\(error.domain)#\(error.code)"
+    }
+}
+
+enum CancellableDetachedOperation {
+    static func run<Value: Sendable>(
+        priority: TaskPriority = .utility,
+        _ operation: @escaping @Sendable () throws -> Value
+    ) async throws -> Value {
+        let task = Task.detached(priority: priority) {
+            try Task.checkCancellation()
+            return try operation()
+        }
+        let value = try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        try Task.checkCancellation()
+        return value
+    }
+}
+
 // MARK: - L2 Normalization
 
 extension Array where Element == Float {
     /// L2-normalize the vector in place. After normalization, ||self|| = 1.
-    mutating func l2Normalize() {
+    @discardableResult
+    mutating func l2Normalize() -> Bool {
+        guard !isEmpty, allSatisfy(\.isFinite) else { return false }
         var norm: Float = 0
         vDSP_svesq(self, 1, &norm, vDSP_Length(count))
         norm = sqrt(norm)
-        if norm > 0 {
-            vDSP_vsdiv(self, 1, &norm, &self, 1, vDSP_Length(count))
-        }
+        guard norm.isFinite, norm > 0 else { return false }
+        vDSP_vsdiv(self, 1, &norm, &self, 1, vDSP_Length(count))
+        return allSatisfy(\.isFinite)
     }
 }
 
@@ -67,35 +96,218 @@ extension DateFormatter {
     }()
 }
 
+enum MemoryPressureReleasePolicy {
+    static func release(_ image: inout UIImage?) {
+        image = nil
+    }
+
+    static func release<Resource>(_ resource: inout Resource?) {
+        resource = nil
+    }
+}
+
+enum ImageLoadGenerationPolicy {
+    static func acceptsCompletion(
+        startedGeneration: UInt,
+        currentGeneration: UInt,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && startedGeneration == currentGeneration
+    }
+}
+
+enum VideoPlaybackRequestPolicy {
+    static func acceptsCompletion(
+        startedGeneration: UInt,
+        currentGeneration: UInt,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && startedGeneration == currentGeneration
+    }
+}
+
 // MARK: - Video Playback
 
-/// Present a native AVPlayerViewController from anywhere in the app.
-func presentVideoPlayer(for phAsset: PHAsset) {
-    Task {
-        guard let playbackAsset = await PhotoLibrary.loadVideoPlaybackAsset(for: phAsset) else {
+@MainActor
+enum PrivateVideoPlaybackConfiguration {
+    static func apply(to player: AVPlayer, controller: AVPlayerViewController) {
+        player.allowsExternalPlayback = false
+        player.usesExternalPlaybackWhileExternalScreenIsActive = false
+        controller.allowsPictureInPicturePlayback = false
+    }
+
+    static func tearDown(
+        player: AVPlayer,
+        deactivateAudio: () throws -> Void
+    ) rethrows {
+        player.pause()
+        try deactivateAudio()
+    }
+}
+
+@MainActor
+private final class PrivatePlayerViewController: AVPlayerViewController {
+    var onPlaybackEnded: (() -> Void)?
+    private var didEndPlayback = false
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        guard !didEndPlayback else { return }
+        didEndPlayback = true
+        onPlaybackEnded?()
+        onPlaybackEnded = nil
+    }
+}
+
+@MainActor
+final class VideoPlaybackCoordinator {
+    static let shared = VideoPlaybackCoordinator()
+
+    private var loadTask: Task<Void, Never>?
+    private var requestGeneration: UInt = 0
+    private var activeController: PrivatePlayerViewController?
+
+    func present(_ asset: PHAsset) {
+        requestGeneration &+= 1
+        let generation = requestGeneration
+        loadTask?.cancel()
+        loadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.dismissActivePlayback()
+            guard VideoPlaybackRequestPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: self.requestGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            guard let playbackAsset = await PhotoLibrary.loadVideoPlaybackAsset(for: asset) else {
+                return
+            }
+            guard VideoPlaybackRequestPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: self.requestGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            self.present(playbackAsset, generation: generation)
+        }
+    }
+
+    func cancelPendingPresentation() {
+        requestGeneration &+= 1
+        loadTask?.cancel()
+        loadTask = nil
+    }
+
+    func cancelForMemoryPressure() {
+        cancelPendingPresentation()
+        Task { @MainActor [weak self] in
+            await self?.dismissActivePlayback()
+        }
+    }
+
+    private func present(_ playbackAsset: PhotoLibrary.VideoPlaybackAsset, generation: UInt) {
+        guard VideoPlaybackRequestPolicy.acceptsCompletion(
+            startedGeneration: generation,
+            currentGeneration: requestGeneration,
+            isCancelled: Task.isCancelled
+        ), let presenter = Self.presentationController(),
+           presenter.viewIfLoaded?.window != nil,
+           let player = playbackAsset.makePlayer() else {
             return
         }
 
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        let controller = PrivatePlayerViewController()
+        PrivateVideoPlaybackConfiguration.apply(to: player, controller: controller)
+        controller.player = player
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            logger.error("Failed to configure audio playback: \(error.safeDiagnosticCode)")
+            try? AVAudioSession.sharedInstance().setActive(
+                false,
+                options: .notifyOthersOnDeactivation
+            )
+            return
+        }
 
-        await MainActor.run {
-            guard let player = playbackAsset.makePlayer() else { return }
-            let controller = AVPlayerViewController()
-            controller.player = player
+        activeController = controller
+        controller.onPlaybackEnded = { [weak self, weak controller] in
+            guard let self, let controller else { return }
+            self.finishPlayback(controller)
+        }
+        presenter.present(controller, animated: true) { [weak self, weak controller] in
+            guard let self, let controller,
+                  self.activeController === controller,
+                  VideoPlaybackRequestPolicy.acceptsCompletion(
+                    startedGeneration: generation,
+                    currentGeneration: self.requestGeneration,
+                    isCancelled: false
+                  ) else {
+                if let controller {
+                    self?.finishPlayback(controller)
+                }
+                return
+            }
+            player.play()
+        }
+        loadTask = nil
+    }
 
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-               let rootVC = windowScene.windows.first?.rootViewController {
-                var topVC = rootVC
-                while let presented = topVC.presentedViewController {
-                    topVC = presented
-                }
-                topVC.present(controller, animated: true) {
-                    player.play()
-                }
+    private func dismissActivePlayback() async {
+        guard let controller = activeController else { return }
+        finishPlayback(controller)
+        guard controller.presentingViewController != nil else { return }
+        await withCheckedContinuation { continuation in
+            controller.dismiss(animated: true) {
+                continuation.resume()
             }
         }
     }
+
+    private func finishPlayback(_ controller: PrivatePlayerViewController) {
+        guard activeController === controller else { return }
+        controller.onPlaybackEnded = nil
+        if let player = controller.player {
+            do {
+                try PrivateVideoPlaybackConfiguration.tearDown(player: player) {
+                    try AVAudioSession.sharedInstance().setActive(
+                        false,
+                        options: .notifyOthersOnDeactivation
+                    )
+                }
+            } catch {
+                logger.error("Failed to release audio playback: \(error.safeDiagnosticCode)")
+            }
+        }
+        controller.player = nil
+        activeController = nil
+    }
+
+    private static func presentationController() -> UIViewController? {
+        guard let windowScene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }),
+              let root = windowScene.windows.first(where: \.isKeyWindow)?.rootViewController else {
+            return nil
+        }
+        var presenter = root
+        while let presented = presenter.presentedViewController,
+              !presented.isBeingDismissed {
+            presenter = presented
+        }
+        return presenter
+    }
+}
+
+/// Presents one private, local-only video player at a time.
+@MainActor
+func presentVideoPlayer(for phAsset: PHAsset) {
+    VideoPlaybackCoordinator.shared.present(phAsset)
+}
+
+@MainActor
+func cancelPendingVideoPlayerPresentation() {
+    VideoPlaybackCoordinator.shared.cancelPendingPresentation()
 }
 
 // MARK: - Haptics
@@ -123,5 +335,25 @@ extension Array {
         stride(from: 0, to: count, by: size).map {
             Array(self[$0..<Swift.min($0 + size, count)])
         }
+    }
+}
+enum LocalOnlyStorage {
+    static func prepareDirectory(at url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true
+        )
+        try excludeFromBackup(url)
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUnlessOpen],
+            ofItemAtPath: url.path
+        )
+    }
+
+    static func excludeFromBackup(_ url: URL) throws {
+        var protectedURL = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try protectedURL.setResourceValues(values)
     }
 }

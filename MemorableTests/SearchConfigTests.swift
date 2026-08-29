@@ -1,7 +1,22 @@
+import CoreLocation
 import XCTest
 @testable import Memorable
 
 final class SearchConfigTests: XCTestCase {
+
+    func testReverseGeocoderCacheHasAFixedMemoryBound() {
+        XCTAssertGreaterThan(ReverseGeocoder.cacheEntryLimit, 0)
+        XCTAssertLessThanOrEqual(ReverseGeocoder.cacheEntryLimit, 4_096)
+    }
+
+    func testLocationCoordinatePolicyRejectsMalformedGPS() {
+        XCTAssertTrue(LocationCoordinatePolicy.isValid(latitude: 90, longitude: 180))
+        XCTAssertFalse(LocationCoordinatePolicy.isValid(latitude: .nan, longitude: 0))
+        XCTAssertFalse(LocationCoordinatePolicy.isValid(latitude: .infinity, longitude: 0))
+        XCTAssertFalse(LocationCoordinatePolicy.isValid(latitude: 90.01, longitude: 0))
+        XCTAssertFalse(LocationCoordinatePolicy.isValid(latitude: 0, longitude: -180.01))
+        XCTAssertFalse(LocationCoordinatePolicy.isValidOrAbsent(latitude: 1, longitude: nil))
+    }
 
     // MARK: - Threshold Sanity
 
@@ -97,5 +112,49 @@ final class SearchConfigTests: XCTestCase {
         XCTAssertEqual(first.count, DuplicateFinder.maximumRetainedPairs)
         XCTAssertEqual(first.map(\.id), second.map(\.id))
         XCTAssertTrue(zip(first, first.dropFirst()).allSatisfy { $0.similarity >= $1.similarity })
+    }
+
+    @MainActor
+    func testReverseGeocoderCancelsSubmittedRequestWithParentTask() async {
+        let backend = BlockingLocationGeocoder()
+        let reverseGeocoder = ReverseGeocoder(
+            geocoder: backend,
+            throttleNanoseconds: 0
+        )
+        let task = Task {
+            await reverseGeocoder.reverseGeocode(latitude: 37.3317, longitude: -122.0301)
+        }
+
+        for _ in 0..<2_000 where !backend.hasStarted {
+            await Task.yield()
+        }
+        XCTAssertTrue(backend.hasStarted)
+        task.cancel()
+        _ = await task.value
+
+        XCTAssertEqual(backend.cancelCount, 1)
+    }
+}
+
+@MainActor
+private final class BlockingLocationGeocoder: LocationGeocoding {
+    private(set) var hasStarted = false
+    private(set) var cancelCount = 0
+    private var continuation: CheckedContinuation<[CLPlacemark], Error>?
+
+    func reverseGeocode(
+        _ location: CLLocation,
+        preferredLocale: Locale
+    ) async throws -> [CLPlacemark] {
+        hasStarted = true
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func cancel() {
+        cancelCount += 1
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
     }
 }

@@ -1,10 +1,10 @@
 ---
 date: 2026-06-06
 topic: performance-size-search-optimization
-title: Performance, Model Size, and Search Quality Optimization
+title: Performance, model size, and search quality optimization
 ---
 
-# Performance, Model Size, and Search Quality Optimization
+# Performance, model size, and search quality optimization
 
 ## Summary
 
@@ -12,7 +12,7 @@ Memorable should become usable before every AI subsystem is fully warmed, reduce
 
 ---
 
-## Problem Frame
+## Problem frame
 
 The current app treats AI readiness as launch readiness. Startup waits for the image encoder, the much larger text encoder, caption prompt preparation, and index loading before the main app appears. That makes the first visible experience depend on the slowest model and index path, even though several useful surfaces can run from lightweight database metadata.
 
@@ -22,7 +22,7 @@ Search quality has a different risk profile. Smaller or lazy-loaded models can i
 
 ---
 
-## Key Decisions
+## Key decisions
 
 - **Optimize perceived launch before total readiness.** The app shell should appear once authorization and lightweight state are ready; semantic search can warm in the background.
 - **Separate delivery size from model compression.** On-Demand Resources or model download changes solve initial install size, while Core ML compression solves local storage and load cost.
@@ -74,7 +74,7 @@ Search quality has a different risk profile. Smaller or lazy-loaded models can i
 
 ---
 
-## Key Flows
+## Key flows
 
 - F1. Cold launch with an existing index
   - **Trigger:** The user opens the app after onboarding and photo authorization.
@@ -114,7 +114,7 @@ flowchart TB
 
 ---
 
-## Acceptance Examples
+## Acceptance examples
 
 - AE1. Cold launch no longer waits for the text model
   - **Covers:** R1, R2, R3.
@@ -148,7 +148,7 @@ flowchart TB
 
 ---
 
-## Success Criteria
+## Success criteria
 
 - The app shell reaches first visible interaction within a measured target on supported devices without waiting for both Core ML encoders.
 - The initial install payload excludes large model resources if the chosen strategy is On-Demand Resources or downloaded models.
@@ -159,7 +159,7 @@ flowchart TB
 
 ---
 
-## Scope Boundaries
+## Scope boundaries
 
 **Deferred for later**
 
@@ -175,7 +175,7 @@ flowchart TB
 
 ---
 
-## Dependencies and Assumptions
+## Dependencies and assumptions
 
 - The app continues to target iOS 17 and A14-or-newer devices unless product requirements change.
 - The current text encoder is the largest model-size target based on local model folder sizes.
@@ -185,7 +185,7 @@ flowchart TB
 
 ---
 
-## Outstanding Questions
+## Outstanding questions
 
 **Resolve Before Planning**
 
@@ -201,7 +201,7 @@ flowchart TB
 
 ---
 
-## Sources and Research
+## Sources and research
 
 - `Memorable/MemorableApp.swift` currently loads image and text encoders, prepares captions, then loads the index during app initialization.
 - `Memorable/Views/ContentView.swift` gates the main tab view on `isModelLoaded`.

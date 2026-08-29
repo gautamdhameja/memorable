@@ -1,5 +1,21 @@
 import SwiftUI
-import Photos
+
+enum SimilaritySearchOperation {
+    static func run(
+        operation: @escaping @Sendable () async -> [SearchResult]
+    ) async -> [SearchResult] {
+        let searchTask: Task<[SearchResult], Never> = Task.detached(priority: .userInitiated) {
+            guard !Task.isCancelled else { return [] }
+            let results = await operation()
+            return Task.isCancelled ? [] : results
+        }
+        return await withTaskCancellationHandler {
+            await searchTask.value
+        } onCancel: {
+            searchTask.cancel()
+        }
+    }
+}
 
 struct SearchResultsViewer: View {
     let initialResult: SearchResult
@@ -10,6 +26,9 @@ struct SearchResultsViewer: View {
     @State private var displayedResults: [SearchResult] = []
     @State private var showControls: Bool = true
     @State private var showUpgrade = false
+    @State private var findSimilarTask: Task<Void, Never>?
+    @State private var findSimilarGeneration = 0
+    @State private var isFindingSimilar = false
     @ObservedObject private var proManager = ProManager.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -76,14 +95,7 @@ struct SearchResultsViewer: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.white.opacity(0.82))
                         }
-                        Spacer()
-                        Button(action: { shareCurrentPhoto() }) {
-                            Image(systemName: "ellipsis")
-                                .font(.body.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                        }
-                        .accessibilityLabel("Share photo")
+                        Spacer().frame(width: 44)
                     }
                     .padding(.horizontal, 22)
                     .padding(.top, 6)
@@ -100,20 +112,20 @@ struct SearchResultsViewer: View {
                             }
 
                             HStack {
-                                Button(action: { shareCurrentPhoto() }) {
-                                    Image(systemName: "square.and.arrow.up")
-                                        .font(.title3)
-                                        .foregroundStyle(.white)
-                                        .frame(width: 44, height: 44)
-                                }
-                                .accessibilityLabel("Share photo")
                                 Spacer()
-                                if searchEngine != nil {
+                                if searchEngine != nil, result.supportsFindSimilar {
                                     Button(action: handleFindSimilar) {
-                                        Text(proManager.isPro ? "Find similar" : "Find similar · Pro")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(Celestial.Colors.amber)
-                                            .frame(minHeight: 44)
+                                        HStack(spacing: 8) {
+                                            if isFindingSimilar {
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                                    .tint(Celestial.Colors.amber)
+                                            }
+                                            Text(proManager.isPro ? "Find similar" : "Find similar · Pro")
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(Celestial.Colors.amber)
+                                        }
+                                        .frame(minHeight: 44)
                                     }
                                 }
                             }
@@ -136,36 +148,9 @@ struct SearchResultsViewer: View {
                     }
                 }
         )
-    }
-
-    private func shareCurrentPhoto() {
-        guard currentIndex < displayedResults.count else { return }
-        let result = displayedResults[currentIndex]
-        guard let asset = PhotoLibrary.getAsset(by: result.localIdentifier) else { return }
-
-        Task {
-            let item: Any
-            if let url = await PhotoLibrary.getQuickLookURL(for: asset) {
-                item = url
-            } else if let image = await PhotoLibrary.loadImage(
-                for: asset,
-                targetSize: shareFallbackTargetSize()
-            ) {
-                item = image
-            } else {
-                return
-            }
-
-            await MainActor.run {
-                let activityVC = UIActivityViewController(activityItems: [item], applicationActivities: nil)
-                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                   let rootVC = windowScene.windows.first?.rootViewController {
-                    var topVC = rootVC
-                    while let presented = topVC.presentedViewController { topVC = presented }
-                    activityVC.popoverPresentationController?.sourceView = topVC.view
-                    topVC.present(activityVC, animated: true)
-                }
-            }
+        .onDisappear(perform: cancelFindSimilar)
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            cancelFindSimilar()
         }
     }
 
@@ -175,19 +160,41 @@ struct SearchResultsViewer: View {
             return
         }
         guard let searchEngine,
-              currentIndex < displayedResults.count else { return }
-        let similar = searchEngine.findSimilar(photoId: displayedResults[currentIndex].id)
-        let photoResults = similar.filter { !$0.isVideo }
-        guard !photoResults.isEmpty else { return }
-        withAnimation(.easeInOut(duration: 0.2)) {
-            displayedResults = photoResults
-            currentIndex = 0
+              currentIndex < displayedResults.count,
+              displayedResults[currentIndex].supportsFindSimilar else { return }
+
+        findSimilarTask?.cancel()
+        findSimilarGeneration += 1
+        let generation = findSimilarGeneration
+        let photoID = displayedResults[currentIndex].id
+        isFindingSimilar = true
+
+        findSimilarTask = Task { @MainActor in
+            let similar = await SimilaritySearchOperation.run {
+                searchEngine.findSimilar(photoId: photoID)
+            }
+            guard !Task.isCancelled,
+                  generation == findSimilarGeneration else {
+                return
+            }
+
+            let photoResults = similar.filter { !$0.isVideo }
+            if !photoResults.isEmpty {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    displayedResults = photoResults
+                    currentIndex = 0
+                }
+            }
+            isFindingSimilar = false
+            findSimilarTask = nil
         }
     }
 
-    private func shareFallbackTargetSize() -> CGSize {
-        let screen = UIScreen.main.bounds.size
-        let scale = UIScreen.main.scale
-        return CGSize(width: screen.width * scale * 2, height: screen.height * scale * 2)
+    private func cancelFindSimilar() {
+        findSimilarGeneration += 1
+        findSimilarTask?.cancel()
+        findSimilarTask = nil
+        isFindingSimilar = false
     }
+
 }

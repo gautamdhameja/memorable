@@ -1,11 +1,9 @@
 import SwiftUI
-import Photos
-import AVKit
 
 struct OnThisDayView: View {
     let captionService: PhotoCaptionService
     @Environment(\.database) private var database
-    @State private var yearGroups: [(year: Int, ids: [String])] = []
+    @State private var yearGroups: [(year: Int, photos: [IndexedPhotoReference])] = []
     @State private var isLoading = true
     @State private var showSlideshow = false
     @State private var indexedCount = 0
@@ -45,7 +43,7 @@ struct OnThisDayView: View {
                             .padding(.horizontal)
                         } else {
                             ZStack(alignment: .bottomLeading) {
-                                MemoryHeroImage(localIdentifier: yearGroups.first?.ids.first)
+                                MemoryHeroImage(photo: yearGroups.first?.photos.first)
                                     .frame(height: 400)
                                 LinearGradient(
                                     colors: [.black.opacity(0.12), Celestial.Colors.background],
@@ -64,7 +62,7 @@ struct OnThisDayView: View {
                                         .tracking(-1)
                                         .foregroundStyle(Celestial.Colors.onSurface)
                                         .padding(.top, 10)
-                                    Text("\(yearGroups.reduce(0) { $0 + $1.ids.count }) photos across \(yearGroups.count) years")
+                                    Text("\(yearGroups.reduce(0) { $0 + $1.photos.count }) photos across \(yearGroups.count) years")
                                         .font(.subheadline)
                                         .foregroundStyle(Celestial.Colors.secondary)
                                         .padding(.top, 8)
@@ -93,17 +91,17 @@ struct OnThisDayView: View {
                                                 .tracking(-0.6)
                                                 .foregroundStyle(Celestial.Colors.onSurface)
                                             Spacer()
-                                            Text("\(group.ids.count) photos")
+                                            Text("\(group.photos.count) photos")
                                                 .font(.caption)
                                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                         }
                                         .padding(.horizontal, 26)
 
                                         MasonryGrid(
-                                            group.ids.prefix(20).map { IdentifiedString(id: $0) },
+                                            Array(group.photos.prefix(20)),
                                             spacing: 5
-                                        ) { item in
-                                            MemoryThumbnail(localIdentifier: item.id, groupIds: group.ids)
+                                        ) { photo in
+                                            MemoryThumbnail(photo: photo, groupPhotos: group.photos)
                                         }
                                         .padding(.horizontal, 5)
                                     }
@@ -122,11 +120,20 @@ struct OnThisDayView: View {
             }
         }
         .task {
-            indexedCount = (try? database.indexedCount()) ?? 0
             do {
-                yearGroups = try database.onThisDayPhotos()
+                let database = database
+                let snapshot = try await CancellableDetachedOperation.run {
+                    (
+                        hasIndexedPhotos: try database.hasIndexedPhotos(),
+                        yearGroups: try database.onThisDayPhotos()
+                    )
+                }
+                indexedCount = snapshot.hasIndexedPhotos ? 1 : 0
+                yearGroups = snapshot.yearGroups
+            } catch is CancellationError {
+                return
             } catch {
-                logger.error("On This Day error: \(error.localizedDescription)")
+                logger.error("On This Day error: \(error.safeDiagnosticCode)")
             }
             isLoading = false
         }
@@ -134,8 +141,10 @@ struct OnThisDayView: View {
 }
 
 private struct MemoryHeroImage: View {
-    let localIdentifier: String?
+    let photo: IndexedPhotoReference?
     @State private var image: UIImage?
+    @State private var imageLoadGeneration: UInt = 0
+    @State private var imageLoadTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -148,10 +157,31 @@ private struct MemoryHeroImage: View {
             }
         }
         .clipped()
-        .task(id: localIdentifier) {
-            guard let localIdentifier,
-                  let asset = PhotoLibrary.getAsset(by: localIdentifier) else { return }
-            image = await PhotoLibrary.loadThumbnail(for: asset, maxDimension: 1200)
+        .task(id: photo?.id) {
+            guard let photo else { return }
+            imageLoadTask?.cancel()
+            let task = Task { @MainActor in
+                imageLoadGeneration &+= 1
+                let generation = imageLoadGeneration
+                let loaded = await PhotoLibrary.loadImage(
+                    for: photo.searchResult,
+                    targetSize: CGSize(width: 1200, height: 1200)
+                )
+                guard ImageLoadGenerationPolicy.acceptsCompletion(
+                    startedGeneration: generation,
+                    currentGeneration: imageLoadGeneration,
+                    isCancelled: Task.isCancelled
+                ) else { return }
+                image = loaded
+            }
+            imageLoadTask = task
+            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&image)
         }
     }
 }
@@ -159,9 +189,11 @@ private struct MemoryHeroImage: View {
 // MARK: - Memory Thumbnail
 
 struct MemoryThumbnail: View {
-    let localIdentifier: String
-    var groupIds: [String] = []
+    let photo: IndexedPhotoReference
+    var groupPhotos: [IndexedPhotoReference] = []
     @State private var thumbnail: UIImage?
+    @State private var imageLoadGeneration: UInt = 0
+    @State private var imageLoadTask: Task<Void, Never>?
     @State private var selectedResult: SearchResult?
     @State private var creationDate: Date?
 
@@ -198,29 +230,38 @@ struct MemoryThumbnail: View {
         .fullScreenCover(item: $selectedResult) { result in
             SearchResultsViewer(
                 initialResult: result,
-                allResults: groupIds.map { id in
-                    SearchResult(id: id, score: 1.0, localIdentifier: id, creationDate: nil, isVideo: false, bestFramePosition: nil)
-                }
+                allResults: groupPhotos.map(\.searchResult)
             )
         }
         .task {
-            if let asset = PhotoLibrary.getAsset(by: localIdentifier) {
-                thumbnail = await PhotoLibrary.loadThumbnail(for: asset)
-                creationDate = asset.creationDate
+            imageLoadTask?.cancel()
+            let task = Task { @MainActor in
+                imageLoadGeneration &+= 1
+                let generation = imageLoadGeneration
+                let loaded = await PhotoLibrary.loadImage(
+                    for: photo.searchResult,
+                    targetSize: CGSize(width: 400, height: 400)
+                )
+                guard ImageLoadGenerationPolicy.acceptsCompletion(
+                    startedGeneration: generation,
+                    currentGeneration: imageLoadGeneration,
+                    isCancelled: Task.isCancelled
+                ) else { return }
+                thumbnail = loaded
+                creationDate = photo.creationDate
             }
+            imageLoadTask = task
+            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&thumbnail)
         }
     }
 
     private func handleTap() {
-        guard let asset = PhotoLibrary.getAsset(by: localIdentifier) else { return }
-
-        if asset.mediaType == .video {
-            presentVideoPlayer(for: asset)
-        } else {
-            selectedResult = SearchResult(
-                id: localIdentifier, score: 1.0, localIdentifier: localIdentifier,
-                creationDate: creationDate, isVideo: false, bestFramePosition: nil
-            )
-        }
+        selectedResult = photo.searchResult
     }
 }

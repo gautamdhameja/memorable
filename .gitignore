@@ -12,7 +12,11 @@ DerivedData/
 ## DS_Store
 .DS_Store
 
-## Core ML models (downloaded at runtime via ODR)
+## Python caches
+__pycache__/
+*.py[cod]
+
+## Compiled Core ML models (local build inputs verified by scripts/model_manifest.json)
 Memorable/Models/*.mlmodelc/
 Memorable/Models/*.mlmodelc/**
 

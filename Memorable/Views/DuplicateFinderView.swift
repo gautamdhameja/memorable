@@ -96,7 +96,9 @@ struct DuplicateFinderView: View {
         let db = database
         scanTask = Task.detached(priority: .userInitiated) {
             do {
-                let data = try db.loadAllEmbeddings()
+                let data = try db.loadEmbeddingsForDuplicateScan(
+                    limit: IndexingConfig.maxDuplicateScanPhotos
+                )
                 guard !Task.isCancelled else { return }
                 let found = DuplicateFinder.findDuplicates(
                     ids: data.ids,
@@ -113,7 +115,7 @@ struct DuplicateFinderView: View {
                 }
             } catch {
                 guard !Task.isCancelled else { return }
-                logger.error("Duplicate scan failed: \(error.localizedDescription)")
+                logger.error("Duplicate scan failed: \(error.safeDiagnosticCode)")
                 await MainActor.run {
                     isScanning = false
                     scanComplete = true
@@ -141,6 +143,8 @@ struct DuplicatePairRow: View {
     @Environment(\.database) private var database
     @State private var image1: UIImage?
     @State private var image2: UIImage?
+    @State private var imageLoadGeneration: UInt = 0
+    @State private var imageLoadTask: Task<Void, Never>?
     @State private var showDeleteConfirm = false
     @State private var deleteTarget: String?
     @State private var isDeleting = false
@@ -190,12 +194,38 @@ struct DuplicatePairRow: View {
         }
         .padding(.vertical, 8)
         .task {
-            if let asset = PhotoLibrary.getAsset(by: pair.photo1LocalId) {
-                image1 = await PhotoLibrary.loadThumbnail(for: asset)
+            imageLoadTask?.cancel()
+            let task = Task { @MainActor in
+                imageLoadGeneration &+= 1
+                let generation = imageLoadGeneration
+                if let asset = PhotoLibrary.getAsset(by: pair.photo1LocalId) {
+                    let loaded = await PhotoLibrary.loadThumbnail(for: asset)
+                    guard ImageLoadGenerationPolicy.acceptsCompletion(
+                        startedGeneration: generation,
+                        currentGeneration: imageLoadGeneration,
+                        isCancelled: Task.isCancelled
+                    ) else { return }
+                    image1 = loaded
+                }
+                if let asset = PhotoLibrary.getAsset(by: pair.photo2LocalId) {
+                    let loaded = await PhotoLibrary.loadThumbnail(for: asset)
+                    guard ImageLoadGenerationPolicy.acceptsCompletion(
+                        startedGeneration: generation,
+                        currentGeneration: imageLoadGeneration,
+                        isCancelled: Task.isCancelled
+                    ) else { return }
+                    image2 = loaded
+                }
             }
-            if let asset = PhotoLibrary.getAsset(by: pair.photo2LocalId) {
-                image2 = await PhotoLibrary.loadThumbnail(for: asset)
-            }
+            imageLoadTask = task
+            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&image1)
+            MemoryPressureReleasePolicy.release(&image2)
         }
         .confirmationDialog("Delete this photo?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("Move to Recently Deleted", role: .destructive) {
@@ -260,12 +290,12 @@ struct DuplicatePairRow: View {
                             try engine.loadIndex()
                             await MainActor.run { onDelete?(pair) }
                         } catch {
-                            logger.error("Failed to update duplicate index after deletion: \(error.localizedDescription)")
+                            logger.error("Failed to update duplicate index after deletion: \(error.safeDiagnosticCode)")
                             await MainActor.run { onDelete?(pair) }
                         }
                     }
                 } else if let error {
-                    logger.error("Failed to delete photo: \(error.localizedDescription)")
+                    logger.error("Failed to delete photo: \(error.safeDiagnosticCode)")
                 }
             }
         }

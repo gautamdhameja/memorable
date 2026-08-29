@@ -3,13 +3,25 @@ import Foundation
 
 protocol CoreMLModelPredicting: AnyObject, Sendable {
     func prediction(from input: MLFeatureProvider) throws -> MLFeatureProvider
+    func cancellablePrediction(from input: MLFeatureProvider) async throws -> MLFeatureProvider
     func predictions(
         from inputBatch: MLBatchProvider,
         options: MLPredictionOptions
     ) throws -> MLBatchProvider
 }
 
-extension MLModel: CoreMLModelPredicting {}
+extension CoreMLModelPredicting {
+    func cancellablePrediction(from input: MLFeatureProvider) async throws -> MLFeatureProvider {
+        try Task.checkCancellation()
+        return try prediction(from: input)
+    }
+}
+
+extension MLModel: CoreMLModelPredicting {
+    func cancellablePrediction(from input: MLFeatureProvider) async throws -> MLFeatureProvider {
+        try await prediction(from: input, options: MLPredictionOptions())
+    }
+}
 
 enum ModelResource: CaseIterable, Equatable {
     case imageEncoder

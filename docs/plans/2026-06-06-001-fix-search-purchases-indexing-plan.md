@@ -14,7 +14,7 @@ This plan addresses the review findings as one hardening pass across search corr
 
 ---
 
-## Problem Frame
+## Problem frame
 
 The project has strong local patterns for privacy, embedding validation, PHImageManager continuations, and parser/config testing, but several higher-risk paths are either untested or currently inconsistent. The main user-visible risk is that video-only media can be indexed but not searched. The main release risk is that the code and StoreKit test configuration disagree on the Pro product identifier. The main operational risk is that database migration failure is logged without moving the app into the documented storage-warning fallback.
 
@@ -38,7 +38,7 @@ Local verification is currently blocked by the machine setup: `xcodebuild test` 
 
 ---
 
-## Key Technical Decisions
+## Key technical decisions
 
 - KTD1. Preserve `com.blockdeep.memorable.pro.v2` as the planned StoreKit identifier: the code already points at v2, and changing it back could silently break App Store Connect configuration if v2 is the intended live product. The implementation must verify App Store Connect or project history before changing the code identifier.
 - KTD2. Introduce narrow test seams only where current concrete dependencies block regression coverage: `DatabaseProtocol` already exists, but `SearchEngine` needs a deterministic text-embedding seam for unit tests without loading Core ML.
@@ -50,9 +50,9 @@ Local verification is currently blocked by the machine setup: `xcodebuild test` 
 
 ---
 
-## High-Level Technical Design
+## High-level technical design
 
-### Runtime Correctness Flow
+### Runtime correctness flow
 
 ```mermaid
 flowchart TB
@@ -71,7 +71,7 @@ flowchart TB
   L --> M
 ```
 
-### Delivery Sequencing
+### Delivery sequencing
 
 ```mermaid
 flowchart TB
@@ -89,9 +89,9 @@ flowchart TB
 
 ---
 
-## Implementation Units
+## Implementation units
 
-### U1. Add Deterministic Test Seams for Search and Indexing
+### U1. Add deterministic test seams for search and indexing
 
 - **Goal:** Make the high-risk search/indexing behaviors testable without loading Core ML models or PhotoKit media.
 - **Requirements:** R1, R2, R5, R6, R10
@@ -107,7 +107,7 @@ flowchart TB
   - A fake database with mismatched metadata and embedding rows causes `SearchEngineError.corruptedIndex`.
 - **Verification:** Implementers can write search and indexing policy tests that run as normal unit tests without model files, Photos authorization, or a simulator GPU.
 
-### U2. Fix Video-Only Index Loading and Search
+### U2. Fix video-only index loading and search
 
 - **Goal:** Make videos first-class searchable media even when no photos are indexed.
 - **Requirements:** R1, R2, R10
@@ -123,7 +123,7 @@ flowchart TB
   - Given mixed photos and videos, existing behavior still merges and sorts results by score with recency tie-breaks.
 - **Verification:** Video-only fixtures are searchable in unit tests, and the UI readiness path no longer depends on `indexedCount()` alone.
 
-### U3. Reconcile StoreKit Product Identity
+### U3. Reconcile StoreKit product identity
 
 - **Goal:** Make Pro purchase loading, restore, refund handling, StoreKit testing, and docs use one product ID.
 - **Requirements:** R3, R9, R10
@@ -138,7 +138,7 @@ flowchart TB
   - Refund/revocation handling still calls the trim callback for the configured Pro product.
 - **Verification:** Local StoreKit testing can load the Pro product, and docs no longer mention the old product ID.
 
-### U4. Make Database Migration Failure Recoverable
+### U4. Make database migration failure recoverable
 
 - **Goal:** Ensure migration failure cannot leave the app running against a partially unusable on-disk database.
 - **Requirements:** R4, R10
@@ -153,7 +153,7 @@ flowchart TB
   - The storage warning appears when the fallback flag is true.
 - **Verification:** A simulated migration failure is covered by unit tests and results in the same recoverable user-facing storage state as an open failure.
 
-### U5. Unify CPU and GPU Search Semantics
+### U5. Unify CPU and GPU search semantics
 
 - **Goal:** Make simulator and CPU fallback behavior match device GPU semantics for fallback results and negative video terms.
 - **Requirements:** R5, R10
@@ -168,7 +168,7 @@ flowchart TB
   - Near-miss fallback remains capped and filtered as currently intended.
 - **Verification:** Search tests pass under simulator/CPU conditions without requiring `GPUSimilaritySearch`.
 
-### U6. Clarify and Enforce Free-Tier Media Accounting
+### U6. Clarify and enforce free-tier media accounting
 
 - **Goal:** Apply the free-tier limit consistently to the intended indexed item count.
 - **Requirements:** R6, R9, R10
@@ -183,7 +183,7 @@ flowchart TB
   - Refund trimming keeps the newest media within the configured limit across photos and videos.
 - **Verification:** Limit behavior is covered by pure unit tests and matching docs copy.
 
-### U7. Normalize Image Orientation Before Embedding
+### U7. Normalize image orientation before embedding
 
 - **Goal:** Ensure embeddings represent the image as users see it, not raw pixel orientation.
 - **Requirements:** R7, R10
@@ -199,7 +199,7 @@ flowchart TB
   - If orientation normalization invalidates existing embeddings, the migration clears stale indexed photos and videos so the search index is homogeneous.
 - **Verification:** Orientation fixture tests pass without Core ML inference, and any required invalidation is covered by database migration tests.
 
-### U8. Close Folder Indexing Start Race
+### U8. Close the folder-indexing start race
 
 - **Goal:** Prevent duplicate folder indexing starts from slipping in before progress state changes.
 - **Requirements:** R8, R10
@@ -213,7 +213,7 @@ flowchart TB
   - Failure to acquire security-scoped access clears the running state.
 - **Verification:** The race is covered by a unit-level state test or a small extracted state helper if direct task testing is too coupled to UIKit.
 
-### U9. Refresh Documentation and Repo-Local CE Setup
+### U9. Refresh documentation and repository-local CE setup
 
 - **Goal:** Bring project guidance in line with implementation and add safe Compound Engineering repo config.
 - **Requirements:** R3, R9, R11
@@ -224,7 +224,7 @@ flowchart TB
 - **Test scenarios:** Test expectation: none -- documentation and repo-local config only. The StoreKit and free-tier assertions are covered by U3 and U6 tests.
 - **Verification:** Docs agree with code constants and the CE setup diagnostic no longer reports missing example config or unsafe local config tracking.
 
-### U10. Final Verification and Local Environment Notes
+### U10. Run final verification and record local environment notes
 
 - **Goal:** Verify the full hardening pass and document any remaining local setup blockers.
 - **Requirements:** R10, R11
@@ -237,28 +237,28 @@ flowchart TB
 
 ---
 
-## Scope Boundaries
+## Scope boundaries
 
-### In Scope
+### In scope
 
 - Fixing the reviewed correctness and release-readiness issues.
 - Adding regression coverage for search, indexing policy, StoreKit config, database fallback, and preprocessing.
 - Updating repo docs and local CE config scaffolding.
 
-### Deferred to Follow-Up Work
+### Deferred work
 
 - Installing global developer tools reported missing by `ce-setup`: `agent-browser`, `gh`, `vhs`, `silicon`, `ast-grep`, and the global `ast-grep` skill.
 - Updating the local macOS/Xcode/iOS simulator installation so `xcodebuild test` can run.
 - Broader search quality tuning beyond preserving intended existing scoring semantics.
 
-### Out of Scope
+### Out of scope
 
 - New search features, new monetization models, subscriptions, analytics, cloud sync, or server-side purchase validation.
 - Replacing SigLIP2, changing model dimensions, or changing the app's on-device privacy posture.
 
 ---
 
-## Planning Assumptions
+## Planning assumptions
 
 - App Store Connect either already has `com.blockdeep.memorable.pro.v2` configured or the implementation will discover that mismatch before shipping.
 - The free-tier limit applies to total indexed media items, not photos only. If product policy says otherwise, U6 should update naming and docs instead of changing behavior silently.
@@ -267,7 +267,7 @@ flowchart TB
 
 ---
 
-## Acceptance Examples
+## Acceptance examples
 
 - AE1. Given a user has only indexed videos, when they search for a visual concept matching one frame, then the results grid shows the matching video.
 - AE2. Given the StoreKit config is selected in the scheme, when the upgrade view loads products, then it can find the same product ID that `ProManager` requests.
@@ -278,13 +278,13 @@ flowchart TB
 
 ---
 
-## System-Wide Impact
+## System-wide impact
 
 This plan touches the core search pipeline, indexing lifecycle, purchase unlock state, persistence failure behavior, and project documentation. The most important cross-cutting invariant is that UI readiness, counts, free-tier enforcement, refund trimming, and search behavior all use the same definition of indexed media. The second invariant is that simulator/CPU behavior remains useful for verification even when device GPU acceleration is unavailable.
 
 ---
 
-## Risks and Dependencies
+## Risks and dependencies
 
 - **StoreKit source of truth:** The plan assumes `com.blockdeep.memorable.pro.v2` is intended. Implementation must verify App Store Connect or project history before shipping a product ID change.
 - **Test seam scope:** Introducing a text-encoding protocol is justified for tests, but it should stay narrow and avoid a broader encoder abstraction.
@@ -295,7 +295,7 @@ This plan touches the core search pipeline, indexing lifecycle, purchase unlock 
 
 ---
 
-## Sources and Research
+## Sources and research
 
 - Local review findings from `Memorable/Core/SearchEngine.swift`, `Memorable/Core/IndexingService.swift`, `Memorable/Core/Database.swift`, `Memorable/Core/ProFeatures.swift`, `Memorable/Store/MemorableProducts.storekit`, `Memorable/Core/ImageEncoder.swift`, `Memorable/Core/FolderScanner.swift`, `README.md`, `CLAUDE.md`, and existing `MemorableTests`.
 - Apple StoreKit documentation: `Transaction.currentEntitlements` provides current entitlement transactions for non-consumables and omits refunded or revoked products, supporting the existing entitlement verification shape. See [Apple Developer Documentation](https://developer.apple.com/documentation/storekit/transaction/currententitlements?changes=_7).

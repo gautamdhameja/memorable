@@ -3,10 +3,95 @@ import NaturalLanguage
 
 enum QueryInputPolicy {
     static let maximumCharacterCount = 500
+    static let maximumUTF8ByteCount = 2_000
+    static let maximumNegativeTerms = 8
+    static let maximumNegativeTermScalars = 100
 
     static func bounded(_ query: String) -> String {
-        guard query.count > maximumCharacterCount else { return query }
-        return String(query.prefix(maximumCharacterCount))
+        bounded(
+            query,
+            maximumUnicodeScalars: maximumCharacterCount,
+            maximumUTF8Bytes: maximumUTF8ByteCount
+        )
+    }
+
+    static func bounded(
+        _ value: String,
+        maximumUnicodeScalars: Int,
+        maximumUTF8Bytes: Int
+    ) -> String {
+        let scalarLimit = max(0, maximumUnicodeScalars)
+        let byteLimit = max(0, maximumUTF8Bytes)
+        guard scalarLimit > 0, byteLimit > 0 else { return "" }
+
+        var output = String.UnicodeScalarView()
+        output.reserveCapacity(min(scalarLimit, byteLimit))
+        var scalarCount = 0
+        var byteCount = 0
+        for scalar in value.unicodeScalars {
+            let width: Int
+            switch scalar.value {
+            case 0...0x7f: width = 1
+            case 0x80...0x7ff: width = 2
+            case 0x800...0xffff: width = 3
+            default: width = 4
+            }
+            guard scalarCount < scalarLimit, byteCount + width <= byteLimit else { break }
+            output.append(scalar)
+            scalarCount += 1
+            byteCount += width
+        }
+        return String(output)
+    }
+}
+
+/// Enforces entitlement-sensitive search behavior at the parser and ranking
+/// boundaries. Callers that do not provide a policy receive basic search.
+struct SearchFeaturePolicy: Equatable, Sendable {
+    let allowsAdvancedQueryFeatures: Bool
+
+    static let basic = SearchFeaturePolicy(allowsAdvancedQueryFeatures: false)
+    static let pro = SearchFeaturePolicy(allowsAdvancedQueryFeatures: true)
+
+    init(isPro: Bool) {
+        allowsAdvancedQueryFeatures = isPro
+    }
+
+    private init(allowsAdvancedQueryFeatures: Bool) {
+        self.allowsAdvancedQueryFeatures = allowsAdvancedQueryFeatures
+    }
+
+    func enforcing(_ hints: QueryHints) -> QueryHints {
+        guard allowsAdvancedQueryFeatures else {
+            return QueryHints(
+                textQuery: hints.textQuery,
+                dateRange: nil,
+                locationHint: nil,
+                locationCoordinate: nil,
+                locationRadiusKm: nil,
+                locationLocality: nil,
+                locationSubAdmin: nil,
+                locationAdminArea: nil,
+                locationCountryName: nil,
+                seasonHint: nil,
+                negativeTerms: [],
+                timeOfDayHours: nil,
+                hasVisualQuery: true
+            )
+        }
+        var bounded = hints
+        bounded.textQuery = QueryInputPolicy.bounded(hints.textQuery)
+        bounded.negativeTerms = Array(hints.negativeTerms
+            .prefix(QueryInputPolicy.maximumNegativeTerms)
+            .map {
+                QueryInputPolicy.bounded(
+                    $0,
+                    maximumUnicodeScalars: QueryInputPolicy.maximumNegativeTermScalars,
+                    maximumUTF8Bytes: QueryInputPolicy.maximumNegativeTermScalars * 4
+                )
+            }
+            .filter { !$0.isEmpty })
+        return bounded
     }
 }
 
@@ -52,7 +137,14 @@ enum QueryParserFallback {
         var positiveWords: [String] = []
         for word in words {
             if word.hasPrefix("-") && word.count > 1 {
-                negTerms.append(String(word.dropFirst()))
+                if negTerms.count < QueryInputPolicy.maximumNegativeTerms {
+                    let term = QueryInputPolicy.bounded(
+                        String(word.dropFirst()),
+                        maximumUnicodeScalars: QueryInputPolicy.maximumNegativeTermScalars,
+                        maximumUTF8Bytes: QueryInputPolicy.maximumNegativeTermScalars * 4
+                    )
+                    if !term.isEmpty { negTerms.append(term) }
+                }
             } else {
                 positiveWords.append(word)
             }
@@ -102,7 +194,7 @@ enum QueryParserFallback {
         let hasVisual = !cleanedText.isEmpty
 
         #if DEBUG
-        logger.info("[QueryParser] input='\(trimmed)' → textQuery='\(hasVisual ? cleanedText : "a photo")', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), timeOfDay=\(timeOfDayHours.map { "\($0.start)-\($0.end)" } ?? "nil"), hasVisual=\(hasVisual)")
+        logger.info("[QueryParser] Parsed query; visual=\(hasVisual), location=\(locationHint != nil), date=\(dateRange != nil), time=\(timeOfDayHours != nil), exclusions=\(negTerms.count)")
         #endif
 
         return QueryHints(

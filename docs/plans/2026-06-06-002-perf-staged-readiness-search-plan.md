@@ -14,7 +14,7 @@ This plan turns the brainstorm into a staged implementation roadmap. The first i
 
 ---
 
-## Problem Frame
+## Problem frame
 
 Memorable currently treats model readiness as app readiness. `Memorable/MemorableApp.swift` initializes the image encoder, text encoder, caption category embeddings, search engine, and existing index before `Memorable/Views/ContentView.swift` can render `MainTabView`. That blocks every post-onboarding surface on the slowest AI and index path, even though metadata-backed surfaces and non-search UI do not need the text model.
 
@@ -64,7 +64,7 @@ The brainstorm also identified a packaging mismatch: `README.md` describes On-De
 
 ---
 
-## Key Technical Decisions
+## Key technical decisions
 
 - **Stage readiness before model delivery.** The first implementation slice should split readiness state and add metrics before On-Demand Resources or compression work. This reduces launch risk and creates the baseline needed to judge later changes.
 - **Keep the search engine optional at shell time.** `MainTabView` and search surfaces should tolerate semantic search not being ready yet, rather than requiring a concrete loaded `SearchEngine` before tab rendering.
@@ -75,9 +75,9 @@ The brainstorm also identified a packaging mismatch: `README.md` describes On-De
 
 ---
 
-## High-Level Technical Design
+## High-level technical design
 
-### Readiness State Flow
+### Readiness state flow
 
 ```mermaid
 flowchart TB
@@ -99,7 +99,7 @@ flowchart TB
   L --> N["Non-critical enrichment"]
 ```
 
-### Search Submission While Warming
+### Search submission while warming
 
 ```mermaid
 sequenceDiagram
@@ -124,9 +124,9 @@ sequenceDiagram
 
 ---
 
-## Implementation Units
+## Implementation units
 
-### U1. Add Readiness and Metrics Model
+### U1. Add the readiness and metrics model
 
 **Goal:** Introduce testable readiness state and local timing metrics without changing user-facing behavior yet.
 
@@ -158,7 +158,7 @@ sequenceDiagram
 
 **Verification:** Readiness state can be exercised entirely from unit tests, and DEBUG metrics calls can be added later without importing Core ML or Photos.
 
-### U2. Render the Shell Before Semantic Search Is Ready
+### U2. Render the shell before semantic search is ready
 
 **Goal:** Refactor app initialization so `ContentView` can render the main tabs after authorization and lightweight shell readiness.
 
@@ -188,7 +188,7 @@ sequenceDiagram
 
 **Verification:** The app no longer uses text-model readiness as the condition for showing `MainTabView`, and tests cover the state transition that enables shell-first rendering.
 
-### U3. Introduce Post-Paint Semantic Runtime
+### U3. Introduce the post-paint semantic runtime
 
 **Goal:** Move text-encoder and search-engine readiness into a semantic runtime that starts warming immediately after shell render and can be promoted by search.
 
@@ -232,7 +232,7 @@ semanticReady -> enrichmentEligible
 
 **Verification:** Search runtime behavior is testable with fake factories and fake search/index loaders; no unit test requires actual model files.
 
-### U4. Update Search UI for Semantic Warmup
+### U4. Update the search UI for semantic warmup
 
 **Goal:** Make the search screen communicate semantic readiness at the point of action and run a submitted query after warmup completes.
 
@@ -261,7 +261,7 @@ semanticReady -> enrichmentEligible
 
 **Verification:** Search UI state transitions are covered by unit tests or view-model tests, and manual inspection shows the search screen no longer depends on global splash-screen loading for semantic readiness.
 
-### U5. Prioritize Core Index Load and Defer Enrichment
+### U5. Prioritize the core index load and defer enrichment
 
 **Goal:** Protect first shell render while loading the existing base index promptly enough that first search does not regress, and defer only automatic indexing/enrichment work that is not required for base search.
 
@@ -295,7 +295,7 @@ semanticReady -> enrichmentEligible
 
 **Verification:** Policy tests prove launch deferral and user-initiated work precedence; integration behavior preserves existing indexing progress UI.
 
-### U6. Add Search Evaluation Harness and Refresh Scoring Documentation
+### U6. Add a search evaluation harness and refresh scoring documentation
 
 **Goal:** Establish measurable search quality before any scoring, model compression, or model replacement changes.
 
@@ -329,7 +329,7 @@ semanticReady -> enrichmentEligible
 
 **Verification:** The evaluation harness can run without real Photos or Core ML models, and `SEARCH_SCORING.md` no longer contradicts the implemented scoring path.
 
-### U7. Plan and Gate Model Packaging and Compression Experiments
+### U7. Plan and gate model packaging and compression experiments
 
 **Goal:** Convert model-size work into measured experiments with recoverable model-unavailable behavior.
 
@@ -364,7 +364,7 @@ semanticReady -> enrichmentEligible
 
 ---
 
-## Phased Delivery
+## Phased delivery
 
 **Phase 1: Shell-first readiness baseline**
 
@@ -386,7 +386,7 @@ Phase 1 is the logical starting point. It creates the state model and metrics ne
 
 ---
 
-## Acceptance Examples
+## Acceptance examples
 
 - AE1. Cold launch reaches the app shell after authorization while semantic search continues warming locally.
 - AE2. A user-submitted search during warmup promotes core semantic/index readiness, waits locally, and then runs the latest query.
@@ -399,7 +399,7 @@ Phase 1 is the logical starting point. It creates the state model and metrics ne
 
 ---
 
-## System-Wide Impact
+## System-wide impact
 
 This work changes the app's startup contract. The app shell, indexing, semantic model readiness, and search readiness become separate states that multiple views may observe.
 
@@ -409,7 +409,7 @@ Model packaging work is intentionally isolated behind a resource-management seam
 
 ---
 
-## Risks and Dependencies
+## Risks and dependencies
 
 - **Risk: Shell renders but key tabs assume non-optional search dependencies.** Mitigation: U2 should update tab dependencies and add readiness tests before user-facing UI changes.
 - **Risk: First search becomes slower if core warmup is delayed too aggressively.** Mitigation: U3 starts core warmup immediately after first paint, U4 promotes warmup on search intent, and U1/U6 measure first-query latency and quality before acceptance.
@@ -421,9 +421,9 @@ Model packaging work is intentionally isolated behind a resource-management seam
 
 ---
 
-## Scope Boundaries
+## Scope boundaries
 
-### In Scope
+### In scope
 
 - Staged launch readiness and shell-first rendering.
 - Immediate post-paint semantic search warmup and search-at-point-of-need priority escalation.
@@ -432,7 +432,7 @@ Model packaging work is intentionally isolated behind a resource-management seam
 - Search evaluation and scoring documentation refresh.
 - A model resource-management seam and packaging/compression experiment gates.
 
-### Deferred to Follow-Up Work
+### Deferred work
 
 - Actual compressed Core ML model generation and replacement.
 - Full On-Demand Resources or downloaded-model rollout.
@@ -440,7 +440,7 @@ Model packaging work is intentionally isolated behind a resource-management seam
 - Curated real-photo benchmark collection beyond deterministic fixtures.
 - New memories features such as photo stories, maps, and calendar memories.
 
-### Outside This Product's Identity
+### Outside this product's identity
 
 - Remote embedding generation for user photos or videos.
 - Remote query processing.
@@ -448,7 +448,7 @@ Model packaging work is intentionally isolated behind a resource-management seam
 
 ---
 
-## Assumptions and Open Questions
+## Assumptions and open questions
 
 **Planning assumptions**
 
@@ -467,7 +467,7 @@ Model packaging work is intentionally isolated behind a resource-management seam
 
 ---
 
-## Documentation and Operational Notes
+## Documentation and operational notes
 
 - Update `SEARCH_SCORING.md` during U6 before using it as a tuning reference.
 - Update `README.md` during U7 so model packaging claims match `project.yml`.
@@ -476,7 +476,7 @@ Model packaging work is intentionally isolated behind a resource-management seam
 
 ---
 
-## Sources and Research
+## Sources and research
 
 - Origin requirements: `docs/brainstorms/2026-06-06-performance-size-search-optimization-requirements.md`.
 - Current launch gate: `Memorable/MemorableApp.swift` and `Memorable/Views/ContentView.swift`.

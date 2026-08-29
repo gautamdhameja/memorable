@@ -162,7 +162,7 @@ Without this, the simulator hits `MpsGraph backend validation on incompatible OS
 `AppDatabase.init` uses an in-memory fallback if the on-disk database fails (disk full, corrupted). Never `fatalError` in production code — the app must always launch.
 
 ### Thread Safety — SearchEngine
-`SearchEngine` uses `NSLock` with `defer { lock.unlock() }` for all read/write access to the embedding arrays. `loadIndex()` writes under lock; `hybridSearch()` and `findSimilar()` snapshot all arrays under lock then operate on local copies.
+`SearchEngine` stores its immutable index snapshot in `OSAllocatedUnfairLock`. `loadIndex()` constructs replacement data outside the lock and swaps it under the lock. `hybridSearch()` and `findSimilar()` copy the snapshot under the lock, then operate on immutable local values.
 
 ### Video Embeddings — Array Alignment
 In `loadAllVideoEmbeddings()`, metadata (videoId, localId, date, position) must be appended AFTER the embedding size guard, not before. If appended before and the guard continues, the metadata arrays become misaligned with the embeddings array, causing wrong search results.
@@ -205,7 +205,7 @@ Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.sw
 - In DEBUG builds: `isPro = true` (all features unlocked for testing)
 - In RELEASE: `isPro = false` until StoreKit purchase verified
 - Free tier: 500 indexed photos/videos, basic search only
-- Pro: unlimited indexing, Find Similar, negative search, folder sources, smart query parsing, date/location boost
+- Pro: up to 8,000 indexed media items, Find Similar, negative search, up to 32 folder sources, smart query parsing, and date/location boost
 - Refund handling: `verifyEntitlement()` checks `revocationDate` on every launch
 - `Transaction.updates` listener catches real-time refund events
 

@@ -25,8 +25,37 @@ final class DataModelTests: XCTestCase {
 
     func testSearchResultVideo() {
         let r = SearchResult(id: "v1", score: 0.4, localIdentifier: "vid", creationDate: nil, isVideo: true, bestFramePosition: 0.5)
+        XCTAssertFalse(r.supportsFindSimilar)
         XCTAssertTrue(r.isVideo)
         XCTAssertEqual(r.bestFramePosition, 0.5)
+    }
+
+    func testIndexedFolderPhotoPreservesItsValidatedLoadingReference() {
+        let photo = IndexedPhoto(
+            id: "photo-id",
+            localIdentifier: "folder-local-id",
+            creationDate: Date(timeIntervalSince1970: 10),
+            latitude: nil,
+            longitude: nil,
+            pixelWidth: 100,
+            pixelHeight: 100,
+            embedding: Data(),
+            indexedAt: Date(timeIntervalSince1970: 20),
+            sourceId: "folder-source",
+            filePath: "/selected/photo.jpg"
+        )
+
+        XCTAssertEqual(photo.searchResult.id, photo.id)
+        XCTAssertEqual(photo.searchResult.sourceId, "folder-source")
+        XCTAssertEqual(photo.searchResult.filePath, "/selected/photo.jpg")
+        XCTAssertFalse(photo.searchResult.isVideo)
+    }
+
+    func testOnThisDayMemoryLimitsAreBounded() {
+        XCTAssertGreaterThan(MemoryConfig.maximumOnThisDayYears, 0)
+        XCTAssertLessThanOrEqual(MemoryConfig.maximumOnThisDayYears, 100)
+        XCTAssertGreaterThan(MemoryConfig.maximumOnThisDayPhotosPerYear, 0)
+        XCTAssertLessThanOrEqual(MemoryConfig.maximumOnThisDayPhotosPerYear, 500)
     }
 
     // MARK: - EmbeddingConfig
@@ -107,6 +136,33 @@ final class DataModelTests: XCTestCase {
         XCTAssertEqual(recovered[0], original[0], accuracy: 0.001)
         // But not perfectly equal
         XCTAssertNotEqual(recovered[0], original[0])
+    }
+
+    func testValidatedEmbeddingRejectsMalformedDatabaseBlob() {
+        XCTAssertNil(Data(repeating: 0, count: EmbeddingConfig.bytesPerEmbedding - 1)
+            .validatedFloat16Embedding())
+        XCTAssertNil(Data(repeating: 0, count: EmbeddingConfig.bytesPerEmbedding + 1)
+            .validatedFloat16Embedding())
+    }
+
+    func testValidatedEmbeddingDecodesUnalignedBytes() {
+        let vector = (0..<EmbeddingConfig.dimensions).map { Float($0) / 100 }
+        let decoded = vector.toFloat16Data().validatedFloat16Embedding()
+
+        XCTAssertEqual(decoded?.count, EmbeddingConfig.dimensions)
+        XCTAssertEqual(Float(decoded?[17] ?? 0), vector[17], accuracy: 0.001)
+    }
+
+    func testValidatedEmbeddingRejectsNonFiniteAndZeroVectors() {
+        var nonFinite = [Float](repeating: 1, count: EmbeddingConfig.dimensions)
+        nonFinite[17] = .nan
+
+        XCTAssertNil(nonFinite.toFloat16Data().validatedFloat16Embedding())
+        XCTAssertNil(
+            [Float](repeating: 0, count: EmbeddingConfig.dimensions)
+                .toFloat16Data()
+                .validatedFloat16Embedding()
+        )
     }
 
     // MARK: - IndexingProgress

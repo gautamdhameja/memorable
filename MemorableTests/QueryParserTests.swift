@@ -76,6 +76,17 @@ final class QueryParserTests: XCTestCase {
         XCTAssertTrue(hints.negativeTerms.isEmpty)
     }
 
+    func testFallbackBoundsNegativeTermsBeforeSearchEncoding() {
+        let terms = (0..<100).map { "-x\($0)" }.joined(separator: " ")
+
+        let hints = QueryParserFallback.parse(query: "beach \(terms)")
+
+        XCTAssertEqual(hints.negativeTerms.count, QueryInputPolicy.maximumNegativeTerms)
+        XCTAssertTrue(hints.negativeTerms.allSatisfy {
+            $0.unicodeScalars.count <= QueryInputPolicy.maximumNegativeTermScalars
+        })
+    }
+
     func testFoodInSanDiego() {
         let hints = QueryParserFallback.parse(query: "food in San Diego")
         XCTAssertNotNil(hints.locationHint)

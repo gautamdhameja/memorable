@@ -12,6 +12,9 @@ final class StoreKitConfigTests: XCTestCase {
         XCTAssertEqual(products[0].internalID, ProManager.productId)
         XCTAssertEqual(products[0].type, "NonConsumable")
         XCTAssertTrue(products[0].familyShareable)
+        let descriptions = products[0].localizations.map(\.description)
+        XCTAssertTrue(descriptions.contains { $0.contains("8,000") })
+        XCTAssertFalse(descriptions.contains { $0.localizedCaseInsensitiveContains("unlimited") })
     }
 
     func testCurrentAndLegacyProductIdentifiersGrantProEntitlement() {
@@ -38,4 +41,9 @@ private struct StoreKitProduct: Decodable {
     let productID: String
     let type: String
     let familyShareable: Bool
+    let localizations: [StoreKitLocalization]
+}
+
+private struct StoreKitLocalization: Decodable {
+    let description: String
 }

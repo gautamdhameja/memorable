@@ -7,6 +7,28 @@ enum PhotoSourceType: String {
     case folder = "folder"
 }
 
+enum PhotoSourcePolicy {
+    static let maximumFolderSources = 32
+
+    static func canonicalPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+}
+
+enum PhotoSourceRegistrationError: LocalizedError, Equatable {
+    case duplicateFolder
+    case sourceLimitReached
+
+    var errorDescription: String? {
+        switch self {
+        case .duplicateFolder:
+            return "This folder is already added."
+        case .sourceLimitReached:
+            return "You can add up to \(PhotoSourcePolicy.maximumFolderSources) folders."
+        }
+    }
+}
+
 // MARK: - Copy
 
 enum AppCopy {
@@ -27,6 +49,11 @@ enum AppKeys {
     static func folderBookmark(sourceId: String) -> String {
         "folder_bookmark_\(sourceId)"
     }
+}
+
+enum MemoryConfig {
+    static let maximumOnThisDayYears = 50
+    static let maximumOnThisDayPhotosPerYear = 100
 }
 
 // MARK: - Search Scoring
@@ -200,8 +227,9 @@ enum IndexingConfig {
     /// the same pass while the underlying media is still unavailable.
     static let enrichmentRetryDelaySeconds: TimeInterval = 24 * 60 * 60
 
-    /// Images per Core ML batch prediction
-    static let batchEncodeSize = 16
+    /// Images retained by one indexing batch. Keep this small because model
+    /// prediction and decoded image buffers can overlap during cancellation.
+    static let batchEncodeSize = 4
 
     /// First photo count at which a new index should become searchable.
     static let firstSearchableCheckpoint = 500

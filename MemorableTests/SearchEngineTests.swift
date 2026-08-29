@@ -4,6 +4,86 @@ import os
 
 final class SearchEngineTests: XCTestCase {
 
+    func testBoundedTopKMatchesDeterministicFullOrdering() throws {
+        let candidates = (0..<1_000).map { index in
+            SearchResult(
+                id: "id-\(index)",
+                score: Float(index % 17),
+                localIdentifier: String(format: "local-%04d", 1_000 - index),
+                creationDate: Date(timeIntervalSince1970: TimeInterval(index % 23)),
+                isVideo: index.isMultiple(of: 2),
+                bestFramePosition: nil
+            )
+        }
+        let expected = Array(
+            candidates.sorted(by: SearchResultRanking.isPreferred).prefix(50)
+        )
+
+        let actual = try BoundedTopK.select(
+            from: candidates,
+            limit: 50,
+            isPreferred: SearchResultRanking.isPreferred
+        )
+
+        XCTAssertEqual(actual, expected)
+        XCTAssertEqual(actual.count, 50)
+        XCTAssertTrue(zip(actual, actual.dropFirst()).allSatisfy {
+            SearchResultRanking.isPreferred($0, $1)
+        })
+    }
+
+    func testSearchResultRankingIsTransitiveForScoreDateAndIdentifierTies() {
+        let highestScore = SearchResult(
+            id: "highest", score: 0.9, localIdentifier: "z",
+            creationDate: Date(timeIntervalSince1970: 1), isVideo: false, bestFramePosition: nil
+        )
+        let newerDate = SearchResult(
+            id: "newer", score: 0.8, localIdentifier: "z",
+            creationDate: Date(timeIntervalSince1970: 2), isVideo: false, bestFramePosition: nil
+        )
+        let earlierIdentifier = SearchResult(
+            id: "identifier-a", score: 0.8, localIdentifier: "a",
+            creationDate: Date(timeIntervalSince1970: 2), isVideo: false, bestFramePosition: nil
+        )
+
+        XCTAssertTrue(SearchResultRanking.isPreferred(highestScore, newerDate))
+        XCTAssertTrue(SearchResultRanking.isPreferred(earlierIdentifier, newerDate))
+        XCTAssertTrue(SearchResultRanking.isPreferred(highestScore, earlierIdentifier))
+        XCTAssertFalse(SearchResultRanking.isPreferred(newerDate, earlierIdentifier))
+    }
+
+    func testResultOrderingUsesAStrictScoreOrderBeforeTieBreakers() {
+        let newestLowerScore = SearchResult(
+            id: "lower",
+            score: 0.995,
+            localIdentifier: "lower",
+            creationDate: Date(timeIntervalSince1970: 300),
+            isVideo: false,
+            bestFramePosition: nil
+        )
+        let middle = SearchResult(
+            id: "middle",
+            score: 1,
+            localIdentifier: "middle",
+            creationDate: Date(timeIntervalSince1970: 200),
+            isVideo: false,
+            bestFramePosition: nil
+        )
+        let oldestHighestScore = SearchResult(
+            id: "highest",
+            score: 1.005,
+            localIdentifier: "highest",
+            creationDate: Date(timeIntervalSince1970: 100),
+            isVideo: false,
+            bestFramePosition: nil
+        )
+
+        let sorted = [newestLowerScore, middle, oldestHighestScore]
+            .sorted(by: SearchResultRanking.isPreferred)
+
+        XCTAssertEqual(sorted.map(\.id), ["highest", "middle", "lower"])
+    }
+
     func testSearchResultsAreBoundedAndDeterministicallyOrdered() throws {
         let photos = (0..<(SearchEngine.maximumRetainedResults + 25)).map { index in
             FixturePhoto(
@@ -24,6 +104,25 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(response.results.count, SearchEngine.maximumRetainedResults)
         XCTAssertEqual(response.results.first?.id, "photo-0524")
         XCTAssertEqual(response.results.last?.id, "photo-0025")
+    }
+
+    func testSearchRejectsShortQueryEmbeddingBeforeSimilarityScoring() throws {
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": [1]]),
+            database: SearchFixtureDatabase(photos: [
+                .init(
+                    id: "photo-1",
+                    localIdentifier: "local-photo-1",
+                    date: nil,
+                    embedding: float16Vector(first: 1)
+                )
+            ])
+        )
+        try engine.loadIndex()
+
+        XCTAssertThrowsError(try engine.hybridSearch(hints: hints(text: "dog"))) { error in
+            XCTAssertEqual(error as? SearchEngineError, .invalidEmbedding)
+        }
     }
 
     func testMemoryPressureSuspendsIndexReloadUntilExplicitResume() throws {
@@ -52,6 +151,196 @@ final class SearchEngineTests: XCTestCase {
         try engine.loadIndex()
         XCTAssertTrue(engine.isIndexLoaded)
         XCTAssertFalse(engine.isMemoryPressureSuspended)
+    }
+
+    func testConcurrentIndexReloadsShareOneDatabaseLoad() async throws {
+        let loadGate = ManualResetLoadGate()
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "photo-1",
+                    localIdentifier: "local-photo-1",
+                    date: nil,
+                    embedding: float16Vector(first: 1)
+                )
+            ],
+            photoLoadGate: loadGate,
+            gatedPhotoLoadNumber: 1
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database
+        )
+
+        let firstLoad = Task.detached { try engine.loadIndex() }
+        XCTAssertEqual(loadGate.started.wait(timeout: .now() + 1), .success)
+        let secondLoad = Task.detached { try engine.loadIndex() }
+
+        for _ in 0..<20 where database.photoLoadCount < 2 {
+            await Task.yield()
+        }
+        loadGate.open()
+
+        try await firstLoad.value
+        try await secondLoad.value
+        XCTAssertEqual(database.photoLoadCount, 1)
+        XCTAssertEqual(database.videoLoadCount, 1)
+        XCTAssertEqual(engine.indexSize, 1)
+    }
+
+    func testReloadReleasesOldSnapshotBeforeBuildingReplacement() async throws {
+        let loadGate = ManualResetLoadGate()
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "photo-1",
+                    localIdentifier: "local-photo-1",
+                    date: nil,
+                    embedding: float16Vector(first: 1)
+                )
+            ],
+            photoLoadGate: loadGate,
+            gatedPhotoLoadNumber: 2
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database
+        )
+        try engine.loadIndex()
+        XCTAssertEqual(engine.indexSize, 1)
+
+        let reload = Task.detached { try engine.loadIndex() }
+        XCTAssertEqual(loadGate.started.wait(timeout: .now() + 1), .success)
+
+        XCTAssertEqual(engine.indexSize, 0)
+        loadGate.open()
+        try await reload.value
+        XCTAssertEqual(engine.indexSize, 1)
+    }
+
+    func testCancelledSearchStopsAfterSimilarityScoring() async throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "photo-1",
+                localIdentifier: "local-photo-1",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ])
+        let scorer = BlockingSimilaritySearch()
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            photoSimilaritySearch: scorer
+        )
+        try engine.loadIndex()
+        let searchHints = hints(text: "dog")
+
+        let search = Task.detached {
+            try engine.hybridSearch(hints: searchHints).results.count
+        }
+        XCTAssertEqual(scorer.searchStarted.wait(timeout: .now() + 1), .success)
+        search.cancel()
+        scorer.resumeSearch.signal()
+
+        do {
+            _ = try await search.value
+            XCTFail("A canceled search must not continue ranking its retained index snapshot")
+        } catch is CancellationError {
+            // Expected.
+        }
+    }
+
+    func testMemoryPressureStopsSearchRetainingOldSnapshot() async throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "photo-1",
+                localIdentifier: "local-photo-1",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ])
+        let scorer = BlockingSimilaritySearch()
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            photoSimilaritySearch: scorer
+        )
+        try engine.loadIndex()
+
+        let searchHints = hints(text: "dog")
+        let search = Task.detached {
+            try engine.hybridSearch(hints: searchHints).results.count
+        }
+        XCTAssertEqual(scorer.searchStarted.wait(timeout: .now() + 1), .success)
+        engine.suspendForMemoryPressure()
+        scorer.resumeSearch.signal()
+
+        do {
+            _ = try await search.value
+            XCTFail("Memory pressure must stop a search retaining the old index snapshot")
+        } catch is CancellationError {
+            // Expected.
+        }
+        XCTAssertFalse(engine.isIndexLoaded)
+        XCTAssertTrue(engine.isMemoryPressureSuspended)
+    }
+
+    func testCancelledFindSimilarStopsAfterSimilarityScoring() async throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "photo-1",
+                localIdentifier: "local-photo-1",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            ),
+            .init(
+                id: "photo-2",
+                localIdentifier: "local-photo-2",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ])
+        let scorer = BlockingSimilaritySearch()
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            photoSimilaritySearch: scorer
+        )
+        try engine.loadIndex()
+
+        let search = Task.detached {
+            engine.findSimilar(photoId: "photo-1").count
+        }
+        XCTAssertEqual(scorer.searchStarted.wait(timeout: .now() + 1), .success)
+        search.cancel()
+        scorer.resumeSearch.signal()
+
+        let resultCount = await search.value
+        XCTAssertEqual(resultCount, 0)
+    }
+
+    @MainActor
+    func testExistingSearchWarmupRecoversAfterMemoryPressure() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "photo-1",
+                localIdentifier: "local-photo-1",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database
+        )
+        engine.suspendForMemoryPressure()
+
+        AppState.resumeExistingSearchForWarmup(engine)
+        try engine.loadIndex()
+
+        XCTAssertFalse(engine.isMemoryPressureSuspended)
+        XCTAssertTrue(engine.isIndexLoaded)
     }
 
     func testMediaIndexRejectsMismatchedColumnLengths() throws {
@@ -165,6 +454,30 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(response.results[0].id, "video-1")
     }
 
+    func testVideoOnlyNearMissAppearsInFallback() throws {
+        let database = SearchFixtureDatabase(
+            videos: [
+                .init(
+                    id: "video-near-miss",
+                    localIdentifier: "local-video-near-miss",
+                    date: Date(timeIntervalSince1970: 100),
+                    city: nil,
+                    embedding: float16Vector(first: 0.05)
+                )
+            ]
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(hints: hints(text: "dog"))
+
+        XCTAssertTrue(response.results.isEmpty)
+        XCTAssertEqual(response.fallbackResults.map(\.id), ["video-near-miss"])
+    }
+
     func testPureLocationQueryReturnsVideoOnlyResults() throws {
         let database = SearchFixtureDatabase(
             videos: [
@@ -173,6 +486,15 @@ final class SearchEngineTests: XCTestCase {
                     localIdentifier: "local-video-paris",
                     date: Date(timeIntervalSince1970: 100),
                     city: "Paris",
+                    framePosition: 0.2,
+                    embedding: float16Vector(first: 1)
+                ),
+                .init(
+                    id: "video-paris",
+                    localIdentifier: "local-video-paris",
+                    date: Date(timeIntervalSince1970: 100),
+                    city: "Paris",
+                    framePosition: 0.8,
                     embedding: float16Vector(first: 1)
                 )
             ]
@@ -180,7 +502,10 @@ final class SearchEngineTests: XCTestCase {
         let engine = SearchEngine(textEncoder: FakeTextEncoder(["a photo": floatVector(first: 1)]), database: database)
 
         try engine.loadIndex()
-        let response = try engine.hybridSearch(hints: hints(text: "a photo", locationHint: "Paris", hasVisualQuery: false))
+        let response = try engine.hybridSearch(
+            hints: hints(text: "a photo", locationHint: "Paris", hasVisualQuery: false),
+            featurePolicy: .pro
+        )
 
         XCTAssertEqual(response.results.map(\.id), ["video-paris"])
         XCTAssertTrue(response.results[0].isVideo)
@@ -204,7 +529,8 @@ final class SearchEngineTests: XCTestCase {
 
         try engine.loadIndex()
         let response = try engine.hybridSearch(
-            hints: hints(text: "a photo", locationHint: "Paris", hasVisualQuery: false)
+            hints: hints(text: "a photo", locationHint: "Paris", hasVisualQuery: false),
+            featurePolicy: .pro
         )
 
         XCTAssertEqual(response.results.map(\.id), ["video-awaiting-geocode"])
@@ -229,7 +555,10 @@ final class SearchEngineTests: XCTestCase {
         )
 
         try engine.loadIndex()
-        let response = try engine.hybridSearch(hints: hints(text: "dog", dateRange: futureRange))
+        let response = try engine.hybridSearch(
+            hints: hints(text: "dog", dateRange: futureRange),
+            featurePolicy: .pro
+        )
 
         XCTAssertTrue(response.results.isEmpty)
     }
@@ -254,9 +583,17 @@ final class SearchEngineTests: XCTestCase {
 
         try engine.loadIndex()
         let positive = try engine.hybridSearch(hints: hints(text: "dog"))
-        let negative = try engine.hybridSearch(hints: hints(text: "dog", negativeTerms: ["cat"]))
+        let basicNegative = try engine.hybridSearch(
+            hints: hints(text: "dog", negativeTerms: ["cat"]),
+            featurePolicy: .basic
+        )
+        let negative = try engine.hybridSearch(
+            hints: hints(text: "dog", negativeTerms: ["cat"]),
+            featurePolicy: .pro
+        )
 
         XCTAssertEqual(positive.results.count, 1)
+        XCTAssertEqual(basicNegative.results.map(\.score), positive.results.map(\.score))
         XCTAssertEqual(negative.results.count, 1)
         XCTAssertLessThan(negative.results[0].score, positive.results[0].score)
     }
@@ -296,13 +633,16 @@ final class SearchEngineTests: XCTestCase {
         )
 
         try engine.loadIndex()
-        let response = try engine.hybridSearch(hints: hints(
-            text: "dog",
-            dateRange: dateRange,
-            locationHint: "Paris",
-            negativeTerms: ["cat"],
-            timeOfDayHours: (0, 24)
-        ))
+        let response = try engine.hybridSearch(
+            hints: hints(
+                text: "dog",
+                dateRange: dateRange,
+                locationHint: "Paris",
+                negativeTerms: ["cat"],
+                timeOfDayHours: (0, 24)
+            ),
+            featurePolicy: .pro
+        )
 
         XCTAssertEqual(Set(response.results.map(\.id)), ["photo-paris", "video-paris"])
         let photoScore = try XCTUnwrap(response.results.first { !$0.isVideo }?.score)
@@ -379,7 +719,10 @@ final class SearchEngineTests: XCTestCase {
         )
 
         try engine.loadIndex()
-        _ = try engine.hybridSearch(hints: hints(text: "dog", negativeTerms: ["cat"]))
+        _ = try engine.hybridSearch(
+            hints: hints(text: "dog", negativeTerms: ["cat"]),
+            featurePolicy: .pro
+        )
 
         XCTAssertEqual(photoScorer.queries.map { $0[0] }, [0.8, 0.4])
         XCTAssertEqual(videoScorer.queries.map { $0[0] }, [0.8, 0.4])
@@ -417,7 +760,10 @@ final class SearchEngineTests: XCTestCase {
             )
         ]
         try engine.loadIndex()
-        _ = try engine.hybridSearch(hints: hints(text: "dog", negativeTerms: ["cat"]))
+        _ = try engine.hybridSearch(
+            hints: hints(text: "dog", negativeTerms: ["cat"]),
+            featurePolicy: .pro
+        )
 
         XCTAssertEqual(videoScorer.queries.map { $0[0] }, [0.8, 0.4])
     }
@@ -440,7 +786,10 @@ final class SearchEngineTests: XCTestCase {
         )
 
         try engine.loadIndex()
-        let response = try engine.hybridSearch(hints: hints(text: "dog", dateRange: futureRange))
+        let response = try engine.hybridSearch(
+            hints: hints(text: "dog", dateRange: futureRange),
+            featurePolicy: .pro
+        )
 
         XCTAssertTrue(response.results.isEmpty)
         XCTAssertEqual(response.fallbackResults.map(\.id), ["photo-1"])
@@ -527,6 +876,44 @@ final class RecordingSimilaritySearch: SimilaritySearching {
     }
 }
 
+final class BlockingSimilaritySearch: SimilaritySearching {
+    private let count = OSAllocatedUnfairLock(initialState: 0)
+    let searchStarted = DispatchSemaphore(value: 0)
+    let resumeSearch = DispatchSemaphore(value: 0)
+
+    func buildIndex(embeddings: [Float16], count: Int) {
+        self.count.withLock { $0 = count }
+    }
+
+    func search(queryEmbedding: [Float]) -> [Float]? {
+        searchStarted.signal()
+        resumeSearch.wait()
+        return Array(repeating: queryEmbedding.first ?? 0, count: count.withLock { $0 })
+    }
+}
+
+final class ManualResetLoadGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var isOpen = false
+    let started = DispatchSemaphore(value: 0)
+
+    func wait() {
+        condition.lock()
+        started.signal()
+        while !isOpen {
+            condition.wait()
+        }
+        condition.unlock()
+    }
+
+    func open() {
+        condition.lock()
+        isOpen = true
+        condition.broadcast()
+        condition.unlock()
+    }
+}
+
 struct FixturePhoto: Sendable {
     let id: String
     let localIdentifier: String
@@ -553,9 +940,13 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     private struct State: Sendable {
         var photos: [FixturePhoto]
         var videos: [FixtureVideo]
+        var photoLoadCount = 0
+        var videoLoadCount = 0
     }
 
     private let state: OSAllocatedUnfairLock<State>
+    private let photoLoadGate: ManualResetLoadGate?
+    private let gatedPhotoLoadNumber: Int
 
     var photos: [FixturePhoto] {
         get { state.withLock { $0.photos } }
@@ -567,10 +958,25 @@ final class SearchFixtureDatabase: DatabaseProtocol {
         set { state.withLock { $0.videos = newValue } }
     }
 
-    init(photos: [FixturePhoto] = [], videos: [FixtureVideo] = []) {
+    var photoLoadCount: Int {
+        state.withLock { $0.photoLoadCount }
+    }
+
+    var videoLoadCount: Int {
+        state.withLock { $0.videoLoadCount }
+    }
+
+    init(
+        photos: [FixturePhoto] = [],
+        videos: [FixtureVideo] = [],
+        photoLoadGate: ManualResetLoadGate? = nil,
+        gatedPhotoLoadNumber: Int = 1
+    ) {
         self.state = OSAllocatedUnfairLock(
             initialState: State(photos: photos, videos: videos)
         )
+        self.photoLoadGate = photoLoadGate
+        self.gatedPhotoLoadNumber = gatedPhotoLoadNumber
     }
 
     func indexedCount() throws -> Int { photos.count }
@@ -579,6 +985,15 @@ final class SearchFixtureDatabase: DatabaseProtocol {
         let snapshot = state.withLock { $0 }
         return IndexedMediaCounts(
             photos: snapshot.photos.count,
+            videos: Set(snapshot.videos.map(\.id)).count
+        )
+    }
+    func photoLibraryIndexedMediaCounts() throws -> IndexedMediaCounts {
+        let snapshot = state.withLock { $0 }
+        return IndexedMediaCounts(
+            photos: snapshot.photos.filter {
+                $0.sourceId == PhotoSourceType.photokit.rawValue
+            }.count,
             videos: Set(snapshot.videos.map(\.id)).count
         )
     }
@@ -592,7 +1007,38 @@ final class SearchFixtureDatabase: DatabaseProtocol {
 
     func loadAllEmbeddings() throws -> MediaIndex {
         var index = MediaIndex(kind: .photo)
-        let photos = state.withLock { $0.photos }
+        let (photos, loadNumber) = state.withLock {
+            $0.photoLoadCount += 1
+            return ($0.photos, $0.photoLoadCount)
+        }
+        if loadNumber == gatedPhotoLoadNumber {
+            photoLoadGate?.wait()
+        }
+        for photo in photos {
+            try index.append(
+                MediaIndex.Row(
+                    id: photo.id,
+                    localIdentifier: photo.localIdentifier,
+                    sourceId: photo.sourceId,
+                    filePath: photo.filePath,
+                    date: photo.date,
+                    latitude: nil,
+                    longitude: nil,
+                    city: photo.city,
+                    state: nil,
+                    country: nil,
+                    locationName: nil,
+                    details: .photo(ocrText: nil, sceneLabels: photo.sceneLabels)
+                ),
+                embedding: photo.embedding
+            )
+        }
+        return index
+    }
+
+    func loadEmbeddingsForDuplicateScan(limit: Int) throws -> MediaIndex {
+        var index = MediaIndex(kind: .photo)
+        let photos = state.withLock { Array($0.photos.prefix(max(0, limit))) }
         for photo in photos {
             try index.append(
                 MediaIndex.Row(
@@ -617,7 +1063,10 @@ final class SearchFixtureDatabase: DatabaseProtocol {
 
     func loadAllVideoEmbeddings() throws -> MediaIndex {
         var index = MediaIndex(kind: .videoFrame)
-        let videos = state.withLock { $0.videos }
+        let videos = state.withLock {
+            $0.videoLoadCount += 1
+            return $0.videos
+        }
         for video in videos {
             try index.append(
                 MediaIndex.Row(
@@ -649,7 +1098,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func deleteAll() throws {}
     func deletePhoto(localIdentifier: String) throws {}
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws {}
-    func fetchRandomPhoto(sharp: Bool) throws -> IndexedPhoto? { nil }
+    func fetchRandomPhoto(sharp: Bool) throws -> SlideshowPhoto? { nil }
     func photosNeedingEnrichment(limit: Int) throws -> [PhotoEnrichmentCandidate] { [] }
     func photosNeedingEnrichmentCount() throws -> Int { 0 }
     func updatePhotoEnrichment(_ updates: [PhotoEnrichmentUpdate]) throws {}
@@ -664,6 +1113,9 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func allIndexedVideoIdentifiers() throws -> Set<String> { [] }
     func deleteOrphanedVideos(localIdentifiers: Set<String>) throws {}
     func trimToLimit(_ limit: Int) throws {}
+    func reconcileFreeTier(_ limit: Int) throws -> FreeTierReconciliationResult {
+        FreeTierReconciliationResult(retainedMediaCount: 0, didTrimMedia: false, removedFolderSourceIDs: [])
+    }
     func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func geocodingCounts() throws -> GeocodingCounts {
@@ -681,7 +1133,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func listSources() throws -> [PhotoSource] { [] }
     func deleteSource(_ id: String) throws {}
     func updateSourceStats(_ id: String, photoCount: Int) throws {}
-    func onThisDayPhotos() throws -> [(year: Int, ids: [String])] { [] }
+    func onThisDayPhotos() throws -> [(year: Int, photos: [IndexedPhotoReference])] { [] }
     func addSearchHistory(_ query: String) throws {}
     func loadSearchHistory() throws -> [String] { [] }
     func clearSearchHistory() throws {}

@@ -18,6 +18,45 @@ targets:
   Memorable:
     type: application
     platform: iOS
+    preBuildScripts:
+      - name: Verify bundled models
+        script: |
+          set -eu
+          python3 "$SRCROOT/scripts/verify_models.py"
+          touch "$DERIVED_FILE_DIR/memorable-models-verified"
+        inputFiles:
+          - "$(SRCROOT)/scripts/verify_models.py"
+          - "$(SRCROOT)/scripts/model_manifest.json"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/analytics/coremldata.bin"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/coremldata.bin"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/metadata.json"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/model.mil"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/weights/weight.bin"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc/analytics/coremldata.bin"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc/coremldata.bin"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc/metadata.json"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc/model.mil"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc/weights/weight.bin"
+        outputFiles:
+          - "$(DERIVED_FILE_DIR)/memorable-models-verified"
+        basedOnDependencyAnalysis: true
+    postBuildScripts:
+      - name: Verify packaged models
+        script: |
+          set -eu
+          python3 "$SRCROOT/scripts/verify_models.py" \
+            --packaged-models-root "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          touch "$DERIVED_FILE_DIR/memorable-packaged-models-verified"
+        inputFiles:
+          - "$(SRCROOT)/scripts/verify_models.py"
+          - "$(SRCROOT)/scripts/model_manifest.json"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/SigLIP2_ImageEncoder.mlmodelc"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/SigLIP2_TextEncoder.mlmodelc"
+        outputFiles:
+          - "$(DERIVED_FILE_DIR)/memorable-packaged-models-verified"
+        basedOnDependencyAnalysis: true
     configFiles:
       Debug: Config/Build.xcconfig
       Release: Config/Build.xcconfig

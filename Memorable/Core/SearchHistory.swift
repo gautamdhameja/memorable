@@ -5,9 +5,9 @@ class SearchHistory {
 
     static func add(query: String) {
         do {
-            try db.addSearchHistory(query)
+            try db.addSearchHistory(QueryInputPolicy.bounded(query))
         } catch {
-            logger.error("Failed to save search history: \(error.localizedDescription)")
+            logger.error("Failed to save search history: \(error.safeDiagnosticCode)")
         }
     }
 
@@ -15,7 +15,7 @@ class SearchHistory {
         do {
             return try db.loadSearchHistory()
         } catch {
-            logger.error("Failed to load search history: \(error.localizedDescription)")
+            logger.error("Failed to load search history: \(error.safeDiagnosticCode)")
             return []
         }
     }
@@ -24,7 +24,7 @@ class SearchHistory {
         do {
             try db.clearSearchHistory()
         } catch {
-            logger.error("Failed to clear search history: \(error.localizedDescription)")
+            logger.error("Failed to clear search history: \(error.safeDiagnosticCode)")
         }
     }
 
@@ -32,7 +32,7 @@ class SearchHistory {
         do {
             try db.removeSearchHistory(at: index)
         } catch {
-            logger.error("Failed to remove search history item: \(error.localizedDescription)")
+            logger.error("Failed to remove search history item: \(error.safeDiagnosticCode)")
         }
     }
 }

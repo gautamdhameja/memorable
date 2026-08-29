@@ -12,6 +12,7 @@ struct MoreView: View {
     @State private var showDuplicates = false
     @State private var showUpgrade = false
     @State private var showReindexConfirm = false
+    @State private var reindexError: String?
 
     private var appVersionString: String {
         let info = Bundle.main.infoDictionary
@@ -113,6 +114,7 @@ struct MoreView: View {
             .toolbar(.hidden, for: .navigationBar)
             .preferredColorScheme(.dark)
             .onAppear { smartAlbums = SmartAlbumStore.load() }
+            .onDisappear { cancelPendingVideoPlayerPresentation() }
             .sheet(isPresented: $showSources) {
                 NavigationStack {
                     SourceManagerView(indexingService: indexingService)
@@ -126,20 +128,31 @@ struct MoreView: View {
             }
             .alert("Re-index Library", isPresented: $showReindexConfirm) {
                 Button("Re-index", role: .destructive) {
-                    // Stop any active indexing/geocoding before clearing data
-                    indexingService.stopIndexing()
-                    do {
-                        try database.deleteAll()
-                        searchEngine.dropIndex()
-                        indexingService.isReady = false
-                    } catch {
-                        logger.error("Failed to clear index: \(error.localizedDescription)")
+                    Task {
+                        do {
+                            try await indexingService.rebuildLibraryIndex()
+                        } catch is CancellationError {
+                            return
+                        } catch {
+                            logger.error("Failed to clear index: \(error.safeDiagnosticCode)")
+                            reindexError = "Memorable couldn't clear the current index. Try again."
+                        }
                     }
-                    indexingService.startIndexing()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This will clear the current index and rebuild it from scratch. Search will be unavailable during indexing.")
+                Text("This clears the current index, removes added folder sources, and rebuilds Apple Photos from scratch. Search is unavailable during indexing.")
+            }
+            .alert(
+                "Couldn't re-index",
+                isPresented: Binding(
+                    get: { reindexError != nil },
+                    set: { if !$0 { reindexError = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(reindexError ?? "Try again.")
             }
         }
     }
@@ -234,7 +247,7 @@ struct MoreView: View {
                         Text("Memorable Pro")
                             .font(.body.weight(.medium))
                             .foregroundStyle(Celestial.Colors.amber)
-                        Text("Unlimited indexing is active")
+                        Text("Your 8,000-item index is active")
                             .font(.caption)
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     }
@@ -250,7 +263,7 @@ struct MoreView: View {
                             Text("Memorable Pro")
                                 .font(.body.weight(.medium))
                                 .foregroundStyle(Celestial.Colors.amber)
-                            Text("Unlimited indexing. One-time purchase.")
+                            Text("Index up to 8,000 items. One-time purchase.")
                                 .font(.caption)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
@@ -279,6 +292,7 @@ struct SmartAlbumResultsView: View {
     let searchEngine: SearchEngine
     @State private var results: [SearchResult] = []
     @State private var isLoading = true
+    @State private var searchTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -306,14 +320,41 @@ struct SmartAlbumResultsView: View {
         .navigationTitle(album.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
-        .task {
-            do {
-                results = Array(try await searchEngine.search(query: album.query).results.prefix(50))
-            } catch {
-                logger.error("Smart album search failed: \(error.localizedDescription)")
-            }
-            isLoading = false
+        .onAppear { startSearch() }
+        .onDisappear { cancelSearchForMemoryPressure() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.didReceiveMemoryWarningNotification
+        )) { _ in
+            cancelSearchForMemoryPressure()
         }
+    }
+
+    private func startSearch() {
+        searchTask?.cancel()
+        isLoading = true
+        searchTask = Task {
+            do {
+                let response = try await searchEngine.search(
+                    query: album.query,
+                    featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro)
+                )
+                guard !Task.isCancelled, !searchEngine.isMemoryPressureSuspended else { return }
+                results = Array(response.results.prefix(50))
+                isLoading = false
+            } catch is CancellationError {
+                return
+            } catch {
+                logger.error("Smart album search failed: \(error.safeDiagnosticCode)")
+                isLoading = false
+            }
+        }
+    }
+
+    private func cancelSearchForMemoryPressure() {
+        searchTask?.cancel()
+        searchTask = nil
+        results.removeAll(keepingCapacity: false)
+        isLoading = false
     }
 }
 
@@ -354,6 +395,8 @@ struct SurpriseExploreView: View {
     @State private var results: [SearchResult] = []
     @State private var isLoading = false
     @State private var selectedPhoto: SearchResult?
+    @State private var exploreTask: Task<Void, Never>?
+    @State private var exploreGeneration = 0
 
     var body: some View {
         ZStack {
@@ -413,6 +456,13 @@ struct SurpriseExploreView: View {
         .navigationTitle("Explore")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
+        .onDisappear { cancelExplore() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.didReceiveMemoryWarningNotification
+        )) { _ in
+            cancelExplore()
+            results.removeAll(keepingCapacity: false)
+        }
         .fullScreenCover(item: $selectedPhoto) { result in
             if result.isVideo {
                 Color.clear.onAppear {
@@ -431,17 +481,49 @@ struct SurpriseExploreView: View {
     }
 
     private func explore() {
+        cancelExplore()
+        exploreGeneration += 1
+        let generation = exploreGeneration
         isLoading = true
         let surprise = SurpriseQueries.random()
         query = surprise
-        Task {
+        exploreTask = Task {
             do {
-                results = Array(try await searchEngine.search(query: surprise).results.prefix(20))
+                let found = try await ExploreSearchOperation.run {
+                    Array(try await searchEngine.search(
+                        query: surprise,
+                        featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro)
+                    ).results.prefix(20))
+                }
+                guard !Task.isCancelled, generation == exploreGeneration else { return }
+                results = found
+            } catch is CancellationError {
+                return
             } catch {
-                logger.error("Explore search failed: \(error.localizedDescription)")
+                logger.error("Explore search failed: \(error.safeDiagnosticCode)")
             }
+            guard generation == exploreGeneration else { return }
             isLoading = false
+            exploreTask = nil
         }
+    }
+
+    private func cancelExplore() {
+        exploreGeneration += 1
+        exploreTask?.cancel()
+        exploreTask = nil
+        isLoading = false
+    }
+}
+
+enum ExploreSearchOperation {
+    static func run(
+        search: @escaping @Sendable () async throws -> [SearchResult]
+    ) async throws -> [SearchResult] {
+        try Task.checkCancellation()
+        let results = try await search()
+        try Task.checkCancellation()
+        return results
     }
 }
 

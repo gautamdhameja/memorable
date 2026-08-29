@@ -1,68 +1,98 @@
-APP STORE METADATA
+App Store metadata
 ==================
 
-App Name: Memorable - AI Photo Search
+App name: Memorable - AI Photo Search
 
 Subtitle: Find photos by describing memories
 
 Category: Photo & Video
 
-Price: $3.99 (one-time purchase, no subscription)
+Price: Free, with a $4.99 one-time Pro in-app purchase in the US storefront
 
-Keywords: photo search, AI, memory, find photos, natural language, offline, privacy, on-device, no subscription, visual search
+Keywords: photo search, AI, memory, find photos, natural language, privacy, on-device, no subscription, visual search
 
-DESCRIPTION
+Description
 -----------
-Find any photo by describing what you remember.
+
+Find a photo by describing what you remember.
 
 "The sunset at the beach last summer"
 "My dog playing in the snow"
 "Birthday cake with candles"
 "That hike with the waterfall"
 
-Memorable uses on-device AI to understand the visual content of your photos, letting you search with natural language instead of scrolling through thousands of pictures.
+Memorable uses bundled, on-device AI to search the visual content of your photos and videos. Build a private index on your iPhone, then search with natural language instead of scrolling through your library.
 
-HOW IT WORKS
-One-time setup: Memorable scans your photo library and builds a private search index on your device. This typically takes a few minutes. After that, searches are instant.
+How it works
+------------
 
-Type a description of what you're looking for — a scene, an object, a feeling — and Memorable finds the closest matches across your entire library.
+Grant Photo Library access and build the local search index. Memorable indexes photos first, makes them searchable at progressive checkpoints, and then processes video frames and optional metadata enrichment.
 
-COMPLETE PRIVACY
-Unlike cloud-based photo services, Memorable processes everything on your device. Your photos never leave your phone. No accounts, no analytics, no tracking. Your memories stay yours. Location names are resolved using Apple's built-in services to improve search.
+Type a scene, object, date, season, or place. Memorable parses the query and ranks the local index. Photo and video contents and search query text stay on your iPhone.
 
-KEY FEATURES
-- Natural language search: describe what you see, not tags or dates
-- On-device AI: your photos never leave your device
-- No subscription: pay once, use forever
-- Fast: search 10,000+ photos in under a second
-- Smart date filtering: "beach photos from last summer" narrows by both content and time
-- Multiple sources: search your Photos library and imported folders
-- Incremental indexing: new photos are automatically detected
+Privacy
+-------
 
-REQUIREMENTS
-- iOS 17.0 or later
-- iPhone or iPad with A14 chip or later
-- Approximately 750MB of storage (AI models are bundled with the app)
+Memorable has no developer backend, account system, analytics, tracking, ads, telemetry, or crash-report uploads.
 
-WHAT'S NEW (Version 1.0)
-- Initial release
-- Natural language photo search powered by SigLIP2
-- Photo Library and folder source support
-- Date-aware hybrid search
-- AI models bundled in-app, no extra downloads needed
+For location search, the app sends GPS coordinates contained in indexed media metadata to Apple's CLGeocoder service to resolve place names. It does not send media contents or search query text with those requests.
 
-SCREENSHOTS (capture these on device)
-1. Search screen with query "dog playing in park" showing results grid
-2. Search screen with query "sunset at the beach" showing grouped results by month
-3. Photo detail view showing a match with score
-4. Source manager showing Photo Library and an added folder
-5. Indexing progress screen during initial setup
+The app uses Apple StoreKit to load Pro product information and to process entitlement checks, purchases, restores, refunds, and transaction updates. StoreKit exchanges the commerce data Apple requires for those services.
 
-SUPPORT URL: (your support page)
-PRIVACY POLICY URL: (host PRIVACY_POLICY.txt as a webpage)
+The local search database and folder bookmark files are excluded from iCloud and device backups.
 
-APP REVIEW NOTES
-- The app requires photo library access to function. It will request permission on first launch.
-- AI models are bundled with the app. No additional downloads are required.
-- No backend server is required. Photos are never uploaded or transmitted.
-- For testing, grant photo library access and wait for indexing to complete, then try search queries like "people", "food", "outdoor", "car", etc.
+Free features
+-------------
+
+- Search photos and videos with natural language.
+- Use locally generated OCR and scene labels to improve ranking.
+- Browse On This Day, Smart Albums, Surprise Me, and memory slideshows.
+- Index up to 500 media items for free.
+
+Pro features
+------------
+
+- Expand the index to 8,000 photos and videos.
+- Parse dates, seasons, places, time of day, and excluded terms.
+- Add up to 32 user-selected folder sources.
+- Use Find Similar and near-duplicate detection with bounded, cancellable processing.
+- Unlock Pro with one purchase. No subscription is required.
+
+Requirements
+------------
+
+- iOS 17 or later
+- iPhone with an A14 chip or later
+- Approximately 750 MB of storage for bundled AI models
+
+What's new in version 1.0
+-------------------------
+
+- Search photos and videos with SigLIP2.
+- Index Photo Library and up to 32 selected folder sources with Pro.
+- Apply date-aware and location-aware local ranking.
+- Use bundled models without an additional model download.
+
+Screenshot plan
+---------------
+
+1. Show the results grid for `dog playing in park`.
+2. Show grouped results for `sunset at the beach`.
+3. Show a full-screen search result and match details.
+4. Show Photo Library and an added folder in the source manager.
+5. Show initial indexing progress.
+
+Support URL: (your support page)
+
+Privacy policy URL: (host PRIVACY_POLICY.txt as a web page)
+
+App Review notes
+----------------
+
+- The app requires Photo Library access to index and display media.
+- The app sets PhotoKit network access to disabled, so use locally available media during review.
+- The app bundles its Core ML models and does not download model files at runtime.
+- The app has no developer backend.
+- Media GPS coordinates may be sent to Apple CLGeocoder for place-name resolution. Media contents and search query text remain on the device.
+- StoreKit handles Pro product, entitlement, purchase, restore, refund, and transaction traffic with Apple.
+- Grant Photo Library access, wait for a searchable checkpoint, and try queries such as `people`, `food`, `outdoor`, or `car`.

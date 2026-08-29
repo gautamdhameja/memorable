@@ -8,10 +8,6 @@ let logger = Logger(subsystem: "com.blockdeep.memorable", category: "app")
 struct MemorableApp: App {
     @StateObject private var appState = AppState()
 
-    init() {
-        PhotoLibrary.cleanupAllQuickLookFiles()
-    }
-
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -42,8 +38,10 @@ class AppState: ObservableObject {
     private var isInitializing = false
     private var isCoreWarmupRunning = false
     private var currentWarmupPriority: SemanticWarmupPriority = .postPaint
+    private var captionPreparationTask: Task<Void, Never>?
 
     init() {
+        SurpriseQueryCache.migrateLegacyDefaults()
         semanticRuntime.setWarmupLoader { [weak self] priority in
             try await self?.warmCoreSearch(priority: priority)
         }
@@ -86,20 +84,30 @@ class AppState: ObservableObject {
     }
 
     func handleMemoryWarning() {
+        VideoPlaybackCoordinator.shared.cancelForMemoryPressure()
+        semanticRuntime.cancelWarmupForMemoryPressure()
+        captionPreparationTask?.cancel()
+        captionPreparationTask = nil
         indexingService?.cancelAllWorkForMemoryPressure()
         searchEngine?.suspendForMemoryPressure()
         indexingService?.isReady = false
+        ProManager.shared.onFreeTierReconciliationNeeded = nil
+        captionService.releaseMemory()
+        MemoryPressureReleasePolicy.release(&indexingService)
+        MemoryPressureReleasePolicy.release(&searchEngine)
+        MemoryPressureReleasePolicy.release(&imageEncoder)
+        MemoryPressureReleasePolicy.release(&textEncoder)
         readiness.markIndexUnavailable()
         semanticRuntime.markIndexUnavailable()
     }
 
     func retrySemanticWarmup() {
         errorMessage = nil
-        searchEngine?.resumeAfterMemoryPressure()
         semanticRuntime.startUserInitiatedWarmup()
     }
 
     private func warmCoreSearch(priority: SemanticWarmupPriority) async throws {
+        try Task.checkCancellation()
         guard !isCoreWarmupRunning else { return }
         isCoreWarmupRunning = true
         currentWarmupPriority = priority
@@ -117,23 +125,21 @@ class AppState: ObservableObject {
             if let existingSearch = searchEngine, let existingIndexing = indexingService {
                 search = existingSearch
                 indexing = existingIndexing
+                Self.resumeExistingSearchForWarmup(search)
                 semanticRuntime.markSemanticModelReady()
             } else {
                 loadingStatus = "Warming search..."
                 semanticRuntime.markSemanticModelWarming()
 
-                async let imageTask: ImageEncoder = Task.detached {
-                    try ImageEncoder()
-                }.value
-                async let textTask: TextEncoder = Task.detached {
-                    try TextEncoder()
-                }.value
+                // Core ML's async loader cooperates with task cancellation.
+                // Avoid wrapping the synchronous initializer in a detached
+                // task: that work continues allocating after memory pressure.
+                let imgEncoder = try await ImageEncoder()
+                try Task.checkCancellation()
 
-                let imgEncoder = try await imageTask
-                let txtEncoder = try await textTask
-                search = await Task.detached {
-                    SearchEngine(textEncoder: txtEncoder)
-                }.value
+                let txtEncoder = try await TextEncoder()
+                try Task.checkCancellation()
+                search = SearchEngine(textEncoder: txtEncoder)
                 indexing = IndexingService(imageEncoder: imgEncoder, searchEngine: search)
 
                 imageEncoder = imgEncoder
@@ -143,22 +149,17 @@ class AppState: ObservableObject {
                 wireIndexingCallbacks(indexing)
                 semanticRuntime.markSemanticModelReady()
 
-                // Wire up refund handler: trim index to free tier limit
-                ProManager.shared.onProRevoked = { [weak self] in
-                    do {
-                        try AppDatabase.shared.trimToLimit(FreeTier.maxIndexedMedia)
-                        try search.loadIndex()
-                        self?.indexingService?.indexVersion += 1
-                    } catch {
-                        logger.error("Failed to trim index after refund: \(error.localizedDescription)")
-                    }
+                // Reconcile local Pro-only state on every verified free-tier
+                // launch, including refunds processed while the app was not
+                // running or while its semantic stack was suspended.
+                ProManager.shared.onFreeTierReconciliationNeeded = { [weak indexing] in
+                    await indexing?.reconcileFreeTier()
                 }
 
-                // ProManager.init() fires verifyEntitlement on launch to detect
-                // refunds, but that Task may complete before the callback above
-                // is set, losing the trim. Re-verify now that the callback is
-                // wired so a refunded user always gets their index trimmed.
+                // Verify after wiring the callback so a refunded user always
+                // has an oversized local index trimmed to the free-tier limit.
                 await ProManager.shared.verifyEntitlement()
+                try Task.checkCancellation()
             }
 
             loadingStatus = "Loading searchable memories..."
@@ -182,6 +183,7 @@ class AppState: ObservableObject {
                 cleanOrphans: effectivePriority != .userInitiatedSearch,
                 loadPriority: effectivePriority == .userInitiatedSearch ? .userInitiated : .utility
             )
+            try Task.checkCancellation()
             startPendingOnboardingIndexIfNeeded(using: indexing)
 
             #if DEBUG
@@ -190,28 +192,52 @@ class AppState: ObservableObject {
 
             if loadedIndex {
                 if let txtEncoder = textEncoder {
-                    Task { @MainActor in
-                        await self.captionService.prepare(textEncoder: txtEncoder)
-                    }
+                    startCaptionPreparation(textEncoder: txtEncoder)
                 }
             }
 
             #if DEBUG
             PerformanceMetrics.shared.end(PerformancePhase.semanticWarmup)
             #endif
+        } catch is CancellationError {
+            #if DEBUG
+            logger.info("Semantic warmup cancelled")
+            #endif
+            throw CancellationError()
         } catch {
-            logger.error("Model loading failed: \(error.localizedDescription)")
+            logger.error("Model loading failed: \(error.safeDiagnosticCode)")
             semanticRuntime.markFailure(error.localizedDescription)
             errorMessage = error.localizedDescription
             throw error
         }
     }
 
+    static func resumeExistingSearchForWarmup(_ searchEngine: SearchEngine) {
+        searchEngine.resumeAfterMemoryPressure()
+    }
+
+    private func startCaptionPreparation(textEncoder: TextEncoder) {
+        captionPreparationTask?.cancel()
+        captionPreparationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await captionService.prepare(textEncoder: textEncoder)
+            guard !Task.isCancelled else { return }
+            captionPreparationTask = nil
+        }
+    }
+
     private func startPendingOnboardingIndexIfNeeded(using indexing: IndexingService) {
+        guard Self.mayConsumePendingOnboardingRequest(isCancelled: Task.isCancelled) else {
+            return
+        }
         guard UserDefaults.standard.bool(forKey: AppKeys.startIndexAfterOnboarding) else { return }
         UserDefaults.standard.set(false, forKey: AppKeys.startIndexAfterOnboarding)
         guard !indexing.isReady && !indexing.progress.isRunning else { return }
         indexing.startIndexing()
+    }
+
+    nonisolated static func mayConsumePendingOnboardingRequest(isCancelled: Bool) -> Bool {
+        !isCancelled
     }
 
     private func wireIndexingCallbacks(_ indexing: IndexingService) {

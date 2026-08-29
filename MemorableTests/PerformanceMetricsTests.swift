@@ -39,4 +39,17 @@ final class PerformanceMetricsTests: XCTestCase {
             PerformancePhase.indexingThroughput,
         ])
     }
+
+    func testCompletedMetricsRemainBounded() {
+        let metrics = PerformanceMetrics()
+
+        for index in 0..<(PerformanceMetrics.completedMetricLimit + 10) {
+            let name = "metric-\(index)"
+            metrics.start(name, now: Double(index))
+            metrics.end(name, now: Double(index + 1))
+        }
+
+        XCTAssertEqual(metrics.completed.count, PerformanceMetrics.completedMetricLimit)
+        XCTAssertEqual(metrics.completed.first?.name, "metric-10")
+    }
 }

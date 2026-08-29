@@ -1,11 +1,90 @@
 import Foundation
 import UIKit
+import Darwin
+import CryptoKit
+
+enum FolderBookmarkStore {
+    static func bookmarkURL(for sourceId: String) throws -> URL {
+        guard let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let root = appSupport
+            .appendingPathComponent("Memorable", isDirectory: true)
+            .appendingPathComponent("FolderBookmarks", isDirectory: true)
+        try LocalOnlyStorage.prepareDirectory(at: root)
+        let digest = SHA256.hash(data: Data(sourceId.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return root.appendingPathComponent("\(digest).bookmark", isDirectory: false)
+    }
+
+    static func data(for sourceId: String) -> Data? {
+        do {
+            try migrateLegacyDataIfNeeded(for: sourceId)
+            let url = try bookmarkURL(for: sourceId)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return nil
+            }
+            return try Data(contentsOf: url, options: .mappedIfSafe)
+        } catch {
+            logger.error("[FolderBookmarkStore] Read or migration failed: \(error.safeDiagnosticCode)")
+            return nil
+        }
+    }
+
+    static func migrateLegacyDataIfNeeded(for sourceId: String) throws {
+        let legacyKey = AppKeys.folderBookmark(sourceId: sourceId)
+        let url = try bookmarkURL(for: sourceId)
+        if FileManager.default.fileExists(atPath: url.path) {
+            // Remove a legacy duplicate only after confirming that the local,
+            // backup-excluded replacement remains readable.
+            _ = try Data(contentsOf: url, options: .mappedIfSafe)
+            UserDefaults.standard.removeObject(forKey: legacyKey)
+            return
+        }
+        guard let legacyData = UserDefaults.standard.data(forKey: legacyKey) else {
+            return
+        }
+        try set(legacyData, for: sourceId)
+    }
+
+    static func set(_ data: Data, for sourceId: String) throws {
+        let url = try bookmarkURL(for: sourceId)
+        try data.write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen])
+        try LocalOnlyStorage.excludeFromBackup(url)
+        UserDefaults.standard.removeObject(
+            forKey: AppKeys.folderBookmark(sourceId: sourceId)
+        )
+    }
+
+    static func remove(for sourceId: String) {
+        UserDefaults.standard.removeObject(
+            forKey: AppKeys.folderBookmark(sourceId: sourceId)
+        )
+        guard let url = try? bookmarkURL(for: sourceId) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+}
 
 class FolderScanner {
     /// Folder sources are user-selected, but their trees can still be
     /// unexpectedly large. Match the app's documented large-library ceiling
     /// instead of buffering an unbounded number of URLs.
     static let maximumScannedImages = IndexingConfig.largeLibraryThreshold
+    /// Bound total directory entries, including unsupported files, so a
+    /// user-selected tree cannot force an effectively unbounded traversal.
+    static let maximumVisitedEntries = 100_000
+    /// Reject folder-source files larger than 32 MiB before ImageIO parses
+    /// them. The decoded-pixel cap protects output surfaces; this independent
+    /// bound protects compressed containers and metadata parsing.
+    static let maximumImageFileBytes = 32 * 1_024 * 1_024
+    /// Bounds decoded display images independently of caller-provided sizes.
+    /// A 2048-pixel edge keeps zoom useful without creating oversized
+    /// bitmaps on high-density displays.
+    static let maximumDecodedPixelDimension: CGFloat = 2_048
     // `.withSecurityScope` is unavailable on iOS. Persist the document-picker
     // bookmark and pair every access with start/stopAccessingSecurityScopedResource.
     private static let bookmarkOptions: URL.BookmarkCreationOptions = .minimalBookmark
@@ -19,7 +98,7 @@ class FolderScanner {
 
     // Resolve a saved bookmark back to a security-scoped URL
     static func resolveBookmark(forSourceId sourceId: String) -> URL? {
-        guard let data = UserDefaults.standard.data(forKey: AppKeys.folderBookmark(sourceId: sourceId)) else {
+        guard let data = FolderBookmarkStore.data(for: sourceId) else {
             return nil
         }
         var isStale = false
@@ -32,15 +111,30 @@ class FolderScanner {
             return nil
         }
         if isStale {
-            // Re-save refreshed bookmark
-            if let fresh = try? url.bookmarkData(options: bookmarkOptions, includingResourceValuesForKeys: nil, relativeTo: nil) {
-                UserDefaults.standard.set(fresh, forKey: AppKeys.folderBookmark(sourceId: sourceId))
+            do {
+                let fresh = try url.bookmarkData(
+                    options: bookmarkOptions,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+                try FolderBookmarkStore.set(fresh, for: sourceId)
+            } catch {
+                logger.error("[FolderScanner] Failed to refresh bookmark: \(error.safeDiagnosticCode)")
             }
         }
         return url
     }
 
     static let supportedExtensions = Set(["jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp"])
+    private static let supportedImageTypeIdentifiers = Set([
+        "public.jpeg",
+        "public.png",
+        "public.heic",
+        "public.heif",
+        "org.webmproject.webp",
+        "public.tiff",
+        "com.microsoft.bmp",
+    ])
 
     static func loadImageFromBookmarkedSource(
         filePath: String,
@@ -49,47 +143,192 @@ class FolderScanner {
     ) -> UIImage? {
         let imageURL = URL(fileURLWithPath: filePath)
         guard sourceId != PhotoSourceType.photokit.rawValue else {
-            logger.error("[FolderScanner] Refusing folder image path on PhotoKit source: \(imageURL.lastPathComponent)")
+            logger.error("[FolderScanner] Refusing a folder path on a PhotoKit source")
             return nil
         }
 
         guard let folderURL = resolveBookmark(forSourceId: sourceId) else {
-            logger.error("[FolderScanner] Could not resolve bookmark for source: \(sourceId)")
+            logger.error("[FolderScanner] Could not resolve a folder bookmark")
             return nil
         }
 
         let hasAccess = folderURL.startAccessingSecurityScopedResource()
         guard hasAccess else {
-            logger.error("[FolderScanner] Could not access bookmark for source: \(sourceId)")
+            logger.error("[FolderScanner] Could not access a folder bookmark")
             return nil
         }
         defer { folderURL.stopAccessingSecurityScopedResource() }
 
-        guard isValidImageFile(imageURL, within: folderURL) else {
-            logger.error("[FolderScanner] Refusing image path outside bookmarked folder: \(imageURL.lastPathComponent)")
+        guard let image = loadImage(
+            from: imageURL,
+            within: folderURL,
+            targetSize: targetSize
+        ) else {
+            logger.error("[FolderScanner] Refusing an invalid bookmarked image path")
             return nil
         }
-
-        return loadImage(from: imageURL, targetSize: targetSize)
+        return image
     }
 
-    static func isValidImageFile(_ imageURL: URL, within folderURL: URL) -> Bool {
-        let ext = imageURL.pathExtension.lowercased()
-        guard supportedExtensions.contains(ext) else { return false }
-
-        do {
-            let values = try imageURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            guard values.isRegularFile == true, values.isSymbolicLink != true else {
-                return false
-            }
-        } catch {
-            logger.error("[FolderScanner] Failed to validate image file: \(error.localizedDescription)")
+    /// Checks that a stored folder result is still reachable through its
+    /// security-scoped bookmark without decoding or loading the image.
+    static func canAccessBookmarkedImage(filePath: String, sourceId: String) -> Bool {
+        guard sourceId != PhotoSourceType.photokit.rawValue,
+              let folderURL = resolveBookmark(forSourceId: sourceId) else {
             return false
         }
 
-        let folderPath = folderURL.standardizedFileURL.resolvingSymlinksInPath().path
-        let filePath = imageURL.standardizedFileURL.resolvingSymlinksInPath().path
-        return filePath.hasPrefix(folderPath + "/")
+        let hasAccess = folderURL.startAccessingSecurityScopedResource()
+        guard hasAccess else { return false }
+        defer { folderURL.stopAccessingSecurityScopedResource() }
+
+        return isValidImageFile(URL(fileURLWithPath: filePath), within: folderURL)
+    }
+
+    static func isValidImageFile(_ imageURL: URL, within folderURL: URL) -> Bool {
+        withValidatedImageFileDescriptor(imageURL, within: folderURL) { _ in true } == true
+    }
+
+    /// Opens a regular image by walking downward from the selected folder's
+    /// descriptor. Every component uses `O_NOFOLLOW`, and the descriptor stays
+    /// open for the caller's complete read. Validation therefore applies to
+    /// the same file object that is decoded even if its pathname is replaced.
+    @discardableResult
+    static func withValidatedImageFileDescriptor<T>(
+        _ imageURL: URL,
+        within folderURL: URL,
+        _ operation: (Int32) throws -> T
+    ) rethrows -> T? {
+        guard let components = validatedRelativeComponents(
+            for: imageURL,
+            within: folderURL
+        ) else {
+            return nil
+        }
+
+        let directoryFlags = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        var directoryDescriptor = folderURL.standardizedFileURL.path.withCString {
+            open($0, directoryFlags)
+        }
+        guard directoryDescriptor >= 0 else { return nil }
+        defer { close(directoryDescriptor) }
+
+        for component in components.dropLast() {
+            let nextDescriptor = component.withCString {
+                openat(directoryDescriptor, $0, directoryFlags)
+            }
+            guard nextDescriptor >= 0 else { return nil }
+            close(directoryDescriptor)
+            directoryDescriptor = nextDescriptor
+        }
+
+        guard let fileName = components.last else { return nil }
+        let fileDescriptor = fileName.withCString {
+            openat(
+                directoryDescriptor,
+                $0,
+                O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
+            )
+        }
+        guard fileDescriptor >= 0 else { return nil }
+        defer { close(fileDescriptor) }
+
+        guard isSafeRegularImageFile(fileDescriptor) else { return nil }
+        return try operation(fileDescriptor)
+    }
+
+    @discardableResult
+    static func withValidatedImageSource<T>(
+        _ imageURL: URL,
+        within folderURL: URL,
+        _ operation: (CGImageSource, Date?) throws -> T
+    ) rethrows -> T? {
+        try withValidatedImageFileDescriptor(imageURL, within: folderURL) { descriptor in
+            guard let snapshot = immutableSnapshot(for: descriptor),
+                  let source = CGImageSourceCreateWithData(snapshot as CFData, nil),
+                  let detectedType = CGImageSourceGetType(source) as String?,
+                  supportedImageTypeIdentifiers.contains(detectedType) else {
+                return nil
+            }
+            return try operation(source, modificationDate(for: descriptor))
+        } ?? nil
+    }
+
+    private static func validatedRelativeComponents(
+        for imageURL: URL,
+        within folderURL: URL
+    ) -> [String]? {
+        guard supportedExtensions.contains(imageURL.pathExtension.lowercased()) else {
+            return nil
+        }
+
+        let folderPath = folderURL.standardizedFileURL.path
+        let imagePath = imageURL.standardizedFileURL.path
+        let prefix = folderPath == "/" ? "/" : folderPath + "/"
+        guard imagePath.hasPrefix(prefix), imagePath.count > prefix.count else {
+            return nil
+        }
+
+        let components = imagePath.dropFirst(prefix.count).split(
+            separator: "/",
+            omittingEmptySubsequences: false
+        ).map(String.init)
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            return nil
+        }
+        return components
+    }
+
+    private static func isSafeRegularImageFile(_ descriptor: Int32) -> Bool {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_size >= 0,
+              info.st_size <= off_t(maximumImageFileBytes),
+              info.st_blocks >= 0,
+              info.st_blocks <= Int64(maximumImageFileBytes / 512) else {
+            return false
+        }
+        return true
+    }
+
+    private static func immutableSnapshot(for descriptor: Int32) -> Data? {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              info.st_size > 0,
+              info.st_size <= off_t(maximumImageFileBytes) else {
+            return nil
+        }
+        let expectedCount = Int(info.st_size)
+        var data = Data(count: expectedCount)
+        let completed = data.withUnsafeMutableBytes { buffer -> Bool in
+            guard let baseAddress = buffer.baseAddress else { return false }
+            var offset = 0
+            while offset < expectedCount {
+                guard !Task.isCancelled else { return false }
+                let result = pread(
+                    descriptor,
+                    baseAddress.advanced(by: offset),
+                    expectedCount - offset,
+                    off_t(offset)
+                )
+                if result < 0 && errno == EINTR { continue }
+                guard result > 0 else { return false }
+                offset += result
+            }
+            return true
+        }
+        return completed ? data : nil
+    }
+
+    private static func modificationDate(for descriptor: Int32) -> Date? {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0 else { return nil }
+        return Date(
+            timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
+                + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000
+        )
     }
 
     static func localIdentifier(for imageURL: URL, within folderURL: URL, sourceId: String) -> String {
@@ -107,12 +346,15 @@ class FolderScanner {
     // Scan a folder and return a bounded, sorted batch of image file URLs.
     static func scanFolder(
         at url: URL,
-        maximumImageCount: Int = maximumScannedImages
+        maximumImageCount: Int = maximumScannedImages,
+        maximumVisitedEntryCount: Int = maximumVisitedEntries
     ) -> [URL] {
         let limit = max(0, maximumImageCount)
-        guard limit > 0, !Task.isCancelled else { return [] }
+        let visitLimit = max(0, maximumVisitedEntryCount)
+        guard limit > 0, visitLimit > 0, !Task.isCancelled else { return [] }
         var imageURLs: [URL] = []
         imageURLs.reserveCapacity(min(limit, 1_000))
+        var visitedEntryCount = 0
 
         guard let enumerator = FileManager.default.enumerator(
             at: url,
@@ -124,12 +366,19 @@ class FolderScanner {
 
         for case let fileURL as URL in enumerator {
             guard !Task.isCancelled else { break }
-            // Skip symlinks to prevent traversal outside the selected folder
-            if (try? fileURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+            visitedEntryCount += 1
+            guard visitedEntryCount <= visitLimit else { break }
+            let values = try? fileURL.resourceValues(forKeys: [
+                .isRegularFileKey,
+                .isSymbolicLinkKey,
+            ])
+            // Skip symlinks and special files before retaining a candidate.
+            if values?.isSymbolicLink == true {
+                enumerator.skipDescendants()
                 continue
             }
             let ext = fileURL.pathExtension.lowercased()
-            if supportedExtensions.contains(ext) {
+            if values?.isRegularFile == true, supportedExtensions.contains(ext) {
                 imageURLs.append(fileURL)
                 if imageURLs.count == limit { break }
             }
@@ -140,38 +389,75 @@ class FolderScanner {
 
     // Load a UIImage from a file URL at the target size for embedding
     static func loadImage(from url: URL, targetSize: CGSize = CGSize(width: 224, height: 224)) -> UIImage? {
-        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            #if DEBUG
-            logger.error("[FolderScanner] Failed to open image source: \(url.lastPathComponent)")
-            #endif
+        guard !Task.isCancelled,
+              targetSize.width.isFinite,
+              targetSize.height.isFinite,
+              targetSize.width > 0,
+              targetSize.height > 0 else {
             return nil
         }
+        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            logger.error("[FolderScanner] Failed to open an image source")
+            return nil
+        }
+        guard !Task.isCancelled else { return nil }
+        let maximumPixelSize = min(
+            max(targetSize.width, targetSize.height),
+            maximumDecodedPixelDimension
+        )
         let options: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: max(targetSize.width, targetSize.height),
+            kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true
         ]
 
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
-            #if DEBUG
-            logger.error("[FolderScanner] Failed to decode image: \(url.lastPathComponent)")
-            #endif
+            logger.error("[FolderScanner] Failed to decode an image")
             return nil
         }
+        guard !Task.isCancelled else { return nil }
 
-        let image = UIImage(cgImage: cgImage)
+        // ImageIO already produced a pixel-bounded, aspect-preserving image.
+        // Do not pass this pixel size through UIGraphicsImageRenderer, whose
+        // default screen scale would multiply the allocation a second time.
+        return UIImage(cgImage: cgImage, scale: 1, orientation: .up)
+    }
 
-        // Resize to target size
-        let renderer = UIGraphicsImageRenderer(size: targetSize)
-        return renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: targetSize))
+    /// Validates the file against the selected folder immediately before
+    /// ImageIO opens it. Call this overload for folder-source indexing so a
+    /// path replaced after enumeration cannot redirect the read elsewhere.
+    static func loadImage(
+        from url: URL,
+        within folderURL: URL,
+        targetSize: CGSize = CGSize(width: 224, height: 224)
+    ) -> UIImage? {
+        guard !Task.isCancelled,
+              targetSize.width.isFinite,
+              targetSize.height.isFinite,
+              targetSize.width > 0,
+              targetSize.height > 0 else {
+            return nil
         }
+        return withValidatedImageSource(url, within: folderURL) { imageSource, _ in
+            decodeImage(from: imageSource, targetSize: targetSize)
+        } ?? nil
     }
 
     // Load a thumbnail from a file URL
     static func loadThumbnail(from url: URL, targetSize: CGSize = CGSize(width: 400, height: 400)) -> UIImage? {
+        guard !Task.isCancelled,
+              targetSize.width.isFinite,
+              targetSize.height.isFinite,
+              targetSize.width > 0,
+              targetSize.height > 0 else {
+            return nil
+        }
+        let maximumPixelSize = min(
+            max(targetSize.width, targetSize.height),
+            maximumDecodedPixelDimension
+        )
         let options: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: max(targetSize.width, targetSize.height),
+            kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true
         ]
@@ -180,16 +466,19 @@ class FolderScanner {
               let thumbnail = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
             return nil
         }
+        guard !Task.isCancelled else { return nil }
 
-        return UIImage(cgImage: thumbnail)
+        return UIImage(cgImage: thumbnail, scale: 1, orientation: .up)
     }
 
     // Extract basic EXIF data from an image file
     static func extractMetadata(from url: URL) -> (date: Date?, latitude: Double?, longitude: Double?) {
-        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil),
+        guard !Task.isCancelled,
+              let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any] else {
             return (nil, nil, nil)
         }
+        guard !Task.isCancelled else { return (nil, nil, nil) }
 
         var date: Date?
         var latitude: Double?
@@ -221,6 +510,117 @@ class FolderScanner {
             }
         }
 
+        if !LocationCoordinatePolicy.isValidOrAbsent(
+            latitude: latitude,
+            longitude: longitude
+        ) {
+            latitude = nil
+            longitude = nil
+        }
+
+        return (date, latitude, longitude)
+    }
+
+    /// Validates containment again before reading metadata because the file
+    /// can change between folder enumeration and indexing.
+    static func extractMetadata(
+        from url: URL,
+        within folderURL: URL
+    ) -> (date: Date?, latitude: Double?, longitude: Double?) {
+        guard !Task.isCancelled else { return (nil, nil, nil) }
+        return withValidatedImageSource(url, within: folderURL) { imageSource, modificationDate in
+            extractMetadata(from: imageSource, modificationDate: modificationDate)
+        } ?? (nil, nil, nil)
+    }
+
+    /// Returns source pixel dimensions after a fresh containment check.
+    static func imageDimensions(
+        from url: URL,
+        within folderURL: URL
+    ) -> (width: Int, height: Int) {
+        guard !Task.isCancelled else { return (0, 0) }
+        return withValidatedImageSource(url, within: folderURL) { imageSource, _ in
+            guard !Task.isCancelled,
+                  let properties = CGImageSourceCopyPropertiesAtIndex(
+                    imageSource,
+                    0,
+                    nil
+                  ) as? [CFString: Any] else {
+                return (0, 0)
+            }
+            return (
+                properties[kCGImagePropertyPixelWidth] as? Int ?? 0,
+                properties[kCGImagePropertyPixelHeight] as? Int ?? 0
+            )
+        } ?? (0, 0)
+    }
+
+    private static func decodeImage(
+        from imageSource: CGImageSource,
+        targetSize: CGSize
+    ) -> UIImage? {
+        guard !Task.isCancelled else { return nil }
+        let maximumPixelSize = min(
+            max(targetSize.width, targetSize.height),
+            maximumDecodedPixelDimension
+        )
+        let options: [CFString: Any] = [
+            kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
+            imageSource,
+            0,
+            options as CFDictionary
+        ), !Task.isCancelled else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage, scale: 1, orientation: .up)
+    }
+
+    private static func extractMetadata(
+        from imageSource: CGImageSource,
+        modificationDate: Date?
+    ) -> (date: Date?, latitude: Double?, longitude: Double?) {
+        guard !Task.isCancelled,
+              let properties = CGImageSourceCopyPropertiesAtIndex(
+                imageSource,
+                0,
+                nil
+              ) as? [CFString: Any] else {
+            return (nil, nil, nil)
+        }
+
+        var date: Date?
+        var latitude: Double?
+        var longitude: Double?
+        if let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any],
+           let dateString = exif[kCGImagePropertyExifDateTimeOriginal] as? String {
+            date = exifDateFormatter.date(from: dateString)
+        }
+        date = date ?? modificationDate
+
+        if let gps = properties[kCGImagePropertyGPSDictionary] as? [CFString: Any] {
+            latitude = gps[kCGImagePropertyGPSLatitude] as? Double
+            longitude = gps[kCGImagePropertyGPSLongitude] as? Double
+            if let reference = gps[kCGImagePropertyGPSLatitudeRef] as? String,
+               reference == "S" {
+                latitude = latitude.map { -$0 }
+            }
+            if let reference = gps[kCGImagePropertyGPSLongitudeRef] as? String,
+               reference == "W" {
+                longitude = longitude.map { -$0 }
+            }
+        }
+
+        if !LocationCoordinatePolicy.isValidOrAbsent(
+            latitude: latitude,
+            longitude: longitude
+        ) {
+            latitude = nil
+            longitude = nil
+        }
         return (date, latitude, longitude)
     }
 }

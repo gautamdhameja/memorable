@@ -1,10 +1,10 @@
-# Startup, Search, and Indexing Changes - Before and After
+# Startup, search, and indexing changes
 
 Date: 2026-06-06
 
 This document summarizes the functional and behavioral changes from the current implementation work. It is written for product and engineering review, so it focuses on how the app behaves before and after the change rather than walking through the code.
 
-## Executive Summary
+## Summary
 
 Before this work, Memorable treated launch as a single large initialization step. The app waited for Core ML encoders, search engine setup, and index loading before the main experience could become usable. That made startup slower, especially on large libraries or after an interrupted indexing session.
 
@@ -12,7 +12,7 @@ After this work, launch is staged. The app brings up the visible shell first, th
 
 The implementation also tightens privacy and correctness in search. Location query text is no longer sent to `CLGeocoder`; location filtering now relies on locally stored reverse-geocoded metadata and trusted coordinates already attached to indexed media. Index loading and reloads are moved off the main actor, reducing UI blocking risk.
 
-## High-Level Behavior Change
+## Compare high-level behavior
 
 | Area | Before | After |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ The implementation also tightens privacy and correctness in search. Location que
 | Memory warning handling | Search index was dropped directly. | Background enrichment is canceled, the index is dropped, and readiness state is marked unavailable. |
 | User feedback | The UI mainly showed generic loading or indexing state. | The UI distinguishes warming search, prioritizing search, waiting for index, failure, and retry states. |
 
-## Startup Flow
+## Startup flow
 
 ### Before
 
@@ -54,7 +54,7 @@ Startup now has separate readiness phases:
 
 This makes the app feel faster because the first visible screen is no longer blocked by the complete semantic search stack.
 
-## Semantic Search Warmup
+## Semantic search warmup
 
 ### Before
 
@@ -74,7 +74,7 @@ Warmup starts as post-paint background work. If the user searches while warmup i
 
 This keeps startup light while still protecting the first real search interaction.
 
-## Search UI Behavior
+## Search UI behavior
 
 ### Before
 
@@ -94,7 +94,7 @@ When the search stack fails to warm, the app shows a retry path instead of leavi
 
 The search result loading state is also more specific. If semantic search is not ready yet, the app shows "Getting search ready..." rather than a generic "Searching...".
 
-## Stale Search Result Protection
+## Stale search result protection
 
 ### Before
 
@@ -104,7 +104,7 @@ If a user typed quickly or changed the query while an earlier search was still r
 
 The search view cancels prior search tasks when the query changes and checks that the active text still matches the query before applying results. This reduces race conditions where results for an older query appear under newer search text.
 
-## Index Loading and Indexing Behavior
+## Index loading and indexing behavior
 
 ### Before
 
@@ -130,7 +130,7 @@ Index behavior is more staged:
 
 This reduces launch-time work, makes first-time indexing produce searchable coverage sooner, and avoids surprising brand-new users with automatic indexing.
 
-## Free Tier Counting
+## Free-tier counting
 
 ### Before
 
@@ -142,7 +142,7 @@ Indexing counts photos and videos together as indexed media. The UI copy also no
 
 This makes the freemium limit and UI language match the actual media indexing model.
 
-## Video Search Filtering
+## Video search filtering
 
 ### Before
 
@@ -154,7 +154,7 @@ Video hard-filter logic is centralized. Date and location checks now use the sam
 
 This should make video search behavior more consistent across normal results and fallback states.
 
-## Negative Search Terms
+## Negative search terms
 
 ### Before
 
@@ -166,7 +166,7 @@ Negative term scoring is candidate-aware. For photos and videos, the code comput
 
 User-facing behavior should remain the same: negative terms still lower the score of matching results. The performance profile should be better, especially when filters narrow the candidate set.
 
-## Location Search Privacy
+## Location search privacy
 
 ### Before
 
@@ -182,7 +182,7 @@ Search no longer forward-geocodes query-derived location text. Location filterin
 
 The important privacy change is that photo contents and search query location text stay on device during search.
 
-## Memory Warning Behavior
+## Memory-warning behavior
 
 ### Before
 
@@ -194,7 +194,7 @@ On memory warning, the app drops the search index and updates readiness state so
 
 It also cancels deferred enrichment without rescheduling it, so OCR and scene-label work do not immediately reload the index after the app intentionally freed memory.
 
-## Purchase and Refund Handling
+## Purchase and refund handling
 
 ### Before
 
@@ -206,7 +206,7 @@ After wiring the refund callback, the app explicitly re-verifies entitlement. If
 
 This makes refund handling more reliable.
 
-## Model Resource Handling
+## Model resource handling
 
 ### Before
 
@@ -218,7 +218,7 @@ A model resource manager describes the active packaging strategy and validates b
 
 This does not change the current packaging strategy. Models are still bundled in the app. It creates a clearer boundary for future model packaging work, such as downloadable or separately quantized models.
 
-## Performance Observability
+## Performance observability
 
 ### Before
 
@@ -238,7 +238,7 @@ The app has named debug performance phases:
 
 This makes it easier to compare launch-to-shell time, semantic warmup time, and index loading time during local profiling.
 
-## Documentation Changes
+## Documentation changes
 
 The project documentation was updated to reflect the new behavior:
 
@@ -247,7 +247,7 @@ The project documentation was updated to reflect the new behavior:
 - Build metadata docs now reflect iPhone-only targeting on iOS 17+ and the `com.blockdeep.memorable.pro.v2` StoreKit product.
 - The startup/search plan and brainstorm documents remain under `docs/plans` and `docs/brainstorms`.
 
-## Verification Status
+## Verification status
 
 The following checks passed locally:
 
@@ -260,7 +260,7 @@ The following checks passed locally:
 
 One simulator test attempt hit a transient CoreSimulator `Busy` launch preflight error. The immediate serial retry passed.
 
-## Expected User Impact
+## Expected user impact
 
 The intended user-facing impact is:
 
@@ -275,7 +275,7 @@ The intended user-facing impact is:
 - Safer memory-warning recovery.
 - More reliable refund/free-tier enforcement.
 
-## Main Tradeoffs
+## Main tradeoffs
 
 This implementation intentionally shifts some work from launch time to shortly after launch or to the first search interaction. That improves startup responsiveness, but it means the first search after a cold launch may briefly show "Getting search ready..." if background warmup has not finished yet.
 

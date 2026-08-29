@@ -10,7 +10,7 @@ enum EmbeddingConfig {
 
 // MARK: - Photo Records
 
-struct IndexedPhoto: Codable, FetchableRecord, PersistableRecord {
+struct IndexedPhoto: Codable, FetchableRecord, PersistableRecord, Identifiable {
     var id: String
     var localIdentifier: String
     var creationDate: Date?
@@ -32,6 +32,19 @@ struct IndexedPhoto: Codable, FetchableRecord, PersistableRecord {
     var enrichmentComplete: Bool = false
 
     static let databaseTableName = "indexed_photos"
+
+    var searchResult: SearchResult {
+        SearchResult(
+            id: id,
+            score: 1,
+            localIdentifier: localIdentifier,
+            creationDate: creationDate,
+            isVideo: false,
+            bestFramePosition: nil,
+            sourceId: sourceId,
+            filePath: filePath
+        )
+    }
 }
 
 struct PhotoEnrichmentCandidate: Equatable, Sendable {
@@ -48,6 +61,49 @@ struct PhotoEnrichmentUpdate: Equatable, Sendable {
     let sharpnessScore: Double?
     let sceneLabels: String?
     var outcome: PhotoEnrichmentOutcome = .completed
+}
+
+struct IndexedPhotoReference: Identifiable, Sendable {
+    let id: String
+    let localIdentifier: String
+    let creationDate: Date?
+    let sourceId: String
+    let filePath: String?
+
+    var searchResult: SearchResult {
+        SearchResult(
+            id: id,
+            score: 1,
+            localIdentifier: localIdentifier,
+            creationDate: creationDate,
+            isVideo: false,
+            bestFramePosition: nil,
+            sourceId: sourceId,
+            filePath: filePath
+        )
+    }
+}
+
+struct SlideshowPhoto: Identifiable, Sendable {
+    let id: String
+    let localIdentifier: String
+    let creationDate: Date?
+    let embedding: Data
+    let sourceId: String
+    let filePath: String?
+
+    var searchResult: SearchResult {
+        SearchResult(
+            id: id,
+            score: 1,
+            localIdentifier: localIdentifier,
+            creationDate: creationDate,
+            isVideo: false,
+            bestFramePosition: nil,
+            sourceId: sourceId,
+            filePath: filePath
+        )
+    }
 }
 
 enum PhotoEnrichmentOutcome: Equatable, Sendable {
@@ -110,6 +166,7 @@ struct SearchResult: Identifiable, Equatable {
     let bestFramePosition: Double?
     let sourceId: String
     let filePath: String?
+    var supportsFindSimilar: Bool { !isVideo }
 
     init(
         id: String,
@@ -143,6 +200,23 @@ struct SmartAlbum: Codable, Identifiable {
     var name: String
     var query: String
     var createdAt: Date
+}
+
+enum SmartAlbumPolicy {
+    static let maximumAlbums = 100
+    static let maximumNameCharacters = 100
+
+    static func boundedName(_ value: String) -> String {
+        let withoutControls = String(value.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0)
+        })
+        let bounded = QueryInputPolicy.bounded(
+            withoutControls.trimmingCharacters(in: .whitespacesAndNewlines),
+            maximumUnicodeScalars: maximumNameCharacters,
+            maximumUTF8Bytes: maximumNameCharacters * 4
+        )
+        return bounded.isEmpty ? "Smart album" : bounded
+    }
 }
 
 enum IndexingPhase: Equatable {
@@ -193,5 +267,31 @@ extension Array where Element == Float {
             }
         }
         return data
+    }
+}
+
+extension Data {
+    /// Decodes one persisted embedding without relying on the database blob's
+    /// alignment. Reject malformed lengths before any typed memory access.
+    func validatedFloat16Embedding() -> [Float16]? {
+        guard count == EmbeddingConfig.bytesPerEmbedding else { return nil }
+        return withUnsafeBytes { rawBuffer in
+            var squaredNorm: Float = 0
+            var embedding: [Float16] = []
+            embedding.reserveCapacity(EmbeddingConfig.dimensions)
+            for index in 0..<EmbeddingConfig.dimensions {
+                let value = rawBuffer.loadUnaligned(
+                    fromByteOffset: index * MemoryLayout<Float16>.size,
+                    as: Float16.self
+                )
+                guard value.isFinite else { return nil }
+                let floatValue = Float(value)
+                squaredNorm += floatValue * floatValue
+                guard squaredNorm.isFinite else { return nil }
+                embedding.append(value)
+            }
+            guard squaredNorm > 0 else { return nil }
+            return embedding
+        }
     }
 }

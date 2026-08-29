@@ -48,7 +48,7 @@ struct ContentView: View {
             Text("Photo access is required")
                 .font(.title.bold())
                 .foregroundStyle(Celestial.Colors.onSurface)
-            Text("Memorable needs access to your photos to build a searchable index. All processing happens on your device.")
+            Text("Memorable processes photo and search content on your device. If a photo includes GPS coordinates, Apple may receive those coordinates to return a place name.")
                 .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             Button("Open Settings") {

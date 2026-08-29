@@ -94,7 +94,7 @@ final class SearchViewModel: ObservableObject {
     }
 
     func setQueryText(_ value: String) {
-        queryText = value
+        queryText = QueryInputPolicy.bounded(value)
         guard normalizedQuery.isEmpty else { return }
 
         #if DEBUG
@@ -180,6 +180,24 @@ final class SearchViewModel: ObservableObject {
     func dismissUpgradeBanner() {
         upgradeBannerDismissed = true
         searchesSinceDismiss = 0
+    }
+
+    func handleMemoryPressure() {
+        searchSequence += 1
+        validationSequence += 1
+        screenshotSequence += 1
+        searchTask?.cancel()
+        visibleResultValidationTask?.cancel()
+        screenshotDetectionTask?.cancel()
+        searchTask = nil
+        visibleResultValidationTask = nil
+        screenshotDetectionTask = nil
+        activeSearchID = nil
+        isSearching = false
+        results = []
+        fallbackResults = []
+        lastResults = []
+        screenshotIDs = []
     }
 
     func applySimilarResults(_ similarResults: [SearchResult]) {
@@ -326,7 +344,7 @@ final class SearchViewModel: ObservableObject {
                 recordSuccessfulSearch()
             }
         } catch {
-            logger.error("[SearchViewModel #\(searchID)] Search failed: \(error.localizedDescription)")
+            logger.error("[SearchViewModel #\(searchID)] Search failed: \(error.safeDiagnosticCode)")
             if activeSearchID == searchID {
                 searchError = "Search failed: \(error.localizedDescription)"
                 results = []
@@ -375,6 +393,7 @@ final class SearchViewModel: ObservableObject {
     }
 
     private static func normalize(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespacesAndNewlines)
+        QueryInputPolicy.bounded(value)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

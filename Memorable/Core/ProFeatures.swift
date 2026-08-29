@@ -4,13 +4,37 @@ import StoreKit
 enum FreeTier {
     static let maxIndexedMedia = 500
 
-    static func canIndexMore(indexedMediaCount: Int, isPro: Bool) -> Bool {
-        isPro || indexedMediaCount < maxIndexedMedia
+    static func indexLimit(isPro: Bool) -> Int {
+        isPro ? ProTier.maxIndexedMedia : maxIndexedMedia
     }
+
+    static func canIndexMore(indexedMediaCount: Int, isPro: Bool) -> Bool {
+        indexedMediaCount < indexLimit(isPro: isPro)
+    }
+}
+
+enum FreeTierStatePolicy {
+    static func hitIndexLimit(
+        previouslyHit: Bool,
+        reconciliation: FreeTierReconciliationResult
+    ) -> Bool {
+        reconciliation.didTrimMedia || (
+            previouslyHit && reconciliation.retainedMediaCount >= FreeTier.maxIndexedMedia
+        )
+    }
+}
+
+/// Keeps the resident semantic index within a predictable memory envelope on
+/// supported devices. Videos can contribute up to five frame embeddings each.
+enum ProTier {
+    static let maxIndexedMedia = SearchIndexLimits.maximumMediaItems
 }
 
 @MainActor
 class ProManager: ObservableObject {
+    typealias ProductLoader = @MainActor ([String]) async throws -> [Product]
+    typealias RetryDelay = @MainActor () async throws -> Void
+
     static let shared = ProManager()
 
     static let productId = "com.blockdeep.memorable.pro.v2"
@@ -33,36 +57,52 @@ class ProManager: ObservableObject {
     @Published var isLoadingProduct: Bool = false
 
     private var transactionListener: Task<Void, Never>?
+    private let productLoader: ProductLoader
+    private let retryDelay: RetryDelay
 
-    /// Called when Pro is revoked (refund). Set by AppState to trim index.
-    var onProRevoked: (() -> Void)?
+    /// Reconciles local Pro-only state whenever StoreKit verifies that the
+    /// current account does not have an entitlement. The operation must be
+    /// idempotent because it also runs on cold launch and after recovery.
+    var onFreeTierReconciliationNeeded: (@MainActor () async -> Void)?
 
     private init() {
-        transactionListener = listenForTransactions()
-        Task { await self.loadProduct() }
-        Task { await self.verifyEntitlement() }
+        productLoader = { try await Product.products(for: $0) }
+        retryDelay = { try await Task.sleep(nanoseconds: 2_000_000_000) }
+    }
+
+    /// Internal seam for deterministic lifecycle tests. Production always uses
+    /// StoreKit through `shared`.
+    init(
+        productLoader: @escaping ProductLoader,
+        retryDelay: @escaping RetryDelay = {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+    ) {
+        self.productLoader = productLoader
+        self.retryDelay = retryDelay
     }
 
     // MARK: - Product
 
     func loadProduct() async {
+        guard !isLoadingProduct else { return }
         isLoadingProduct = true
         defer { isLoadingProduct = false }
         do {
-            var products = try await Product.products(for: [Self.productId])
+            var products = try await productLoader([Self.productId])
             if products.isEmpty {
                 // StoreKit occasionally returns empty on a cold start or a
                 // transient network blip. Give it one more chance before
                 // surfacing a broken upgrade UI to the user (or reviewer).
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                products = (try? await Product.products(for: [Self.productId])) ?? []
+                try await retryDelay()
+                products = try await productLoader([Self.productId])
             }
             product = products.first
             #if DEBUG
             logger.info("[ProManager] Loaded \(products.count) products, match: \(products.first?.displayName ?? "nil")")
             #endif
         } catch {
-            logger.error("Failed to load products: \(error.localizedDescription)")
+            logger.error("Failed to load products: \(error.safeDiagnosticCode)")
         }
     }
 
@@ -94,6 +134,7 @@ class ProManager: ObservableObject {
                 break
             }
         } catch {
+            logger.error("Purchase failed: \(error.safeDiagnosticCode)")
             purchaseError = "Purchase failed: \(error.localizedDescription)"
         }
     }
@@ -108,6 +149,7 @@ class ProManager: ObservableObject {
         do {
             try await AppStore.sync()
         } catch {
+            logger.error("Restore failed: \(error.safeDiagnosticCode)")
             isRestoring = false
             purchaseError = "Restore failed: \(error.localizedDescription)"
             return
@@ -115,8 +157,11 @@ class ProManager: ObservableObject {
 
         var found = false
         for await result in Transaction.currentEntitlements {
-            if let transaction = try? checkVerified(result),
-               Self.isEntitlementProduct(transaction.productID) {
+            guard case .verified(let transaction) = result else {
+                logger.error("Ignored an unverified restored entitlement")
+                continue
+            }
+            if Self.isEntitlementProduct(transaction.productID) {
                 unlock()
                 found = true
                 break
@@ -136,31 +181,46 @@ class ProManager: ObservableObject {
     /// Called on every launch to verify the user still has the entitlement.
     /// If they got a refund, isPro is revoked.
     func verifyEntitlement() async {
+        startListeningForTransactionsIfNeeded()
         #if !DEBUG
         var entitled = false
         for await result in Transaction.currentEntitlements {
-            if let transaction = try? checkVerified(result),
-               Self.isEntitlementProduct(transaction.productID),
+            guard case .verified(let transaction) = result else {
+                logger.error("Ignored an unverified current entitlement")
+                continue
+            }
+            if Self.isEntitlementProduct(transaction.productID),
                transaction.revocationDate == nil {
                 entitled = true
                 break
             }
         }
 
-        if entitled != isPro {
-            isPro = entitled
-            if !entitled {
-                logger.error("Pro entitlement revoked (refund or family sharing removed)")
-                onProRevoked?()
-            }
-        }
+        await reconcileVerifiedEntitlement(entitled)
         #endif
+    }
+
+    /// Applies a verified entitlement result. This is internal so lifecycle
+    /// behavior can be tested without contacting StoreKit.
+    func reconcileVerifiedEntitlement(_ entitled: Bool) async {
+        let wasPro = isPro
+        isPro = entitled
+        guard !entitled else { return }
+        if wasPro {
+            logger.error("Pro entitlement revoked (refund or family sharing removed)")
+        }
+        await onFreeTierReconciliationNeeded?()
     }
 
     // MARK: - Private
 
     private func unlock() {
         isPro = true
+    }
+
+    private func startListeningForTransactionsIfNeeded() {
+        guard transactionListener == nil else { return }
+        transactionListener = listenForTransactions()
     }
 
     private func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {
@@ -187,7 +247,7 @@ class ProManager: ObservableObject {
                         await transaction.finish()
                     }
                 case .unverified:
-                    break
+                    logger.error("Ignored an unverified StoreKit transaction update")
                 }
             }
         }

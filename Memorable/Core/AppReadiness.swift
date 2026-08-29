@@ -34,6 +34,10 @@ struct AppReadiness: Equatable {
         semanticModel = .ready
     }
 
+    mutating func markSemanticModelUnavailable() {
+        semanticModel = .unavailable
+    }
+
     mutating func markIndexWarming() {
         index = .warming
     }

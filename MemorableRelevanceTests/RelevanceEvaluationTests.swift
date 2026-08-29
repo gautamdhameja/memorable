@@ -4,16 +4,20 @@ import XCTest
 final class RelevanceEvaluationTests: XCTestCase {
     private var fixtureBundle: Bundle { Bundle(for: Self.self) }
 
-    func testRealModelRankingMatchesSimulatorBaseline() throws {
+    func testRealModelRankingMatchesSimulatorBaseline() async throws {
         let manifest = try RelevanceFixtureLoader.loadManifest(bundle: fixtureBundle)
         let perturbationValue = ProcessInfo.processInfo.environment["MEMORABLE_RELEVANCE_PERTURBATION"]
         let perturbation = perturbationValue?.isEmpty == false ? perturbationValue : nil
-        let imageEncoder = try ImageEncoder()
-        let embeddings = try manifest.entries.map { entry -> [Float16] in
+        let imageEncoder = try await ImageEncoder()
+        var embeddings: [[Float16]] = []
+        embeddings.reserveCapacity(manifest.entries.count)
+        for entry in manifest.entries {
             let image = try RelevanceFixtureLoader.loadImage(for: entry, perturbation: perturbation)
-            return try imageEncoder.encode(image: image).map(Float16.init)
+            embeddings.append(
+                try await imageEncoder.encodeCancellable(image: image).map(Float16.init)
+            )
         }
-        let textEncoder = try TextEncoder()
+        let textEncoder = try await TextEncoder()
         let database = RelevanceFixtureDatabase(manifest: manifest, embeddings: embeddings)
         let engine = SearchEngine(textEncoder: textEncoder, database: database)
         try engine.loadIndex()

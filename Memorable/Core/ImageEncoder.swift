@@ -5,27 +5,25 @@ import os
 
 final class ImageEncoder: Sendable {
     private let model: OSAllocatedUnfairLock<any CoreMLModelPredicting>
-    private let modelLoader: @Sendable () throws -> any CoreMLModelPredicting
 
-    init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) throws {
-        let loader: @Sendable () throws -> any CoreMLModelPredicting = {
-            let modelURL = try resourceManager.url(for: .imageEncoder)
-            return try MLModel(contentsOf: modelURL, configuration: Self.modelConfiguration())
-        }
-        self.modelLoader = loader
-        self.model = OSAllocatedUnfairLock(initialState: try loader())
+    init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) async throws {
+        try Task.checkCancellation()
+        let modelURL = try resourceManager.url(for: .imageEncoder)
+        let loadedModel = try await MLModel.load(
+            contentsOf: modelURL,
+            configuration: Self.modelConfiguration()
+        )
+        try Task.checkCancellation()
+        self.model = OSAllocatedUnfairLock(initialState: loadedModel)
     }
 
-    init(
-        model: any CoreMLModelPredicting,
-        modelLoader: @escaping @Sendable () throws -> any CoreMLModelPredicting
-    ) {
+    init(model: any CoreMLModelPredicting) {
         self.model = OSAllocatedUnfairLock(initialState: model)
-        self.modelLoader = modelLoader
     }
 
     // Encode a UIImage into a 768-dimensional normalized embedding vector
     func encode(image: UIImage) throws -> [Float] {
+        try Task.checkCancellation()
         guard let pixelBuffer = image.toPixelBuffer(width: 224, height: 224) else {
             throw ImageEncoderError.preprocessingFailed
         }
@@ -34,38 +32,68 @@ final class ImageEncoder: Sendable {
         let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
             "pixel_values": MLFeatureValue(multiArray: inputArray)
         ])
+        try Task.checkCancellation()
 
-        let output: MLFeatureProvider
-        do {
-            output = try currentModel().prediction(from: inputFeatures)
-        } catch let originalError {
-            logger.warning("[ImageEncoder] Prediction failed, reloading model: \(originalError.localizedDescription)")
-            do {
-                output = try reloadModel().prediction(from: inputFeatures)
-            } catch {
-                logger.error("[ImageEncoder] Prediction failed after model reload: \(error.localizedDescription)")
-                throw originalError
-            }
-        }
+        let output = try currentModel().prediction(from: inputFeatures)
 
         guard let embeddingArray = output.featureValue(for: "image_embedding")?.multiArrayValue else {
             throw ImageEncoderError.outputExtractionFailed
         }
 
         var embedding = embeddingArray.toFloatArray()
-        embedding.l2Normalize()
+        try Task.checkCancellation()
+        guard embedding.count == EmbeddingConfig.dimensions else {
+            throw ImageEncoderError.invalidEmbedding
+        }
+        guard embedding.l2Normalize() else { throw ImageEncoderError.invalidEmbedding }
         return embedding
+    }
+
+    /// Uses Core ML's async prediction API so cancellation can stop an active
+    /// production inference instead of only discarding its eventual result.
+    func encodeCancellable(image: UIImage) async throws -> [Float] {
+        try Task.checkCancellation()
+        guard let pixelBuffer = image.toPixelBuffer(width: 224, height: 224) else {
+            throw ImageEncoderError.preprocessingFailed
+        }
+        let inputArray = try pixelBufferToMLMultiArray(
+            pixelBuffer: pixelBuffer,
+            width: 224,
+            height: 224
+        )
+        let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
+            "pixel_values": MLFeatureValue(multiArray: inputArray),
+        ])
+        try Task.checkCancellation()
+        let output = try await currentModel().cancellablePrediction(from: inputFeatures)
+        try Task.checkCancellation()
+        guard let embeddingArray = output.featureValue(
+            for: "image_embedding"
+        )?.multiArrayValue else {
+            throw ImageEncoderError.outputExtractionFailed
+        }
+        var embedding = embeddingArray.toFloatArray()
+        guard embedding.count == EmbeddingConfig.dimensions,
+              embedding.l2Normalize() else {
+            throw ImageEncoderError.invalidEmbedding
+        }
+        return embedding
+    }
+
+    /// Keep inference single-flight and release each image's feature buffers
+    /// before starting the next item. This bounds cancellation-time memory.
+    func encodeBatchCancellable(images: [UIImage]) async throws -> [[Float]] {
+        var embeddings: [[Float]] = []
+        embeddings.reserveCapacity(images.count)
+        for image in images {
+            try Task.checkCancellation()
+            embeddings.append(try await encodeCancellable(image: image))
+        }
+        return embeddings
     }
 
     private func currentModel() -> any CoreMLModelPredicting {
         model.withLock { $0 }
-    }
-
-    @discardableResult
-    private func reloadModel() throws -> any CoreMLModelPredicting {
-        let reloadedModel = try modelLoader()
-        model.withLock { $0 = reloadedModel }
-        return reloadedModel
     }
 
     private static func modelConfiguration() -> MLModelConfiguration {
@@ -100,6 +128,7 @@ final class ImageEncoder: Sendable {
         let ptr = array.dataPointer.bindMemory(to: Float16.self, capacity: 3 * pixelCount)
 
         for y in 0..<height {
+            if y.isMultiple(of: 16) { try Task.checkCancellation() }
             for x in 0..<width {
                 let offset = y * bytesPerRow + x * 4
                 let r = (Float(pixels[offset + 2]) / 255.0 - mean[0]) / std[0]
@@ -121,6 +150,7 @@ final class ImageEncoder: Sendable {
     /// Returns array of L2-normalized embedding vectors (same order as input).
     func encodeBatch(images: [UIImage]) throws -> [[Float]] {
         guard !images.isEmpty else { return [] }
+        try Task.checkCancellation()
 
         #if DEBUG
         let batchStart = CFAbsoluteTimeGetCurrent()
@@ -129,6 +159,7 @@ final class ImageEncoder: Sendable {
         // Preprocess all images into MLFeatureProviders
         var featureProviders: [MLFeatureProvider] = []
         for image in images {
+            try Task.checkCancellation()
             guard let pixelBuffer = image.toPixelBuffer(width: 224, height: 224) else {
                 throw ImageEncoderError.preprocessingFailed
             }
@@ -141,26 +172,29 @@ final class ImageEncoder: Sendable {
 
         // Run batch prediction
         let batchProvider = MLArrayBatchProvider(array: featureProviders)
-        let batchResults: MLBatchProvider
-        do {
-            batchResults = try currentModel().predictions(from: batchProvider, options: MLPredictionOptions())
-        } catch {
-            #if DEBUG
-            logger.warning("[ImageEncoder] Batch prediction failed, reloading model: \(error.localizedDescription)")
-            #endif
-            batchResults = try reloadModel().predictions(from: batchProvider, options: MLPredictionOptions())
+        try Task.checkCancellation()
+        let batchResults = try currentModel().predictions(
+            from: batchProvider,
+            options: MLPredictionOptions()
+        )
+        guard batchResults.count == images.count else {
+            throw ImageEncoderError.invalidEmbedding
         }
 
         // Extract embeddings
         var embeddings: [[Float]] = []
         for i in 0..<batchResults.count {
+            try Task.checkCancellation()
             let output = batchResults.features(at: i)
             guard let embeddingArray = output.featureValue(for: "image_embedding")?.multiArrayValue else {
                 throw ImageEncoderError.outputExtractionFailed
             }
 
             var embedding = embeddingArray.toFloatArray()
-            embedding.l2Normalize()
+            guard embedding.count == EmbeddingConfig.dimensions else {
+                throw ImageEncoderError.invalidEmbedding
+            }
+            guard embedding.l2Normalize() else { throw ImageEncoderError.invalidEmbedding }
             embeddings.append(embedding)
         }
 
@@ -171,10 +205,11 @@ final class ImageEncoder: Sendable {
         return embeddings
     }
 
-    enum ImageEncoderError: LocalizedError {
+    enum ImageEncoderError: LocalizedError, Equatable {
         case modelNotFound
         case preprocessingFailed
         case outputExtractionFailed
+        case invalidEmbedding
 
         var errorDescription: String? {
             switch self {
@@ -184,6 +219,8 @@ final class ImageEncoder: Sendable {
                 return "Failed to process the image. The file may be corrupted."
             case .outputExtractionFailed:
                 return "The image analysis model returned an unexpected result."
+            case .invalidEmbedding:
+                return "The image analysis model returned an invalid embedding."
             }
         }
     }
