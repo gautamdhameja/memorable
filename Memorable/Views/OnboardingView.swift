@@ -2,6 +2,7 @@ import SwiftUI
 
 struct OnboardingView: View {
     @Binding var isComplete: Bool
+    @Binding var startIndexAfterCompletion: Bool
 
     @State private var currentPage = 0
 
@@ -10,71 +11,240 @@ struct OnboardingView: View {
             Celestial.Colors.background.ignoresSafeArea()
 
             TabView(selection: $currentPage) {
-                onboardingPage(
-                    icon: "sparkle.magnifyingglass",
-                    title: "Search by Memory",
-                    description: "Describe what you remember and find the exact photo. \"Birthday cake with candles\", \"sunset at the beach\", \"my dog playing\".",
-                    tag: 0
-                )
-                onboardingPage(
-                    icon: "lock.shield",
-                    title: "100% Private",
-                    description: "All AI processing happens on your device. Your photos never leave your phone. No accounts. No tracking.",
-                    tag: 1
-                )
-                onboardingPage(
-                    icon: "cpu",
-                    title: "One-Time Setup",
-                    description: "Memorable needs to scan your photo library once to build a search index. This takes a few minutes and only happens once.",
-                    tag: 2,
-                    showGetStarted: true
-                )
+                searchByMemoryPage.tag(0)
+                privacyPage.tag(1)
+                setupPage.tag(2)
             }
-            .tabViewStyle(.page(indexDisplayMode: .always))
+            .tabViewStyle(.page(indexDisplayMode: .never))
         }
         .preferredColorScheme(.dark)
     }
 
-    private func onboardingPage(icon: String, title: String, description: String, tag: Int, showGetStarted: Bool = false) -> some View {
-        VStack(spacing: 24) {
-            Spacer()
-
-            Image(systemName: icon)
-                .font(.system(size: 64, weight: .thin))
-                .foregroundStyle(Celestial.Colors.primaryDim)
-
-            Text(title)
-                .font(.system(.title2, design: .rounded, weight: .semibold))
-                .foregroundStyle(Celestial.Colors.onSurface)
-
-            Text(description)
-                .font(.subheadline)
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-
-            Spacer()
-
-            if showGetStarted {
-                Button(action: {
-                    UserDefaults.standard.set(true, forKey: AppKeys.onboardingComplete)
-                    withAnimation { isComplete = true }
-                }) {
-                    Text("Get Started")
-                        .font(.system(.headline, design: .rounded, weight: .semibold))
-                        .foregroundStyle(Celestial.Colors.onPrimaryContainer)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(Celestial.Colors.primaryContainer)
-                        .clipShape(Capsule())
+    private var searchByMemoryPage: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .top) {
+                Celestial.memoryGradient
+                .frame(height: proxy.size.height * 0.61)
+                .overlay(alignment: .bottom) {
+                    LinearGradient(
+                        colors: [.clear, Celestial.Colors.background.opacity(0.12), Celestial.Colors.background],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: proxy.size.height * 0.36)
                 }
-                .padding(.horizontal, 32)
-                .padding(.bottom, 48)
-            } else {
-                Spacer()
-                    .frame(height: 100)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Spacer().frame(height: max(250, proxy.size.height * 0.42))
+
+                    HStack(spacing: 11) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(Celestial.Colors.primaryDim)
+                        Text("sunset at the beach last summer")
+                            .font(.subheadline)
+                            .foregroundStyle(Celestial.Colors.onSurface)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 15)
+                    .frame(height: 50)
+                    .background(Celestial.Colors.background.opacity(0.72))
+                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .stroke(Celestial.Colors.primaryDim.opacity(0.48), lineWidth: 1)
+                    }
+
+                    Spacer().frame(height: max(72, proxy.size.height * 0.12))
+
+                    Text("Search your photos\nby what you remember")
+                        .font(.largeTitle.bold())
+                        .tracking(-0.8)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+
+                    Text("Describe the moment. No tags, no albums to keep up with.")
+                        .font(.body)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .lineSpacing(5)
+                        .padding(.top, 16)
+
+                    Spacer()
+
+                    pageFooter(primaryTitle: "Continue") {
+                        withAnimation(.easeInOut(duration: 0.25)) { currentPage = 1 }
+                    }
+                }
+                .padding(.horizontal, 26)
+                .padding(.bottom, 10)
             }
         }
-        .tag(tag)
+    }
+
+    private var privacyPage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer().frame(height: 122)
+
+            Text("Everything stays\non this iPhone")
+                .font(.largeTitle.bold())
+                .tracking(-0.8)
+                .foregroundStyle(Celestial.Colors.onSurface)
+
+            Text("No account. No tracking. No cloud upload.")
+                .font(.body)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .padding(.top, 16)
+
+            VStack(spacing: 0) {
+                privacyRow(number: "01", text: "Indexing and search run on this iPhone")
+                privacyRow(number: "02", text: "No account, no tracking, no uploads")
+                privacyRow(number: "03", text: "Delete the index any time")
+                CelestialHairline()
+            }
+            .padding(.top, 64)
+
+            Text("Searching runs on the device holding the photos, so it works with Airplane Mode on.")
+                .font(.subheadline)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .lineSpacing(4)
+                .padding(.top, 26)
+
+            Spacer()
+
+            pageFooter(primaryTitle: "Continue") {
+                withAnimation(.easeInOut(duration: 0.25)) { currentPage = 2 }
+            }
+        }
+        .padding(.horizontal, 26)
+        .padding(.bottom, 10)
+    }
+
+    private var setupPage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack {
+                Circle()
+                    .stroke(Celestial.Colors.hairline, lineWidth: 1)
+                    .frame(width: 150, height: 150)
+                Circle()
+                    .stroke(
+                        Celestial.Colors.primaryDim.opacity(0.32),
+                        style: StrokeStyle(lineWidth: 1, dash: [2, 8])
+                    )
+                    .frame(width: 106, height: 106)
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 34, weight: .light))
+                    .foregroundStyle(Celestial.Colors.primaryDim)
+                Circle()
+                    .fill(Celestial.Colors.amber)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 75)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 80)
+
+            Text("Make your library\nsearchable")
+                .font(.title.bold())
+                .tracking(-0.7)
+                .foregroundStyle(Celestial.Colors.onSurface)
+                .padding(.top, 62)
+
+            Text("A one-time scan runs on this iPhone. Photos become searchable as it goes.")
+                .font(.body)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .lineSpacing(5)
+                .padding(.top, 16)
+
+            VStack(spacing: 0) {
+                setupRow(label: "Processing", value: "On device")
+                setupRow(label: "Search availability", value: "Progressive")
+                setupRow(label: "Free tier indexes", value: "First 500 items", accent: true)
+                CelestialHairline()
+            }
+            .padding(.top, 32)
+
+            Spacer()
+
+            Text("Runs on device · nothing is uploaded")
+                .font(.caption)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 16)
+
+            Button {
+                startIndexAfterCompletion = true
+                completeOnboarding()
+            } label: {
+                Text("Build Search Index")
+                    .font(.headline)
+                    .foregroundStyle(Celestial.Colors.onPrimaryContainer)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(Celestial.Colors.primaryDim)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            Button("Not now") {
+                startIndexAfterCompletion = false
+                completeOnboarding()
+            }
+            .font(.body.weight(.medium))
+            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            .frame(maxWidth: .infinity)
+            .frame(height: 46)
+        }
+        .padding(.horizontal, 26)
+        .padding(.bottom, 10)
+    }
+
+    private func privacyRow(number: String, text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            Text(number)
+                .font(.system(.caption, design: .monospaced, weight: .medium))
+                .foregroundStyle(Celestial.Colors.primaryDim)
+            Text(text)
+                .font(.body)
+                .foregroundStyle(Celestial.Colors.onSurface)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 19)
+        .overlay(alignment: .top) { CelestialHairline() }
+    }
+
+    private func setupRow(label: String, value: String, accent: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            Spacer()
+            Text(value)
+                .fontWeight(.semibold)
+                .foregroundStyle(accent ? Celestial.Colors.amber : Celestial.Colors.onSurface)
+        }
+        .font(.subheadline)
+        .padding(.vertical, 15)
+        .overlay(alignment: .top) { CelestialHairline() }
+    }
+
+    private func pageFooter(primaryTitle: String, action: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack(spacing: 6) {
+                ForEach(0..<3, id: \.self) { index in
+                    Capsule()
+                        .fill(index == currentPage ? Celestial.Colors.primaryDim : Celestial.Colors.onSurface.opacity(0.20))
+                        .frame(width: 20, height: 3)
+                }
+            }
+
+            Button(action: action) {
+                Text(primaryTitle)
+                    .font(.headline)
+                    .foregroundStyle(Celestial.Colors.onPrimaryContainer)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(Celestial.Colors.primaryDim)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+    }
+
+    private func completeOnboarding() {
+        withAnimation(.easeInOut(duration: 0.25)) { isComplete = true }
     }
 }

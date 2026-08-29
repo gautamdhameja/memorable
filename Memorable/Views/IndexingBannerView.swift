@@ -2,6 +2,8 @@ import SwiftUI
 
 struct IndexingBannerView: View {
     @ObservedObject var indexingService: IndexingService
+    @ScaledMetric(relativeTo: .largeTitle) private var percentageSize: CGFloat = 56
+    @ScaledMetric(relativeTo: .title2) private var percentageSuffixSize: CGFloat = 25
 
     private var phaseLabel: String {
         switch indexingService.progress.phase {
@@ -14,58 +16,93 @@ struct IndexingBannerView: View {
 
     private var progressDetail: String {
         let progress = indexingService.progress
-        var parts = ["\(phaseLabel): \(progress.completed) / \(progress.total)"]
+        var parts: [String] = []
         if let speed = progress.itemsPerSecond {
             parts.append(String(format: "%.1f/sec", speed))
         }
         if let eta = progress.estimatedSecondsRemaining {
             parts.append("~\(formatDuration(eta)) left")
         }
-        return parts.joined(separator: " - ")
+        return parts.isEmpty ? "Calculating…" : parts.joined(separator: " · ")
     }
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 0) {
             if indexingService.progress.isRunning {
-                // Percentage number
-                Text("\(Int(indexingService.progress.percentage))%")
-                    .font(.system(.title, design: .rounded, weight: .semibold))
-                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text("SEARCH INDEX")
+                    .font(.caption.weight(.medium))
+                    .tracking(1.2)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Fat progress bar
-                ProgressView(value: indexingService.progress.percentage, total: 100)
-                    .tint(indexingService.progress.phase == .videos ? Celestial.Colors.tertiaryDim : Celestial.Colors.primaryFixedDim)
-                    .scaleEffect(y: 2.5)
-                    .clipShape(Capsule())
-                    .accessibilityLabel("\(phaseLabel): \(Int(indexingService.progress.percentage)) percent")
-
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(progressDetail)
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        if indexingService.progress.searchableCount > 0 {
-                            Text("\(indexingService.progress.searchableCount) media searchable while work continues")
-                                .font(.footnote)
-                                .foregroundStyle(Celestial.Colors.amber)
-                        } else if indexingService.progress.phase == .enrichment {
-                            Text("Search is available. Adding text and scene boosts.")
-                                .font(.footnote)
-                                .foregroundStyle(Celestial.Colors.amber)
+                ZStack {
+                    Circle()
+                        .stroke(Celestial.Colors.hairline, lineWidth: 3)
+                    Circle()
+                        .trim(from: 0, to: indexingService.progress.percentage / 100)
+                        .stroke(Celestial.Colors.primaryDim, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    Circle()
+                        .stroke(
+                            Celestial.Colors.amber.opacity(0.28),
+                            style: StrokeStyle(lineWidth: 1, dash: [2, 9])
+                        )
+                        .padding(16)
+                    VStack(spacing: 10) {
+                        HStack(alignment: .firstTextBaseline, spacing: 1) {
+                            Text("\(Int(indexingService.progress.percentage))")
+                                .font(.system(size: percentageSize, weight: .medium, design: .rounded))
+                                .tracking(-2)
+                            Text("%")
+                                .font(.system(size: percentageSuffixSize, weight: .medium, design: .rounded))
                         }
+                        Text(phaseLabel)
+                            .font(.subheadline)
+                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     }
-                    Spacer()
-                    Button("Stop") {
-                        indexingService.stopIndexing()
-                    }
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Celestial.Colors.error)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Celestial.Colors.error.opacity(0.15))
-                    .clipShape(Capsule())
-                    .accessibilityLabel("Stop indexing")
                 }
+                .frame(width: 206, height: 206)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 42)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(phaseLabel): \(Int(indexingService.progress.percentage)) percent")
+
+                VStack(spacing: 0) {
+                    progressRow(
+                        label: "Indexed",
+                        value: "\(indexingService.progress.completed) / \(indexingService.progress.total)"
+                    )
+                    if indexingService.progress.searchableCount > 0 {
+                        progressRow(
+                            label: "Already searchable",
+                            value: "\(indexingService.progress.searchableCount) items",
+                            accent: true
+                        )
+                    }
+                    progressRow(label: "Progress", value: progressDetail)
+                    CelestialHairline()
+                }
+
+                Text("Pauses on its own if the iPhone gets warm. You can search what is ready and leave the app.")
+                    .font(.subheadline)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .lineSpacing(4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 24)
+
+                Button("Stop indexing") {
+                    indexingService.stopIndexing()
+                }
+                .font(.body.weight(.medium))
+                .foregroundStyle(Celestial.Colors.onSurface)
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Celestial.Colors.onSurface.opacity(0.16), lineWidth: 1)
+                }
+                .padding(.top, 26)
+                .accessibilityLabel("Stop indexing")
             } else {
                 Button("Build Search Index") {
                     Haptics.medium()
@@ -75,8 +112,23 @@ struct IndexingBannerView: View {
                 .accessibilityHint("Scans your photo library and builds a searchable index")
             }
         }
-        .padding(20)
-        .modifier(GlassPanelModifier(cornerRadius: 20))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 12)
+    }
+
+    private func progressRow(label: String, value: String, accent: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            Spacer()
+            Text(value)
+                .font(.system(.subheadline, design: .rounded, weight: .medium))
+                .foregroundStyle(accent ? Celestial.Colors.amber : Celestial.Colors.onSurface)
+                .multilineTextAlignment(.trailing)
+        }
+        .font(.subheadline)
+        .padding(.vertical, 15)
+        .overlay(alignment: .top) { CelestialHairline() }
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {

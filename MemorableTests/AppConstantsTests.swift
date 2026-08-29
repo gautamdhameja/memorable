@@ -19,6 +19,7 @@ final class AppConstantsTests: XCTestCase {
     func testOnboardingKeyStable() {
         // Key must never change — existing users depend on it
         XCTAssertEqual(AppKeys.onboardingComplete, "onboarding_complete")
+        XCTAssertEqual(AppKeys.startIndexAfterOnboarding, "start_index_after_onboarding")
     }
 
     // MARK: - IndexingConfig

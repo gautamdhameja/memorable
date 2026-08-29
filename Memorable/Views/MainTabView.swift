@@ -32,21 +32,21 @@ struct MainTabView: View {
 
             OnThisDayView(captionService: captionService)
                 .tabItem {
-                    Label("Memories", systemImage: "memories")
+                    Label("Memories", systemImage: "calendar")
                 }
                 .tag(1)
 
             if let indexingService, let searchEngine {
                 MoreView(indexingService: indexingService, searchEngine: searchEngine)
                     .tabItem {
-                        Label("More", systemImage: "square.grid.2x2")
+                        Label("More", systemImage: "ellipsis")
                     }
                     .tag(2)
                     .badge(indexingService.newPhotosAvailable ? "" : nil)
             } else {
                 SemanticWarmupView(semanticRuntime: semanticRuntime, retry: retrySemanticWarmup)
                     .tabItem {
-                        Label("More", systemImage: "square.grid.2x2")
+                        Label("More", systemImage: "ellipsis")
                     }
                     .tag(2)
             }

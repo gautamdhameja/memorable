@@ -6,36 +6,50 @@ struct UpgradeView: View {
 
     var body: some View {
         ZStack {
-            Celestial.Colors.background.ignoresSafeArea()
+            Celestial.Colors.surfaceContainerLow.ignoresSafeArea()
 
-            VStack(spacing: 24) {
-                Spacer()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Capsule()
+                        .fill(Celestial.Colors.onSurface.opacity(0.18))
+                        .frame(width: 34, height: 4)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 10)
 
-                Image(systemName: "sparkles")
-                    .font(.system(size: 56, weight: .thin))
-                    .foregroundStyle(Celestial.Colors.primaryDim)
+                    Text("MEMORABLE PRO")
+                        .font(.caption.weight(.medium))
+                        .tracking(1.4)
+                        .foregroundStyle(Celestial.Colors.amber)
+                        .padding(.top, 34)
 
-                Text("Unlock Memorable Pro")
-                    .font(.system(.title2, design: .rounded, weight: .semibold))
-                    .foregroundStyle(Celestial.Colors.onSurface)
+                    Text("Index your whole\nlibrary, once")
+                        .font(.title.bold())
+                        .tracking(-0.7)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                        .padding(.top, 16)
 
-                VStack(alignment: .leading, spacing: 14) {
-                    featureRow(icon: "infinity", text: "Unlimited photo indexing")
-                    featureRow(icon: "sparkle.magnifyingglass", text: "Find Similar Photos")
-                    featureRow(icon: "minus.circle", text: "Negative search filters")
-                    featureRow(icon: "folder.badge.plus", text: "Custom folder sources")
-                    featureRow(icon: "brain", text: "Smart query understanding")
-                    featureRow(icon: "calendar.badge.clock", text: "Date & location search boost")
-                }
-                .padding(.horizontal, 32)
+                    Text("Move beyond the free 500-item index and keep every new memory searchable.")
+                        .font(.body)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .lineSpacing(5)
+                        .padding(.top, 14)
 
-                Text("One-time purchase. No subscription.")
-                    .font(.caption)
-                    .foregroundStyle(Celestial.Colors.outline)
+                    VStack(spacing: 0) {
+                        proFeature("Unlimited indexing", detail: "Your whole library and everything you add later")
+                        proFeature("Find similar", detail: "Start from a photo instead of a description")
+                        proFeature("Negative search", detail: "Leave things out, like “beach -crowds”")
+                        proFeature("Folder sources", detail: "Index photos outside the Photos library")
+                        proFeature("Smarter dates and places", detail: "Understand descriptions like “last winter in Berlin”")
+                        CelestialHairline()
+                    }
+                    .padding(.top, 30)
 
-                Spacer()
+                    Text("One-time purchase. No subscription.")
+                        .font(.caption)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 30)
 
-                VStack(spacing: 12) {
                     Button(action: {
                         Task {
                             await proManager.purchase()
@@ -48,7 +62,7 @@ struct UpgradeView: View {
                                     .tint(Celestial.Colors.onPrimaryContainer)
                                     .controlSize(.regular)
                             } else if let product = proManager.product {
-                                Text("Upgrade for \(product.displayPrice)")
+                                Text("Unlock Pro · \(product.displayPrice)")
                             } else {
                                 Text("Upgrade to Pro")
                             }
@@ -56,12 +70,13 @@ struct UpgradeView: View {
                         .font(.system(.headline, design: .rounded, weight: .semibold))
                         .foregroundStyle(Celestial.Colors.onPrimaryContainer)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(Celestial.Colors.primaryContainer)
-                        .clipShape(Capsule())
+                        .frame(height: 52)
+                        .background(Celestial.Colors.amber)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .opacity(proManager.product == nil ? 0.5 : 1.0)
                     }
                     .disabled(proManager.product == nil)
+                    .padding(.top, 14)
 
                     if proManager.product == nil && !proManager.isLoadingProduct {
                         Text("Unable to connect to the App Store. Please check your connection and try again.")
@@ -98,9 +113,15 @@ struct UpgradeView: View {
                             .foregroundStyle(Celestial.Colors.error)
                             .multilineTextAlignment(.center)
                     }
+
+                    Button("Not now") { dismiss() }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .padding(.bottom, 24)
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 32)
+                .padding(.horizontal, 26)
             }
         }
         .preferredColorScheme(.dark)
@@ -124,15 +145,17 @@ struct UpgradeView: View {
         }
     }
 
-    private func featureRow(icon: String, text: String) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.body)
-                .foregroundStyle(Celestial.Colors.primaryDim)
-                .frame(width: 24)
-            Text(text)
-                .font(.subheadline)
+    private func proFeature(_ title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.body.weight(.medium))
                 .foregroundStyle(Celestial.Colors.onSurface)
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(Celestial.Colors.outline)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 16)
+        .overlay(alignment: .top) { CelestialHairline() }
     }
 }

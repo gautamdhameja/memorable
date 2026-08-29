@@ -28,15 +28,15 @@ struct PhotoThumbnailView: View {
                 Image(uiImage: thumb)
                     .resizable()
                     .aspectRatio(aspectRatio, contentMode: .fit)
-                    .overlay(alignment: .topLeading) {
+                    .overlay(alignment: .bottomTrailing) {
                         if result.isVideo {
-                            Image(systemName: "video.fill")
-                                .font(.footnote)
-                                .foregroundStyle(Celestial.Colors.onSurface)
-                                .padding(4)
-                                .background(.ultraThinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                                .padding(5)
+                            Image(systemName: "play.fill")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(7)
+                                .background(.black.opacity(0.58))
+                                .clipShape(Circle())
+                                .padding(7)
                         }
                     }
             } else {
@@ -50,7 +50,7 @@ struct PhotoThumbnailView: View {
                     }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: Celestial.sharedCornerRadius))
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
         .accessibilityAddTraits(.isImage)

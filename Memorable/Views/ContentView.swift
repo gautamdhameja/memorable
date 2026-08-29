@@ -3,13 +3,17 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @AppStorage(AppKeys.onboardingComplete) private var onboardingComplete: Bool = false
+    @AppStorage(AppKeys.startIndexAfterOnboarding) private var startIndexAfterOnboarding = false
 
     var body: some View {
         ZStack {
             Celestial.Colors.background.ignoresSafeArea()
 
             if !onboardingComplete {
-                OnboardingView(isComplete: $onboardingComplete)
+                OnboardingView(
+                    isComplete: $onboardingComplete,
+                    startIndexAfterCompletion: $startIndexAfterOnboarding
+                )
             } else if appState.authorizationStatus == .denied || appState.authorizationStatus == .restricted {
                 photoAccessDeniedView
             } else if appState.readiness.isShellReady {
@@ -28,77 +32,84 @@ struct ContentView: View {
         }
         .preferredColorScheme(.dark)
         .task(id: onboardingComplete) {
-            if onboardingComplete && !appState.readiness.isShellReady && appState.errorMessage == nil {
-                await appState.initialize()
-            }
+            await initializeIfNeeded()
         }
     }
 
     // MARK: - Subviews
 
     private var photoAccessDeniedView: some View {
-        VStack(spacing: 20) {
+        VStack(alignment: .leading, spacing: 18) {
+            Spacer()
             Image(systemName: "photo.badge.exclamationmark")
-                .font(.system(size: 48, weight: .thin))
+                .font(.system(size: 42, weight: .light))
                 .foregroundStyle(Celestial.Colors.primaryDim)
                 .accessibilityHidden(true)
-            Text("Photo Access Required")
-                .font(.system(.title3, design: .rounded, weight: .semibold))
+            Text("Photo access is required")
+                .font(.title.bold())
                 .foregroundStyle(Celestial.Colors.onSurface)
             Text("Memorable needs access to your photos to build a searchable index. All processing happens on your device.")
-                .multilineTextAlignment(.center)
-                .font(.subheadline)
+                .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .padding(.horizontal, 32)
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
             }
             .buttonStyle(CelestialButtonStyle())
+            Spacer()
         }
+        .padding(.horizontal, 26)
     }
 
     private func errorView(message: String) -> some View {
-        VStack(spacing: 20) {
+        VStack(alignment: .leading, spacing: 18) {
+            Spacer()
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 48, weight: .thin))
+                .font(.system(size: 42, weight: .light))
                 .foregroundStyle(Celestial.Colors.error)
                 .accessibilityHidden(true)
-            Text("Something Went Wrong")
-                .font(.system(.title3, design: .rounded, weight: .semibold))
+            Text("Something went wrong")
+                .font(.title.bold())
                 .foregroundStyle(Celestial.Colors.onSurface)
             Text(message)
-                .multilineTextAlignment(.center)
-                .font(.subheadline)
+                .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .padding(.horizontal, 32)
             Button("Try Again") {
                 appState.errorMessage = nil
-                Task { await appState.initialize() }
+                Task { await initializeIfNeeded() }
             }
             .buttonStyle(CelestialButtonStyle())
+            Spacer()
         }
+        .padding(.horizontal, 26)
     }
 
     private var loadingView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 18) {
             Spacer()
 
-            VStack(spacing: 10) {
-                Image("AppIconTransparent")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 150, height: 150)
-
-                Text("Memorable")
-                    .font(.system(size: 38, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Celestial.Colors.onSurface)
-
-                Text("Every memory, one search away!")
-                    .font(.system(.body, design: .rounded, weight: .medium))
-                    .foregroundStyle(Celestial.Colors.amber)
+            ZStack {
+                Circle()
+                    .stroke(Celestial.Colors.primaryDim.opacity(0.18), lineWidth: 1)
+                    .frame(width: 142, height: 142)
+                Circle()
+                    .stroke(Celestial.Colors.primaryDim, lineWidth: 2)
+                    .frame(width: 48, height: 48)
+                Capsule()
+                    .fill(Celestial.Colors.primaryDim)
+                    .frame(width: 32, height: 3)
+                    .rotationEffect(.degrees(45))
+                    .offset(x: 28, y: 28)
+                Circle()
+                    .fill(Celestial.Colors.amber)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 71)
             }
+
+            Text("Memorable")
+                .font(.largeTitle.bold())
+                .foregroundStyle(Celestial.Colors.onSurface)
 
             Spacer()
 
@@ -111,8 +122,14 @@ struct ContentView: View {
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .animation(.easeInOut(duration: 0.2), value: appState.loadingStatus)
 
-            Spacer()
-                .frame(height: 60)
+            Spacer().frame(height: 40)
+        }
+    }
+
+    private func initializeIfNeeded() async {
+        guard onboardingComplete else { return }
+        if !appState.readiness.isShellReady && appState.errorMessage == nil {
+            await appState.initialize()
         }
     }
 }
@@ -125,10 +142,10 @@ struct CelestialButtonStyle: ButtonStyle {
             .font(.system(.subheadline, design: .rounded, weight: .semibold))
             .foregroundStyle(Celestial.Colors.onPrimaryContainer)
             .padding(.horizontal, 24)
-            .padding(.vertical, 12)
+            .padding(.vertical, 14)
             .background(Celestial.Colors.primaryContainer)
-            .clipShape(Capsule())
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
     }
 }

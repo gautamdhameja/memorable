@@ -25,271 +25,92 @@ struct MoreView: View {
             ZStack {
                 Celestial.Colors.background.ignoresSafeArea()
 
-                List {
-                    // New photos available
-                    if indexingService.newPhotosAvailable {
-                        Section {
-                            Button(action: {
-                                indexingService.indexNewPhotosOnly()
-                            }) {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "photo.badge.plus")
-                                        .foregroundStyle(Celestial.Colors.amber)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("New photos found")
-                                            .font(.body.weight(.medium))
-                                            .foregroundStyle(Celestial.Colors.onSurface)
-                                        Text("Tap to index new photos")
-                                            .font(.footnote)
-                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "arrow.clockwise")
-                                        .foregroundStyle(Celestial.Colors.amber)
-                                }
-                            }
-                            .listRowBackground(Celestial.Colors.amber.opacity(0.1))
-                        }
-                    }
-
-                    // Smart Albums
-                    Section {
-                        if smartAlbums.isEmpty {
-                            Text("No smart albums yet")
-                                .font(.subheadline)
-                                .foregroundStyle(Celestial.Colors.outline)
-                                .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-                        } else {
-                            let visibleAlbums = showAllAlbums ? smartAlbums : Array(smartAlbums.prefix(4))
-                            ForEach(visibleAlbums) { album in
-                                NavigationLink {
-                                    SmartAlbumResultsView(album: album, searchEngine: searchEngine)
-                                } label: {
-                                    HStack(spacing: 12) {
-                                        Image(systemName: "rectangle.stack.fill")
-                                            .foregroundStyle(Celestial.Colors.primaryDim)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(album.name)
-                                                .font(.body.weight(.medium))
-                                                .foregroundStyle(Celestial.Colors.onSurface)
-                                            Text(album.query)
-                                                .font(.footnote)
-                                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                        }
-                                    }
-                                }
-                                .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-                            }
-                            .onDelete { offsets in
-                                let visible = showAllAlbums ? smartAlbums : Array(smartAlbums.prefix(4))
-                                for offset in offsets {
-                                    SmartAlbumStore.delete(id: visible[offset].id)
-                                }
-                                smartAlbums = SmartAlbumStore.load()
-                            }
-
-                            if smartAlbums.count > 4 {
-                                Button {
-                                    withAnimation { showAllAlbums.toggle() }
-                                } label: {
-                                    Text(showAllAlbums ? "Show Less" : "Show All (\(smartAlbums.count))")
-                                        .font(.footnote.weight(.medium))
-                                        .foregroundStyle(Celestial.Colors.primaryFixedDim)
-                                }
-                                .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-                            }
-                        }
-                    } header: {
-                        Text("Smart Albums")
-                    }
-
-                    // Discover
-                    Section {
-                        NavigationLink {
-                            SurpriseExploreView(searchEngine: searchEngine)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "sparkles")
-                                    .foregroundStyle(Celestial.Colors.primaryDim)
-                                Text("Explore & Discover")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(Celestial.Colors.onSurface)
-                            }
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-                    } header: {
-                        Text("Discover")
-                    }
-
-                    // Tools
-                    Section {
-                        Button(action: { showSources = true }) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "folder.badge.gearshape")
-                                    .foregroundStyle(Celestial.Colors.primaryDim)
-                                Text("Photo Sources")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(Celestial.Colors.onSurface)
-                            }
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-
-                        Button(action: { showDuplicates = true }) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "doc.on.doc")
-                                    .foregroundStyle(Celestial.Colors.primaryDim)
-                                Text("Find Duplicates")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(Celestial.Colors.onSurface)
-                            }
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-                    } header: {
-                        Text("Tools")
-                    }
-
-                    // Index Management
-                    Section {
-                        HStack(spacing: 12) {
-                            Image(systemName: "photo.on.rectangle")
-                                .foregroundStyle(Celestial.Colors.primaryDim)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Search Index")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(Celestial.Colors.onSurface)
-                                let _ = indexingService.indexVersion // trigger re-render on index reload
-                                Text("\(searchEngine.indexSize) photos, \(searchEngine.videoSize) videos indexed")
-                                    .font(.footnote)
-                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                            }
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-
-                        Button(action: { showReindexConfirm = true }) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "arrow.clockwise")
-                                    .foregroundStyle(Celestial.Colors.primaryDim)
-                                Text("Re-index Library")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(Celestial.Colors.onSurface)
-                            }
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-                    } header: {
-                        Text("Index")
-                    }
-
-                    // Pro
-                    Section {
-                        if proManager.isPro {
-                            HStack(spacing: 12) {
-                                Image(systemName: "sparkles")
-                                    .foregroundStyle(Celestial.Colors.primaryDim)
-                                Text("Memorable Pro")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(Celestial.Colors.onSurface)
-                                Spacer()
-                                Text("ACTIVE")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(Celestial.Colors.onPrimaryContainer)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Celestial.Colors.primaryContainer)
-                                    .clipShape(Capsule())
-                            }
-                            .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-                        } else {
-                            Button(action: { showUpgrade = true }) {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "sparkles")
-                                        .foregroundStyle(Celestial.Colors.primaryDim)
-                                    Text("Upgrade to Pro")
-                                        .font(.body.weight(.medium))
-                                        .foregroundStyle(Celestial.Colors.onSurface)
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.footnote)
-                                        .foregroundStyle(Celestial.Colors.outlineVariant)
-                                }
-                            }
-                            .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-                        }
-                    } header: {
-                        Text("Pro")
-                    }
-
-                    // About
-                    Section {
-                        HStack(spacing: 12) {
-                            Image(systemName: "lock.shield")
-                                .foregroundStyle(Celestial.Colors.outlineVariant)
-                            Text("Private, on-device processing")
-                                .font(.footnote)
-                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: "sparkles")
-                                .foregroundStyle(Celestial.Colors.outlineVariant)
-                            Text(AppCopy.aiDisclaimer)
-                                .font(.footnote)
-                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-
-                        NavigationLink {
-                            LicensesView()
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "doc.text")
-                                    .foregroundStyle(Celestial.Colors.outlineVariant)
-                                Text("Licenses")
-                                    .font(.footnote)
-                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                            }
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-
-                        HStack(spacing: 12) {
-                            Image(systemName: "info.circle")
-                                .foregroundStyle(Celestial.Colors.outlineVariant)
-                            Text("Memorable \(appVersionString)")
-                                .font(.footnote)
-                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-
-                        HStack(spacing: 12) {
-                            Image(systemName: "building.2")
-                                .foregroundStyle(Celestial.Colors.outlineVariant)
-                            Text("Built by Proferent")
-                                .font(.footnote)
-                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
-                    } header: {
-                        Text("About")
-                    }
-                }
-                .scrollContentBackground(.hidden)
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 10) {
-                        Image("AppIconTransparent")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 36, height: 36)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
                         Text("More")
-                            .font(.system(.title3, design: .rounded, weight: .semibold))
-                            .foregroundStyle(Celestial.Colors.onSurface)
+                            .font(.title.bold())
+                            .tracking(-0.6)
+                            .padding(.top, 14)
+
+                        indexStatus
+                            .padding(.top, 30)
+
+                        VStack(spacing: 0) {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) { showAllAlbums.toggle() }
+                            } label: {
+                                toolRow(
+                                    icon: "rectangle.stack",
+                                    title: "Smart Albums",
+                                    subtitle: smartAlbums.isEmpty ? "No saved albums" : "\(smartAlbums.count) self-updating albums"
+                                )
+                            }
+
+                            if showAllAlbums {
+                                ForEach(smartAlbums) { album in
+                                    NavigationLink {
+                                        SmartAlbumResultsView(album: album, searchEngine: searchEngine)
+                                    } label: {
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(album.name)
+                                                    .font(.subheadline.weight(.medium))
+                                                    .foregroundStyle(Celestial.Colors.onSurface)
+                                                Text(album.query)
+                                                    .font(.caption)
+                                                    .foregroundStyle(Celestial.Colors.outline)
+                                                    .lineLimit(1)
+                                            }
+                                            Spacer()
+                                            Image(systemName: "chevron.right")
+                                                .font(.caption)
+                                                .foregroundStyle(Celestial.Colors.outlineVariant)
+                                        }
+                                        .padding(.leading, 32)
+                                        .padding(.vertical, 12)
+                                        .overlay(alignment: .bottom) { CelestialHairline() }
+                                    }
+                                }
+                            }
+
+                            NavigationLink {
+                                SurpriseExploreView(searchEngine: searchEngine)
+                            } label: {
+                                toolRow(icon: "scope", title: "Explore", subtitle: "Places, scenes and text")
+                            }
+
+                            Button(action: { showDuplicates = true }) {
+                                toolRow(icon: "square.on.square", title: "Find duplicates", subtitle: "Compare near-identical photos safely")
+                            }
+
+                            Button(action: { showSources = true }) {
+                                toolRow(icon: "photo.stack", title: "Photo sources", subtitle: "Library and custom folders")
+                            }
+                        }
+                        .padding(.top, 8)
+
+                        proStatus
+                            .padding(.top, 30)
+
+                        HStack {
+                            Button("Re-index library") { showReindexConfirm = true }
+                            Spacer()
+                            NavigationLink("Privacy · \(appVersionString)") { LicensesView() }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(Celestial.Colors.outline)
+                        .padding(.top, 34)
+
+                        Text(AppCopy.aiDisclaimer)
+                            .font(.caption2)
+                            .foregroundStyle(Celestial.Colors.outlineVariant)
+                            .padding(.top, 18)
+                            .padding(.bottom, 32)
                     }
+                    .padding(.horizontal, 26)
                 }
             }
+            .toolbar(.hidden, for: .navigationBar)
             .preferredColorScheme(.dark)
             .onAppear { smartAlbums = SmartAlbumStore.load() }
             .sheet(isPresented: $showSources) {
@@ -320,6 +141,133 @@ struct MoreView: View {
             } message: {
                 Text("This will clear the current index and rebuild it from scratch. Search will be unavailable during indexing.")
             }
+        }
+    }
+
+    private var indexStatus: some View {
+        let _ = indexingService.indexVersion
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(indexStatusTitle)
+                .font(.body.weight(.medium))
+                .foregroundStyle(Celestial.Colors.onSurface)
+            Text(indexStatusDetail)
+                .font(.subheadline)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .padding(.top, 6)
+
+            if !indexingService.progress.isRunning && !indexingService.isReady {
+                Button(indexingService.indexRebuildRequired ? "Rebuild index" : "Build index") {
+                    if indexingService.indexRebuildRequired {
+                        indexingService.rebuildRequiredIndex()
+                    } else {
+                        indexingService.startIndexing()
+                    }
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Celestial.Colors.primaryDim)
+                .padding(.top, 14)
+            }
+
+            if indexingService.newPhotosAvailable {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(Celestial.Colors.amber)
+                        .frame(width: 6, height: 6)
+                    Text("New photos ready to index")
+                        .foregroundStyle(Celestial.Colors.amber)
+                    Spacer()
+                    Button("Index now") { indexingService.indexNewPhotosOnly() }
+                        .fontWeight(.medium)
+                        .foregroundStyle(Celestial.Colors.primaryDim)
+                }
+                .font(.subheadline)
+                .padding(.top, 14)
+            }
+        }
+        .padding(.bottom, 20)
+        .overlay(alignment: .bottom) { CelestialHairline() }
+    }
+
+    private var indexStatusTitle: String {
+        if indexingService.progress.isRunning { return "Search index updating" }
+        if indexingService.isReady { return "Search index up to date" }
+        if indexingService.indexRebuildRequired { return "Search index update required" }
+        return "Search index not built"
+    }
+
+    private var indexStatusDetail: String {
+        let searchableCount = searchEngine.indexSize + searchEngine.videoSize
+        if searchableCount > 0 { return "\(searchableCount) items searchable" }
+        if indexingService.indexRebuildRequired { return "Rebuild once to keep search results accurate" }
+        return "Build the on-device index to start searching"
+    }
+
+    private func toolRow(icon: String, title: String, subtitle: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(Celestial.Colors.primaryDim)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(Celestial.Colors.outline)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(Celestial.Colors.outlineVariant)
+        }
+        .frame(minHeight: 68)
+        .contentShape(Rectangle())
+        .overlay(alignment: .bottom) { CelestialHairline() }
+    }
+
+    private var proStatus: some View {
+        Group {
+            if proManager.isPro {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Memorable Pro")
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(Celestial.Colors.amber)
+                        Text("Unlimited indexing is active")
+                            .font(.caption)
+                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    }
+                    Spacer()
+                    Text("ACTIVE")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Celestial.Colors.amber)
+                }
+            } else {
+                Button(action: { showUpgrade = true }) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Memorable Pro")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(Celestial.Colors.amber)
+                            Text("Unlimited indexing. One-time purchase.")
+                                .font(.caption)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        }
+                        Spacer()
+                        Text("Upgrade")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Celestial.Colors.amber)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 18)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Celestial.Colors.amber.opacity(0.35)).frame(height: 1)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Celestial.Colors.amber.opacity(0.35)).frame(height: 1)
         }
     }
 }

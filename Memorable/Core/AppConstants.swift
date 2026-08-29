@@ -20,6 +20,7 @@ enum AppCopy {
 enum AppKeys {
     // Keys must match what was originally shipped — do not rename
     static let onboardingComplete = "onboarding_complete"
+    static let startIndexAfterOnboarding = "start_index_after_onboarding"
     static let surpriseValidatedQueries = "memorable_validated_surprise_queries"
     static let surpriseLastValidatedCount = "memorable_surprise_last_validated_count"
 

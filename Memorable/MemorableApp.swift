@@ -181,6 +181,7 @@ class AppState: ObservableObject {
                 cleanOrphans: effectivePriority != .userInitiatedSearch,
                 loadPriority: effectivePriority == .userInitiatedSearch ? .userInitiated : .utility
             )
+            startPendingOnboardingIndexIfNeeded(using: indexing)
 
             #if DEBUG
             PerformanceMetrics.shared.end(PerformancePhase.indexLoad)
@@ -203,6 +204,13 @@ class AppState: ObservableObject {
             errorMessage = error.localizedDescription
             throw error
         }
+    }
+
+    private func startPendingOnboardingIndexIfNeeded(using indexing: IndexingService) {
+        guard UserDefaults.standard.bool(forKey: AppKeys.startIndexAfterOnboarding) else { return }
+        UserDefaults.standard.set(false, forKey: AppKeys.startIndexAfterOnboarding)
+        guard !indexing.isReady && !indexing.progress.isRunning else { return }
+        indexing.startIndexing()
     }
 
     private func wireIndexingCallbacks(_ indexing: IndexingService) {

@@ -7,15 +7,30 @@ struct SearchResultsViewer: View {
     var searchEngine: SearchEngine? = nil
 
     @State private var currentIndex: Int = 0
+    @State private var displayedResults: [SearchResult] = []
     @State private var showControls: Bool = true
+    @State private var showUpgrade = false
+    @ObservedObject private var proManager = ProManager.shared
     @Environment(\.dismiss) private var dismiss
+
+    init(
+        initialResult: SearchResult,
+        allResults: [SearchResult],
+        searchEngine: SearchEngine? = nil
+    ) {
+        self.initialResult = initialResult
+        self.allResults = allResults
+        self.searchEngine = searchEngine
+        _currentIndex = State(initialValue: allResults.firstIndex(where: { $0.id == initialResult.id }) ?? 0)
+        _displayedResults = State(initialValue: allResults)
+    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
             TabView(selection: $currentIndex) {
-                ForEach(Array(allResults.enumerated()), id: \.element.id) { index, result in
+                ForEach(Array(displayedResults.enumerated()), id: \.element.id) { index, result in
                     ZoomableAsyncImage(result: result, isActive: index == currentIndex, onSingleTap: {
                         withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
                     })
@@ -27,56 +42,84 @@ struct SearchResultsViewer: View {
 
             // Controls overlay
             if showControls {
-                VStack {
-                    // Top bar
+                LinearGradient(
+                    colors: [.black.opacity(0.55), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 170)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.72)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 240)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+
+                VStack(spacing: 0) {
                     HStack {
                         Button(action: { dismiss() }) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 15, weight: .semibold))
+                            Label("Results", systemImage: "chevron.left")
+                                .font(.body)
                                 .foregroundStyle(.white)
-                                .padding(10)
-                                .background(.ultraThinMaterial)
-                                .clipShape(Circle())
                         }
-                        .accessibilityLabel("Close")
+                        .accessibilityLabel("Back to results")
                         Spacer()
-                        if allResults.count > 1 {
-                            Text("\(currentIndex + 1) of \(allResults.count)")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.white.opacity(0.7))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(.ultraThinMaterial)
-                                .clipShape(Capsule())
+                        if displayedResults.count > 1 {
+                            Text("\(currentIndex + 1) of \(displayedResults.count)")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.82))
                         }
                         Spacer()
                         Button(action: { shareCurrentPhoto() }) {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.system(size: 15, weight: .semibold))
+                            Image(systemName: "ellipsis")
+                                .font(.body.weight(.semibold))
                                 .foregroundStyle(.white)
-                                .padding(10)
-                                .background(.ultraThinMaterial)
-                                .clipShape(Circle())
+                                .frame(width: 44, height: 44)
                         }
-                        .accessibilityLabel("Share")
+                        .accessibilityLabel("Share photo")
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
+                    .padding(.horizontal, 22)
+                    .padding(.top, 6)
 
                     Spacer()
 
-                    // Bottom info bar
-                    if currentIndex < allResults.count {
-                        let result = allResults[currentIndex]
-                        HStack {
+                    if currentIndex < displayedResults.count {
+                        let result = displayedResults[currentIndex]
+                        VStack(alignment: .leading, spacing: 0) {
                             if let date = result.creationDate {
                                 Text(date.formatted(date: .long, time: .shortened))
-                                    .font(.footnote.weight(.medium))
-                                    .foregroundStyle(.white)
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(.white.opacity(0.94))
                             }
-                            Spacer()
+
+                            HStack {
+                                Button(action: { shareCurrentPhoto() }) {
+                                    Image(systemName: "square.and.arrow.up")
+                                        .font(.title3)
+                                        .foregroundStyle(.white)
+                                        .frame(width: 44, height: 44)
+                                }
+                                .accessibilityLabel("Share photo")
+                                Spacer()
+                                if searchEngine != nil {
+                                    Button(action: handleFindSimilar) {
+                                        Text(proManager.isPro ? "Find similar" : "Find similar · Pro")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(Celestial.Colors.amber)
+                                            .frame(minHeight: 44)
+                                    }
+                                }
+                            }
+                            .padding(.top, 12)
                         }
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, 26)
                         .padding(.bottom, 20)
                     }
                 }
@@ -84,9 +127,7 @@ struct SearchResultsViewer: View {
             }
         }
         .statusBar(hidden: true)
-        .onAppear {
-            currentIndex = allResults.firstIndex(where: { $0.id == initialResult.id }) ?? 0
-        }
+        .sheet(isPresented: $showUpgrade) { UpgradeView() }
         .gesture(
             DragGesture(minimumDistance: 80)
                 .onEnded { value in
@@ -98,8 +139,8 @@ struct SearchResultsViewer: View {
     }
 
     private func shareCurrentPhoto() {
-        guard currentIndex < allResults.count else { return }
-        let result = allResults[currentIndex]
+        guard currentIndex < displayedResults.count else { return }
+        let result = displayedResults[currentIndex]
         guard let asset = PhotoLibrary.getAsset(by: result.localIdentifier) else { return }
 
         Task {
@@ -125,6 +166,22 @@ struct SearchResultsViewer: View {
                     topVC.present(activityVC, animated: true)
                 }
             }
+        }
+    }
+
+    private func handleFindSimilar() {
+        guard proManager.isPro else {
+            showUpgrade = true
+            return
+        }
+        guard let searchEngine,
+              currentIndex < displayedResults.count else { return }
+        let similar = searchEngine.findSimilar(photoId: displayedResults[currentIndex].id)
+        let photoResults = similar.filter { !$0.isVideo }
+        guard !photoResults.isEmpty else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            displayedResults = photoResults
+            currentIndex = 0
         }
     }
 

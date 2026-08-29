@@ -39,12 +39,19 @@ struct DuplicateFinderView: View {
                                     DuplicatePairRow(pair: pair, searchEngine: searchEngine) { deletedPair in
                                         duplicates.removeAll { $0.id == deletedPair.id }
                                     }
-                                    .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+                                    .listRowBackground(Celestial.Colors.background)
+                                    .listRowSeparator(.hidden)
                                 }
                             } header: {
-                                Text("\(duplicates.count) potential duplicates")
+                                HStack {
+                                    Text("\(duplicates.count) potential duplicates")
+                                    Spacer()
+                                    Text("Review before deleting")
+                                }
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
                         }
+                        .listStyle(.plain)
                         .scrollContentBackground(.hidden)
                     } else {
                         VStack(spacing: 16) {
@@ -63,7 +70,7 @@ struct DuplicateFinderView: View {
                     }
                 }
             }
-            .navigationTitle("Duplicate Finder")
+            .navigationTitle("Duplicates")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
@@ -116,27 +123,32 @@ struct DuplicatePairRow: View {
     @State private var isDeleting = false
 
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 12) {
-                thumbnailView(image: image1, localId: pair.photo1LocalId)
-                thumbnailView(image: image2, localId: pair.photo2LocalId)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(Int(pair.similarity * 100))% match")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Celestial.Colors.onSurface)
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(pair.similarity > 0.98 ? Celestial.Colors.error : Celestial.Colors.amber)
+                    .frame(width: 6, height: 6)
+                Text("\(Int(pair.similarity * 100))% match")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(pair.similarity > 0.98 ? Celestial.Colors.error : Celestial.Colors.amber)
                 Spacer()
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 5) {
+                thumbnailView(image: image1, label: "LEFT", alignment: .topLeading)
+                thumbnailView(image: image2, label: "RIGHT", alignment: .topTrailing)
+            }
+
+            HStack(spacing: 5) {
                 Button {
                     deleteTarget = pair.photo1LocalId
                     showDeleteConfirm = true
                 } label: {
                     Label("Delete Left", systemImage: "trash")
-                        .font(.caption.weight(.medium))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(Celestial.Colors.error)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
                 }
                 .disabled(isDeleting)
 
@@ -145,14 +157,15 @@ struct DuplicatePairRow: View {
                     showDeleteConfirm = true
                 } label: {
                     Label("Delete Right", systemImage: "trash")
-                        .font(.caption.weight(.medium))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(Celestial.Colors.error)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
                 }
                 .disabled(isDeleting)
-
-                Spacer()
             }
         }
+        .padding(.vertical, 8)
         .task {
             if let asset = PhotoLibrary.getAsset(by: pair.photo1LocalId) {
                 image1 = await PhotoLibrary.loadThumbnail(for: asset)
@@ -172,21 +185,32 @@ struct DuplicatePairRow: View {
         }
     }
 
-    private func thumbnailView(image: UIImage?, localId: String) -> some View {
+    private func thumbnailView(
+        image: UIImage?,
+        label: String,
+        alignment: Alignment
+    ) -> some View {
         Group {
             if let img = image {
                 Image(uiImage: img)
                     .resizable()
                     .aspectRatio(1, contentMode: .fill)
-                    .frame(width: 80, height: 80)
                     .clipped()
             } else {
                 Rectangle()
                     .fill(Celestial.Colors.surfaceContainer)
-                    .frame(width: 80, height: 80)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .aspectRatio(1.16, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(alignment: alignment) {
+            Text(label)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(8)
+                .shadow(radius: 3)
+        }
         .accessibilityLabel("Photo")
     }
 

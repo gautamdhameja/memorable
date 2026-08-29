@@ -1,80 +1,92 @@
 import SwiftUI
 
-// Celestial Design System - derived from the design spec
+// Memorable V2 design system — quiet, photographic, and deliberately minimal.
 enum Celestial {
     // MARK: - Colors
 
     enum Colors {
         // Backgrounds
-        static let background = Color(red: 0.055, green: 0.082, blue: 0.118)       // #0e1520 (slightly lighter)
-        static let surfaceDim = Color(red: 0.027, green: 0.059, blue: 0.090)        // #070f17
-        static let surface = Color(red: 0.027, green: 0.059, blue: 0.090)           // #070f17
-        static let surfaceContainerLowest = Color.black                               // #000000
-        static let surfaceContainerLow = Color(red: 0.043, green: 0.078, blue: 0.114) // #0b141d
-        static let surfaceContainer = Color(red: 0.067, green: 0.102, blue: 0.141)  // #111a24
-        static let surfaceContainerHigh = Color(red: 0.086, green: 0.125, blue: 0.169) // #16202b
-        static let surfaceContainerHighest = Color(red: 0.106, green: 0.153, blue: 0.196) // #1b2732
-        static let surfaceVariant = Color(red: 0.106, green: 0.153, blue: 0.196)    // #1b2732
-        static let surfaceBright = Color(red: 0.129, green: 0.176, blue: 0.227)     // #212d3a
+        static let background = Color(red: 8 / 255, green: 11 / 255, blue: 18 / 255)       // #080B12
+        static let surfaceDim = Color(red: 5 / 255, green: 7 / 255, blue: 14 / 255)         // #05070E
+        static let surface = background
+        static let surfaceContainerLowest = surfaceDim
+        static let surfaceContainerLow = Color(red: 11 / 255, green: 16 / 255, blue: 26 / 255) // #0B101A
+        static let surfaceContainer = Color(red: 15 / 255, green: 20 / 255, blue: 31 / 255) // #0F141F
+        static let surfaceContainerHigh = Color(red: 21 / 255, green: 28 / 255, blue: 41 / 255) // #151C29
+        static let surfaceContainerHighest = Color(red: 26 / 255, green: 35 / 255, blue: 50 / 255)
+        static let surfaceVariant = surfaceContainerHigh
+        static let surfaceBright = Color(red: 32 / 255, green: 42 / 255, blue: 58 / 255)
 
         // Primary
-        static let primary = Color(red: 0.435, green: 0.694, blue: 1.0)             // #6fb1ff
-        static let primaryDim = Color(red: 0.263, green: 0.631, blue: 1.0)          // #43a1ff
-        static let primaryContainer = Color(red: 0.298, green: 0.643, blue: 1.0)    // #4ca4ff
-        static let primaryFixedDim = Color(red: 0.031, green: 0.592, blue: 1.0)     // #0897ff
-        static let onPrimary = Color(red: 0.0, green: 0.188, blue: 0.341)           // #003057
-        static let onPrimaryContainer = Color(red: 0.0, green: 0.141, blue: 0.263)  // #002443
+        static let primary = Color(red: 154 / 255, green: 198 / 255, blue: 1)       // #9AC6FF
+        static let primaryDim = Color(red: 90 / 255, green: 160 / 255, blue: 1)     // #5AA0FF
+        static let primaryContainer = primaryDim
+        static let primaryFixedDim = primaryDim
+        static let onPrimary = surfaceDim
+        static let onPrimaryContainer = surfaceDim
 
         // Secondary
-        static let secondary = Color(red: 0.702, green: 0.831, blue: 1.0)           // #b3d4ff
-        static let secondaryDim = Color(red: 0.651, green: 0.776, blue: 0.941)      // #a6c6f0
-        static let secondaryContainer = Color(red: 0.153, green: 0.286, blue: 0.424) // #27496c
+        static let secondary = Color(red: 220 / 255, green: 226 / 255, blue: 236 / 255) // #DCE2EC
+        static let secondaryDim = Color(red: 151 / 255, green: 161 / 255, blue: 178 / 255)
+        static let secondaryContainer = surfaceContainerHighest
 
         // Tertiary
-        static let tertiary = Color(red: 0.706, green: 0.875, blue: 1.0)            // #b4dfff
-        static let tertiaryDim = Color(red: 0.553, green: 0.773, blue: 0.922)       // #8dc5eb
+        static let tertiary = primary
+        static let tertiaryDim = primary
 
         // Text
-        static let onSurface = Color(red: 0.918, green: 0.945, blue: 0.992)         // #eaf1fd
-        static let onSurfaceVariant = Color(red: 0.643, green: 0.675, blue: 0.718)  // #a4acb7
+        static let onSurface = Color(red: 244 / 255, green: 246 / 255, blue: 250 / 255) // #F4F6FA
+        static let onSurfaceVariant = Color(red: 151 / 255, green: 161 / 255, blue: 178 / 255) // #97A1B2
 
         // Outlines
-        static let outline = Color(red: 0.431, green: 0.463, blue: 0.502)           // #6e7680
-        static let outlineVariant = Color(red: 0.255, green: 0.286, blue: 0.322)    // #414952
+        static let outline = Color(red: 123 / 255, green: 133 / 255, blue: 152 / 255) // #7B8598
+        static let outlineVariant = Color(red: 75 / 255, green: 85 / 255, blue: 102 / 255) // #4B5566
 
         // Error
-        static let error = Color(red: 1.0, green: 0.443, blue: 0.424)               // #ff716c
-        static let errorContainer = Color(red: 0.624, green: 0.020, blue: 0.098)    // #9f0519
+        static let error = Color(red: 1, green: 98 / 255, blue: 89 / 255)            // #FF6259
+        static let errorContainer = Color(red: 84 / 255, green: 24 / 255, blue: 27 / 255)
 
         // Accent highlights
-        static let sky400_60 = Color(red: 0.22, green: 0.64, blue: 0.89).opacity(0.6)
-        static let sky200 = Color(red: 0.73, green: 0.87, blue: 0.98)
-        static let sky50 = Color(red: 0.94, green: 0.97, blue: 1.0)
+        static let sky400_60 = primaryDim.opacity(0.6)
+        static let sky200 = primary
+        static let sky50 = onSurface
 
         // Warm accent (amber)
-        static let amber = Color(red: 1.0, green: 0.718, blue: 0.302)           // #FFB74D
-        static let amberDim = Color(red: 0.90, green: 0.62, blue: 0.20)          // dimmer for subtle use
+        static let amber = Color(red: 232 / 255, green: 168 / 255, blue: 94 / 255) // #E8A85E
+        static let amberDim = Color(red: 201 / 255, green: 138 / 255, blue: 80 / 255)
 
         // Success / positive indicator
-        static let emerald = Color(red: 0.204, green: 0.827, blue: 0.600)       // #34D399
+        static let emerald = Color(red: 84 / 255, green: 201 / 255, blue: 140 / 255)
 
         // Low-confidence indicator
-        static let orange = Color(red: 1.0, green: 0.584, blue: 0.224)          // #FF9539
+        static let orange = amber
+
+        static let hairline = Color.white.opacity(0.09)
     }
 
     // MARK: - Shared Geometry
 
-    static let sharedCornerRadius: CGFloat = 16
+    static let sharedCornerRadius: CGFloat = 12
 
     // MARK: - Gradients
 
     static let celestialBackground = LinearGradient(
         colors: [
-            Color(red: 0.031, green: 0.592, blue: 1.0).opacity(0.15),
+            Colors.primaryDim.opacity(0.10),
             Colors.background
         ],
         startPoint: .top,
         endPoint: .center
+    )
+
+    static let memoryGradient = LinearGradient(
+        colors: [
+            Color(red: 44 / 255, green: 58 / 255, blue: 78 / 255),
+            Color(red: 138 / 255, green: 101 / 255, blue: 68 / 255),
+            Color(red: 216 / 255, green: 154 / 255, blue: 87 / 255),
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
     )
 
     static let cardOverlay = LinearGradient(
@@ -85,7 +97,32 @@ enum Celestial {
 
     // MARK: - Materials
 
-    static let glassBackground = Colors.surfaceContainerLowest.opacity(0.4)
-    static let headerBackground = Color(red: 0.04, green: 0.20, blue: 0.36).opacity(0.6)
-    static let navBackground = Color(red: 0.02, green: 0.10, blue: 0.20).opacity(0.6)
+    static let glassBackground = Colors.surfaceContainer.opacity(0.94)
+    static let headerBackground = Colors.background.opacity(0.92)
+    static let navBackground = Colors.background.opacity(0.94)
+}
+
+struct CelestialHairline: View {
+    var body: some View {
+        Rectangle()
+            .fill(Celestial.Colors.hairline)
+            .frame(height: 1)
+            .accessibilityHidden(true)
+    }
+}
+
+struct FocusOrbit: View {
+    var compact = false
+
+    var body: some View {
+        ZStack {
+            Ellipse()
+                .stroke(Celestial.Colors.primaryDim.opacity(0.18), lineWidth: 1)
+            Circle()
+                .fill(Celestial.Colors.amber)
+                .frame(width: compact ? 4 : 6, height: compact ? 4 : 6)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .accessibilityHidden(true)
+    }
 }

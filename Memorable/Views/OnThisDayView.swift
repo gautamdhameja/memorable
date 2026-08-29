@@ -17,37 +17,6 @@ struct OnThisDayView: View {
 
                 ScrollView {
                     VStack(spacing: 0) {
-                        // Relive Memories button
-                        if indexedCount > 0 {
-                            Button(action: { showSlideshow = true }) {
-                                HStack(spacing: 14) {
-                                    Image(systemName: "play.circle.fill")
-                                        .font(.system(size: 36))
-                                        .foregroundStyle(Celestial.Colors.amber)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text("Relive Your Memories")
-                                            .font(.system(.body, design: .rounded, weight: .semibold))
-                                            .foregroundStyle(Celestial.Colors.onSurface)
-                                        Text("Watch a slideshow of your photos with captions")
-                                            .font(.footnote)
-                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.footnote)
-                                        .foregroundStyle(Celestial.Colors.outlineVariant)
-                                }
-                                .padding(16)
-                                .background(Celestial.Colors.surfaceVariant.opacity(0.4))
-                                .background(.ultraThinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
-                            .padding(.bottom, 8)
-                        }
-
-                        // On This Day section
                         if isLoading {
                             ProgressView()
                                 .tint(Celestial.Colors.primaryDim)
@@ -75,59 +44,78 @@ struct OnThisDayView: View {
                             .padding(.top, 60)
                             .padding(.horizontal)
                         } else {
-                            // Section header
-                            HStack {
-                                Text("ON THIS DAY")
-                                    .font(.caption.weight(.medium))
-                                    .tracking(1.5)
-                                    .foregroundStyle(Celestial.Colors.amber)
-                                Spacer()
+                            ZStack(alignment: .bottomLeading) {
+                                MemoryHeroImage(localIdentifier: yearGroups.first?.ids.first)
+                                    .frame(height: 400)
+                                LinearGradient(
+                                    colors: [.black.opacity(0.12), Celestial.Colors.background],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 240)
+
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text("ON THIS DAY")
+                                        .font(.caption.weight(.medium))
+                                        .tracking(1.4)
+                                        .foregroundStyle(Celestial.Colors.amber)
+                                    Text(Date.now.formatted(.dateTime.month(.wide).day()))
+                                        .font(.system(.largeTitle, design: .rounded, weight: .semibold))
+                                        .tracking(-1)
+                                        .foregroundStyle(Celestial.Colors.onSurface)
+                                        .padding(.top, 10)
+                                    Text("\(yearGroups.reduce(0) { $0 + $1.ids.count }) photos across \(yearGroups.count) years")
+                                        .font(.subheadline)
+                                        .foregroundStyle(Celestial.Colors.secondary)
+                                        .padding(.top, 8)
+
+                                    Button(action: { showSlideshow = true }) {
+                                        Label("Relive your memories", systemImage: "play.fill")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(Celestial.Colors.surfaceDim)
+                                            .padding(.horizontal, 20)
+                                            .frame(height: 46)
+                                            .background(Celestial.Colors.onSurface)
+                                            .clipShape(Capsule())
+                                    }
+                                    .padding(.top, 22)
+                                }
+                                .padding(.horizontal, 26)
+                                .padding(.bottom, 24)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 20)
-                            .padding(.bottom, 8)
 
-                            LazyVStack(spacing: 0) {
+                            LazyVStack(spacing: 28) {
                                 ForEach(yearGroups, id: \.year) { group in
-                                    HStack {
-                                        Text("\(String(group.year))")
-                                            .font(.system(.title3, design: .rounded, weight: .semibold))
-                                            .foregroundStyle(Celestial.Colors.onSurface)
-                                        Text("\(group.ids.count) photos")
-                                            .font(.footnote)
-                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 16)
-                                    .padding(.top, 16)
-                                    .padding(.bottom, 10)
+                                    VStack(spacing: 12) {
+                                        HStack(alignment: .firstTextBaseline) {
+                                            Text("\(String(group.year))")
+                                                .font(.system(.title2, design: .rounded, weight: .semibold))
+                                                .tracking(-0.6)
+                                                .foregroundStyle(Celestial.Colors.onSurface)
+                                            Spacer()
+                                            Text("\(group.ids.count) photos")
+                                                .font(.caption)
+                                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                        }
+                                        .padding(.horizontal, 26)
 
-                                    MasonryGrid(group.ids.prefix(20).map { IdentifiedString(id: $0) }, spacing: 6) { item in
-                                        MemoryThumbnail(localIdentifier: item.id, groupIds: group.ids)
+                                        MasonryGrid(
+                                            group.ids.prefix(20).map { IdentifiedString(id: $0) },
+                                            spacing: 5
+                                        ) { item in
+                                            MemoryThumbnail(localIdentifier: item.id, groupIds: group.ids)
+                                        }
+                                        .padding(.horizontal, 5)
                                     }
-                                    .padding(.horizontal, 6)
                                 }
                             }
+                            .padding(.top, 28)
                         }
                     }
                     .padding(.bottom, 40)
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 10) {
-                        Image("AppIconTransparent")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 36, height: 36)
-                        Text("Memories")
-                            .font(.system(.title3, design: .rounded, weight: .semibold))
-                            .foregroundStyle(Celestial.Colors.onSurface)
-                    }
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .preferredColorScheme(.dark)
             .fullScreenCover(isPresented: $showSlideshow) {
                 MemorySlideshowView(captionService: captionService)
@@ -141,6 +129,29 @@ struct OnThisDayView: View {
                 logger.error("On This Day error: \(error.localizedDescription)")
             }
             isLoading = false
+        }
+    }
+}
+
+private struct MemoryHeroImage: View {
+    let localIdentifier: String?
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Celestial.memoryGradient
+            }
+        }
+        .clipped()
+        .task(id: localIdentifier) {
+            guard let localIdentifier,
+                  let asset = PhotoLibrary.getAsset(by: localIdentifier) else { return }
+            image = await PhotoLibrary.loadThumbnail(for: asset, maxDimension: 1200)
         }
     }
 }
@@ -178,7 +189,7 @@ struct MemoryThumbnail: View {
                     }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(creationDate.map { "Memory from \(DateFormatter.mediumDate.string(from: $0))" } ?? "Memory photo")
         .accessibilityAddTraits(.isImage)
