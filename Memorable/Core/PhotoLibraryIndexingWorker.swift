@@ -5,6 +5,10 @@ import UIKit
 
 @MainActor
 final class PhotoLibraryIndexingWorker {
+    nonisolated static func updatedMediaCount(current: Int, videoPersisted: Bool) -> Int {
+        videoPersisted ? current + 1 : current
+    }
+
     final class Session {
         let videoAssets: [PHAsset]
         let alreadyIndexedVideos: Set<String>
@@ -298,10 +302,14 @@ final class PhotoLibraryIndexingWorker {
                 callbacks.setHitFreeLimit(true)
                 break
             }
-            if await indexVideo(asset: asset) {
+            let videoPersisted = await indexVideo(asset: asset)
+            if videoPersisted {
                 callbacks.completeRequiredRebuild()
             }
-            session.indexedMediaCount += 1
+            session.indexedMediaCount = Self.updatedMediaCount(
+                current: session.indexedMediaCount,
+                videoPersisted: videoPersisted
+            )
             indexed += 1
             currentProgress.completed = indexed
             callbacks.setProgress(currentProgress)

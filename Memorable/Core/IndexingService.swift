@@ -5,6 +5,12 @@ import os
 
 private let hitFreeLimitKey = "indexing.hitFreeLimit"
 
+enum IndexingWritePolicy {
+    static func canStart(storageAllowsWrites: Bool) -> Bool {
+        storageAllowsWrites
+    }
+}
+
 final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, Sendable {
     private let callback = OSAllocatedUnfairLock<(@MainActor @Sendable () -> Void)?>(
         initialState: nil
@@ -243,6 +249,7 @@ class IndexingService: ObservableObject {
     }
 
     func startIndexing() {
+        guard canStartIndexing() else { return }
         searchEngine.resumeAfterMemoryPressure()
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
@@ -251,6 +258,7 @@ class IndexingService: ObservableObject {
     }
 
     func indexNewPhotosOnly() {
+        guard canStartIndexing() else { return }
         searchEngine.resumeAfterMemoryPressure()
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
@@ -259,6 +267,7 @@ class IndexingService: ObservableObject {
     }
 
     func rebuildRequiredIndex() {
+        guard canStartIndexing() else { return }
         searchEngine.resumeAfterMemoryPressure()
         guard indexRebuildRequired else {
             startIndexing()
@@ -300,6 +309,7 @@ class IndexingService: ObservableObject {
     }
 
     func indexFolder(url: URL, name: String) {
+        guard canStartIndexing() else { return }
         searchEngine.resumeAfterMemoryPressure()
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
@@ -331,6 +341,19 @@ class IndexingService: ObservableObject {
     private func markRunningIfIdle() -> Bool {
         guard !progress.isRunning else { return false }
         progress.isRunning = true
+        return true
+    }
+
+    private func canStartIndexing() -> Bool {
+        guard IndexingWritePolicy.canStart(
+            storageAllowsWrites: database.allowsIndexingWrites
+        ) else {
+            logger.error("Indexing is unavailable while persistent storage is unavailable")
+            progress.isRunning = false
+            isReady = false
+            onIndexUnavailable?()
+            return false
+        }
         return true
     }
 
@@ -442,6 +465,7 @@ class IndexingService: ObservableObject {
         delayAfterDependencies: TimeInterval = 0,
         enqueueLaunchEnrichment: Bool = false
     ) {
+        guard canStartIndexing() else { return }
         let workflowID = UUID()
         jobQueue.enqueue(IndexingJob(
             workflowID: workflowID,

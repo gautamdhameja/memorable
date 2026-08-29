@@ -2,6 +2,57 @@ import XCTest
 @testable import Memorable
 
 final class IndexingPolicyTests: XCTestCase {
+    func testFailedVideoAttemptDoesNotConsumeFreeTierCapacity() {
+        XCTAssertEqual(
+            PhotoLibraryIndexingWorker.updatedMediaCount(current: 499, videoPersisted: false),
+            499
+        )
+        XCTAssertEqual(
+            PhotoLibraryIndexingWorker.updatedMediaCount(current: 499, videoPersisted: true),
+            500
+        )
+    }
+
+    func testReadOnlyFallbackDisablesAutomaticAndUserStartedIndexing() {
+        XCTAssertFalse(IndexingWritePolicy.canStart(storageAllowsWrites: false))
+        XCTAssertTrue(IndexingWritePolicy.canStart(storageAllowsWrites: true))
+    }
+
+    func testFolderRegistrationRemovesBookmarkWhenSourceInsertFails() {
+        var bookmark: Data?
+
+        XCTAssertThrowsError(
+            try FolderSourceRegistration.register(
+                bookmarkData: Data([1, 2, 3]),
+                sourceId: "source-1",
+                persistBookmark: { bookmark = $0 },
+                insertSource: { throw RegistrationTestError.insertFailed },
+                removeBookmark: { bookmark = nil }
+            )
+        )
+        XCTAssertNil(bookmark)
+    }
+
+    func testFolderRegistrationDoesNotInsertSourceWhenBookmarkPersistenceFails() {
+        var inserted = false
+
+        XCTAssertThrowsError(
+            try FolderSourceRegistration.register(
+                bookmarkData: Data([1, 2, 3]),
+                sourceId: "source-1",
+                persistBookmark: { _ in throw RegistrationTestError.bookmarkFailed },
+                insertSource: { inserted = true },
+                removeBookmark: {}
+            )
+        )
+        XCTAssertFalse(inserted)
+    }
+
+    private enum RegistrationTestError: Error {
+        case bookmarkFailed
+        case insertFailed
+    }
+
 
     func testFreeTierLimitCountsPhotosAndVideosTogether() {
         XCTAssertFalse(FreeTier.canIndexMore(indexedMediaCount: FreeTier.maxIndexedMedia, isPro: false))

@@ -70,7 +70,9 @@ struct IndexingSlideshowView: View {
         .task {
             // Wait for some photos to be indexed before starting
             await waitForIndexedPhotos()
+            guard !Task.isCancelled else { return }
             await showNextPhoto()
+            guard !Task.isCancelled else { return }
             startCycling()
         }
         .onDisappear {
@@ -82,8 +84,11 @@ struct IndexingSlideshowView: View {
     private func waitForIndexedPhotos() async {
         // Poll until we have at least 5 indexed photos
         while (try? database.indexedCount()) ?? 0 < 5 {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if Task.isCancelled { return }
+            do {
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+            } catch {
+                return
+            }
         }
     }
 
@@ -103,9 +108,9 @@ struct IndexingSlideshowView: View {
 
         // Fade out current
         withAnimation { captionVisible = false }
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }
         withAnimation { isVisible = false }
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        do { try await Task.sleep(nanoseconds: 400_000_000) } catch { return }
 
         // Load thumbnail
         guard let asset = PhotoLibrary.getAsset(by: photo.localIdentifier) else { return }
@@ -125,7 +130,7 @@ struct IndexingSlideshowView: View {
         withAnimation { isVisible = true }
 
         // Caption fades in after delay
-        try? await Task.sleep(nanoseconds: 800_000_000)
+        do { try await Task.sleep(nanoseconds: 800_000_000) } catch { return }
         withAnimation { captionVisible = true }
     }
 

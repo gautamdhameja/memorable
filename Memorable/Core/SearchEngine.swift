@@ -500,7 +500,9 @@ final class SearchEngine: Sendable {
                     localIdentifier: photos.localIdentifiers[i],
                     creationDate: photos.dates[i],
                     isVideo: false,
-                    bestFramePosition: nil
+                    bestFramePosition: nil,
+                    sourceId: photos.sourceIds[i],
+                    filePath: photos.filePaths[i]
                 )
             }
 
@@ -546,7 +548,9 @@ final class SearchEngine: Sendable {
                     SearchResult(id: photos.ids[index], score: score,
                                  localIdentifier: photos.localIdentifiers[index],
                                  creationDate: photos.dates[index], isVideo: false,
-                                 bestFramePosition: nil)
+                                 bestFramePosition: nil,
+                                 sourceId: photos.sourceIds[index],
+                                 filePath: photos.filePaths[index])
                 }
             let fallbackSummary = FilterSummary(
                 dateDescription: appliedSummary?.dateDescription,
@@ -612,7 +616,9 @@ final class SearchEngine: Sendable {
                 SearchResult(id: mediaIndex.ids[row], score: score,
                              localIdentifier: mediaIndex.localIdentifiers[row],
                              creationDate: mediaIndex.dates[row], isVideo: false,
-                             bestFramePosition: nil)
+                             bestFramePosition: nil,
+                             sourceId: mediaIndex.sourceIds[row],
+                             filePath: mediaIndex.filePaths[row])
             }
     }
 
@@ -623,6 +629,8 @@ final class SearchEngine: Sendable {
         let photos = snapshot.photos
         let ids = photos.ids
         let localIds = photos.localIdentifiers
+        let sourceIds = photos.sourceIds
+        let filePaths = photos.filePaths
         let photoDates = photos.dates
         let matrix = photos.embeddings
         let count = photos.count
@@ -657,7 +665,16 @@ final class SearchEngine: Sendable {
         let topResults = sorted.prefix(topK).filter { $0.element >= minimumScoreThreshold }
 
         return topResults.map { (index, score) in
-            SearchResult(id: ids[index], score: score, localIdentifier: localIds[index], creationDate: photoDates[index], isVideo: false, bestFramePosition: nil)
+            SearchResult(
+                id: ids[index],
+                score: score,
+                localIdentifier: localIds[index],
+                creationDate: photoDates[index],
+                isVideo: false,
+                bestFramePosition: nil,
+                sourceId: sourceIds[index],
+                filePath: filePaths[index]
+            )
         }
     }
 
@@ -920,7 +937,9 @@ final class SearchEngine: Sendable {
                     localIdentifier: index.localIdentifiers[row],
                     creationDate: index.dates[row],
                     isVideo: false,
-                    bestFramePosition: nil
+                    bestFramePosition: nil,
+                    sourceId: index.sourceIds[row],
+                    filePath: index.filePaths[row]
                 )
             }
 
@@ -938,7 +957,9 @@ final class SearchEngine: Sendable {
                     localIdentifier: index.localIdentifiers[row],
                     creationDate: index.dates[row],
                     isVideo: true,
-                    bestFramePosition: framePosition
+                    bestFramePosition: framePosition,
+                    sourceId: index.sourceIds[row],
+                    filePath: index.filePaths[row]
                 )
                 if let existing = bestByID[id] {
                     if result.score > existing.score { bestByID[id] = result }

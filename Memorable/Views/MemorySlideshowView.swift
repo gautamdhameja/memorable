@@ -99,6 +99,7 @@ struct MemorySlideshowView: View {
         .task {
             photoCount = (try? database.indexedCount()) ?? 0
             await showNextPhoto()
+            guard !Task.isCancelled else { return }
             startCycling()
         }
         .onDisappear {
@@ -122,9 +123,9 @@ struct MemorySlideshowView: View {
 
         // Fade out
         withAnimation { captionVisible = false }
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
         withAnimation { isVisible = false }
-        try? await Task.sleep(nanoseconds: 500_000_000)
+        do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
 
         // Load thumbnail
         guard let asset = PhotoLibrary.getAsset(by: photo.localIdentifier) else { return }
@@ -143,7 +144,7 @@ struct MemorySlideshowView: View {
 
         // Fade in
         withAnimation { isVisible = true }
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
         withAnimation { captionVisible = true }
     }
 

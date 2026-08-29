@@ -3,6 +3,29 @@ import XCTest
 
 @available(iOS 26.0, *)
 final class SmartQueryParserConcurrencyTests: XCTestCase {
+    private actor PromptCapture {
+        private(set) var prompt: String?
+
+        func record(_ prompt: String) {
+            self.prompt = prompt
+        }
+    }
+
+    private struct CapturingResponder: SmartQueryResponding {
+        let capture: PromptCapture
+
+        func respond(to prompt: String) async throws -> ParsedQuery {
+            await capture.record(prompt)
+            return ParsedQuery(
+                visualDescription: "dog",
+                startDate: nil,
+                endDate: nil,
+                locationName: nil,
+                negativeTerms: []
+            )
+        }
+    }
+
     private actor ConcurrencyProbe {
         private var activeByResponder: [UUID: Int] = [:]
         private var responderIDs: Set<UUID> = []
@@ -64,5 +87,20 @@ final class SmartQueryParserConcurrencyTests: XCTestCase {
         let maximumConcurrentCallsOnOneResponder = await probe.maximumConcurrentCallsOnOneResponder
         XCTAssertEqual(uniqueResponderCount, requestCount)
         XCTAssertEqual(maximumConcurrentCallsOnOneResponder, 1)
+    }
+
+    func testSmartParserBoundsQueryBeforeBuildingPrompt() async {
+        let capture = PromptCapture()
+        let parser = SmartQueryParser(isAvailable: true) {
+            CapturingResponder(capture: capture)
+        }
+        let oversizedQuery = String(repeating: "x", count: QueryInputPolicy.maximumCharacterCount + 50)
+
+        _ = await parser.parse(query: oversizedQuery)
+
+        let prompt = await capture.prompt
+        XCTAssertNotNil(prompt)
+        XCTAssertTrue(prompt?.contains(String(repeating: "x", count: QueryInputPolicy.maximumCharacterCount)) == true)
+        XCTAssertFalse(prompt?.contains(oversizedQuery) == true)
     }
 }

@@ -1,6 +1,15 @@
 import Foundation
 import NaturalLanguage
 
+enum QueryInputPolicy {
+    static let maximumCharacterCount = 500
+
+    static func bounded(_ query: String) -> String {
+        guard query.count > maximumCharacterCount else { return query }
+        return String(query.prefix(maximumCharacterCount))
+    }
+}
+
 struct QueryHints {
     var textQuery: String
     var dateRange: DateRange?
@@ -33,7 +42,7 @@ enum Season: String {
 enum QueryParserFallback {
 
     static func parse(query: String) -> QueryHints {
-        let trimmed = query.count > 500 ? String(query.prefix(500)) : query
+        let trimmed = QueryInputPolicy.bounded(query)
         var text = trimmed.lowercased()
         var locationHint: String?
         var negTerms: [String] = []

@@ -51,6 +51,7 @@ struct SmartQueryParser: Sendable {
     }
 
     func parse(query: String) async -> QueryHints {
+        let query = QueryInputPolicy.bounded(query)
         guard isAvailable else {
             return QueryParserFallback.parse(query: query)
         }
@@ -167,6 +168,7 @@ enum QueryParser {
     private static let smartParser = SmartQueryParser()
 
     static func parse(query: String) async -> QueryHints {
+        let query = QueryInputPolicy.bounded(query)
         if #available(iOS 26.0, *),
            smartParser.isAvailable {
             return await smartParser.parse(query: query)

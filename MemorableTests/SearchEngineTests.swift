@@ -60,6 +60,8 @@ final class SearchEngineTests: XCTestCase {
                 kind: .photo,
                 ids: ["photo-1"],
                 localIdentifiers: [],
+                sourceIds: [PhotoSourceType.photokit.rawValue],
+                filePaths: [nil],
                 dates: [nil],
                 latitudes: [nil],
                 longitudes: [nil],
@@ -83,6 +85,8 @@ final class SearchEngineTests: XCTestCase {
             MediaIndex.Row(
                 id: "photo-1",
                 localIdentifier: "local-photo-1",
+                sourceId: "folder-source",
+                filePath: "/folder/photo.jpg",
                 date: Date(timeIntervalSince1970: 100),
                 latitude: 1,
                 longitude: 2,
@@ -98,6 +102,8 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(index.count, 1)
         XCTAssertEqual(index.ids, ["photo-1"])
         XCTAssertEqual(index.localIdentifiers, ["local-photo-1"])
+        XCTAssertEqual(index.sourceIds, ["folder-source"])
+        XCTAssertEqual(index.filePaths, ["/folder/photo.jpg"])
         XCTAssertEqual(index.dates.count, index.count)
         XCTAssertEqual(index.latitudes, [1])
         XCTAssertEqual(index.longitudes, [2])
@@ -110,6 +116,28 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(index.framePositions, [nil])
         XCTAssertEqual(index.embeddings.count, EmbeddingConfig.dimensions)
         XCTAssertEqual(index.embeddings[0], 1)
+    }
+
+    func testFolderSourceMetadataPropagatesIntoSearchResult() throws {
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: SearchFixtureDatabase(photos: [
+                .init(
+                    id: "photo-1",
+                    localIdentifier: "folder:source-1:photo.jpg",
+                    date: nil,
+                    sourceId: "source-1",
+                    filePath: "/selected/photo.jpg",
+                    embedding: float16Vector(first: 1)
+                )
+            ])
+        )
+
+        try engine.loadIndex()
+        let result = try XCTUnwrap(engine.hybridSearch(hints: hints(text: "dog")).results.first)
+
+        XCTAssertEqual(result.sourceId, "source-1")
+        XCTAssertEqual(result.filePath, "/selected/photo.jpg")
     }
 
     func testVideoOnlyIndexIsLoadedAndSearchable() throws {
@@ -503,6 +531,8 @@ struct FixturePhoto: Sendable {
     let id: String
     let localIdentifier: String
     let date: Date?
+    var sourceId: String = PhotoSourceType.photokit.rawValue
+    var filePath: String? = nil
     var city: String? = nil
     var sceneLabels: String? = nil
     let embedding: [Float16]
@@ -568,6 +598,8 @@ final class SearchFixtureDatabase: DatabaseProtocol {
                 MediaIndex.Row(
                     id: photo.id,
                     localIdentifier: photo.localIdentifier,
+                    sourceId: photo.sourceId,
+                    filePath: photo.filePath,
                     date: photo.date,
                     latitude: nil,
                     longitude: nil,

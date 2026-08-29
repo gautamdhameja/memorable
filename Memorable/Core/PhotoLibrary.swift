@@ -257,6 +257,34 @@ class PhotoLibrary {
         await requestImage(for: asset, targetSize: targetSize, contentMode: .aspectFill, options: imageRequestOptions())
     }
 
+    /// Loads either a PhotoKit result or a validated security-scoped folder
+    /// result without exposing raw folder paths to view code.
+    static func loadImage(
+        for result: SearchResult,
+        targetSize: CGSize
+    ) async -> UIImage? {
+        if result.sourceId != PhotoSourceType.photokit.rawValue {
+            guard !result.isVideo, let filePath = result.filePath else { return nil }
+            return await Task.detached(priority: .utility) {
+                FolderScanner.loadImageFromBookmarkedSource(
+                    filePath: filePath,
+                    sourceId: result.sourceId,
+                    targetSize: targetSize
+                )
+            }.value
+        }
+
+        guard let asset = getAsset(by: result.localIdentifier) else { return nil }
+        if result.isVideo {
+            return await VideoFrameExtractor.thumbnail(
+                from: asset,
+                atPosition: result.bestFramePosition ?? 0.5,
+                targetSize: targetSize
+            )
+        }
+        return await loadImage(for: asset, targetSize: targetSize)
+    }
+
     // Get a UIImage from a PHAsset for indexing. Embedding quality depends on
     // matching the displayed photo representation, so this intentionally uses
     // the same high-quality local request mode as the display path.

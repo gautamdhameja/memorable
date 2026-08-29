@@ -58,25 +58,29 @@ struct PhotoThumbnailView: View {
             #if DEBUG
             logger.info("[PhotoThumbnailView] start load id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo) score=\(String(format: "%.4f", result.score)) frame=\(result.bestFramePosition ?? -1)")
             #endif
-            if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                if result.isVideo {
-                    thumbnail = await VideoFrameExtractor.thumbnail(
-                        from: asset,
-                        atPosition: result.bestFramePosition ?? 0.5
-                    )
-                } else {
-                    thumbnail = await PhotoLibrary.loadThumbnail(for: asset)
-                }
+            let loaded: UIImage?
+            if result.sourceId == PhotoSourceType.photokit.rawValue,
+               !result.isVideo,
+               let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
+                loaded = await PhotoLibrary.loadThumbnail(for: asset)
+            } else {
+                loaded = await PhotoLibrary.loadImage(
+                    for: result,
+                    targetSize: CGSize(width: 400, height: 400)
+                )
+            }
+            if !Task.isCancelled {
+                thumbnail = loaded
+            }
+            if thumbnail != nil {
                 #if DEBUG
-                if let thumbnail {
+                if let thumbnail = thumbnail {
                     logger.info("[PhotoThumbnailView] loaded thumbnail id=\(result.id) localId=\(result.localIdentifier) size=\(String(format: "%.0fx%.0f", thumbnail.size.width, thumbnail.size.height))")
-                } else {
-                    logger.warning("[PhotoThumbnailView] thumbnail nil id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo)")
                 }
                 #endif
             } else {
                 #if DEBUG
-                logger.warning("[PhotoThumbnailView] PHAsset missing id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo)")
+                logger.warning("[PhotoThumbnailView] media load failed id=\(result.id) localId=\(result.localIdentifier) isVideo=\(result.isVideo)")
                 #endif
             }
         }

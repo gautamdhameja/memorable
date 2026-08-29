@@ -26,6 +26,8 @@ struct MediaIndex: Sendable {
     struct Row: Sendable {
         let id: String
         let localIdentifier: String
+        let sourceId: String
+        let filePath: String?
         let date: Date?
         let latitude: Double?
         let longitude: Double?
@@ -34,11 +36,41 @@ struct MediaIndex: Sendable {
         let country: String?
         let locationName: String?
         let details: RowDetails
+
+        init(
+            id: String,
+            localIdentifier: String,
+            sourceId: String = PhotoSourceType.photokit.rawValue,
+            filePath: String? = nil,
+            date: Date?,
+            latitude: Double?,
+            longitude: Double?,
+            city: String?,
+            state: String?,
+            country: String?,
+            locationName: String?,
+            details: RowDetails
+        ) {
+            self.id = id
+            self.localIdentifier = localIdentifier
+            self.sourceId = sourceId
+            self.filePath = filePath
+            self.date = date
+            self.latitude = latitude
+            self.longitude = longitude
+            self.city = city
+            self.state = state
+            self.country = country
+            self.locationName = locationName
+            self.details = details
+        }
     }
 
     let kind: Kind
     private(set) var ids: [String]
     private(set) var localIdentifiers: [String]
+    private(set) var sourceIds: [String]
+    private(set) var filePaths: [String?]
     private(set) var dates: [Date?]
     private(set) var latitudes: [Double?]
     private(set) var longitudes: [Double?]
@@ -58,6 +90,8 @@ struct MediaIndex: Sendable {
         self.kind = kind
         ids = []
         localIdentifiers = []
+        sourceIds = []
+        filePaths = []
         dates = []
         latitudes = []
         longitudes = []
@@ -75,6 +109,8 @@ struct MediaIndex: Sendable {
         kind: Kind,
         ids: [String],
         localIdentifiers: [String],
+        sourceIds: [String]? = nil,
+        filePaths: [String?]? = nil,
         dates: [Date?],
         latitudes: [Double?],
         longitudes: [Double?],
@@ -88,8 +124,12 @@ struct MediaIndex: Sendable {
         embeddings: [Float16]
     ) throws {
         let count = ids.count
+        let resolvedSourceIds = sourceIds
+            ?? [String](repeating: PhotoSourceType.photokit.rawValue, count: count)
+        let resolvedFilePaths = filePaths ?? [String?](repeating: nil, count: count)
         let metadataCounts = [
-            localIdentifiers.count, dates.count, latitudes.count,
+            localIdentifiers.count, resolvedSourceIds.count, resolvedFilePaths.count,
+            dates.count, latitudes.count,
             longitudes.count, ocrTexts.count, locationCities.count,
             locationStates.count, locationCountries.count, locationNames.count,
             sceneLabels.count, framePositions.count
@@ -119,6 +159,8 @@ struct MediaIndex: Sendable {
         self.kind = kind
         self.ids = ids
         self.localIdentifiers = localIdentifiers
+        self.sourceIds = resolvedSourceIds
+        self.filePaths = resolvedFilePaths
         self.dates = dates
         self.latitudes = latitudes
         self.longitudes = longitudes
@@ -155,6 +197,8 @@ struct MediaIndex: Sendable {
 
         ids.append(row.id)
         localIdentifiers.append(row.localIdentifier)
+        sourceIds.append(row.sourceId)
+        filePaths.append(row.filePath)
         dates.append(row.date)
         latitudes.append(row.latitude)
         longitudes.append(row.longitude)
@@ -177,6 +221,8 @@ struct MediaIndex: Sendable {
     mutating func reserveCapacity(_ rowCount: Int) {
         ids.reserveCapacity(rowCount)
         localIdentifiers.reserveCapacity(rowCount)
+        sourceIds.reserveCapacity(rowCount)
+        filePaths.reserveCapacity(rowCount)
         dates.reserveCapacity(rowCount)
         latitudes.reserveCapacity(rowCount)
         longitudes.reserveCapacity(rowCount)
@@ -812,6 +858,8 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                 let row = MediaIndex.Row(
                     id: photo.id,
                     localIdentifier: photo.localIdentifier,
+                    sourceId: photo.sourceId,
+                    filePath: photo.filePath,
                     date: photo.creationDate,
                     latitude: photo.latitude,
                     longitude: photo.longitude,
@@ -989,7 +1037,7 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     func loadAllVideoEmbeddings() throws -> MediaIndex {
         try dbQueue.read { db in
             let sql = """
-                SELECT v.id, v.localIdentifier, v.creationDate, v.latitude, v.longitude,
+                SELECT v.id, v.localIdentifier, v.sourceId, v.creationDate, v.latitude, v.longitude,
                        v.locationCity, v.locationState, v.locationCountry, v.locationName,
                        f.framePosition, f.embedding
                 FROM indexed_video_frames f
@@ -1006,6 +1054,8 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                 let indexRow = MediaIndex.Row(
                     id: row["id"],
                     localIdentifier: row["localIdentifier"],
+                    sourceId: row["sourceId"],
+                    filePath: nil,
                     date: row["creationDate"],
                     latitude: row["latitude"],
                     longitude: row["longitude"],

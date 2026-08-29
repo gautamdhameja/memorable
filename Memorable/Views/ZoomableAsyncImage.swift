@@ -134,22 +134,8 @@ struct ZoomableAsyncImage: View {
 
     private func loadImage() async {
         let targetSize = displayTargetSize()
-        if result.isVideo {
-            if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                let loaded = await VideoFrameExtractor.thumbnail(
-                    from: asset,
-                    atPosition: result.bestFramePosition ?? 0.5,
-                    targetSize: targetSize
-                )
-                if !Task.isCancelled { image = loaded }
-            }
-        } else if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-            let loaded = await PhotoLibrary.loadImage(
-                for: asset,
-                targetSize: targetSize
-            )
-            if !Task.isCancelled { image = loaded }
-        }
+        let loaded = await PhotoLibrary.loadImage(for: result, targetSize: targetSize)
+        if !Task.isCancelled { image = loaded }
     }
 
     private func displayTargetSize() -> CGSize {

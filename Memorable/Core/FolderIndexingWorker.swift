@@ -1,6 +1,29 @@
 import Foundation
 import ImageIO
 
+enum FolderSourceRegistration {
+    static func register(
+        bookmarkData: Data,
+        sourceId: String,
+        persistBookmark: (Data) throws -> Void,
+        insertSource: () throws -> Void,
+        removeBookmark: () -> Void
+    ) throws {
+        _ = sourceId
+        try persistBookmark(bookmarkData)
+        do {
+            try insertSource()
+        } catch {
+            removeBookmark()
+            throw error
+        }
+    }
+}
+
+private enum FolderSourceRegistrationError: Error {
+    case bookmarkPersistenceFailed
+}
+
 @MainActor
 final class FolderIndexingWorker {
     struct Callbacks {
@@ -35,15 +58,16 @@ final class FolderIndexingWorker {
         defer { url.stopAccessingSecurityScopedResource() }
 
         let sourceId = UUID().uuidString
+        let bookmarkData: Data
         do {
-            let bookmarkData = try url.bookmarkData(
+            bookmarkData = try url.bookmarkData(
                 options: .minimalBookmark,
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
-            UserDefaults.standard.set(bookmarkData, forKey: AppKeys.folderBookmark(sourceId: sourceId))
         } catch {
             logger.error("Failed to save folder bookmark: \(error.localizedDescription)")
+            return
         }
 
         let source = PhotoSource(
@@ -56,10 +80,23 @@ final class FolderIndexingWorker {
             photoCount: 0
         )
         do {
-            let db = database
-            try await Task.detached(priority: .utility) {
-                try db.insertSource(source)
-            }.value
+            try FolderSourceRegistration.register(
+                bookmarkData: bookmarkData,
+                sourceId: sourceId,
+                persistBookmark: { data in
+                    let key = AppKeys.folderBookmark(sourceId: sourceId)
+                    UserDefaults.standard.set(data, forKey: key)
+                    guard UserDefaults.standard.data(forKey: key) == data else {
+                        throw FolderSourceRegistrationError.bookmarkPersistenceFailed
+                    }
+                },
+                insertSource: { try database.insertSource(source) },
+                removeBookmark: {
+                    UserDefaults.standard.removeObject(
+                        forKey: AppKeys.folderBookmark(sourceId: sourceId)
+                    )
+                }
+            )
         } catch {
             logger.error("Failed to create source: \(error.localizedDescription)")
             return

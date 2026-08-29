@@ -108,6 +108,28 @@ struct SearchResult: Identifiable, Equatable {
     let creationDate: Date?
     let isVideo: Bool
     let bestFramePosition: Double?
+    let sourceId: String
+    let filePath: String?
+
+    init(
+        id: String,
+        score: Float,
+        localIdentifier: String,
+        creationDate: Date?,
+        isVideo: Bool,
+        bestFramePosition: Double?,
+        sourceId: String = PhotoSourceType.photokit.rawValue,
+        filePath: String? = nil
+    ) {
+        self.id = id
+        self.score = score
+        self.localIdentifier = localIdentifier
+        self.creationDate = creationDate
+        self.isVideo = isVideo
+        self.bestFramePosition = bestFramePosition
+        self.sourceId = sourceId
+        self.filePath = filePath
+    }
 }
 
 struct SearchResultGroup: Identifiable {
