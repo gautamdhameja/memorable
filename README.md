@@ -115,6 +115,7 @@ Keep high-cost work bounded and cancellable:
 - Duplicate detection performs at most 5,000,000 comparisons and retains at most 2,000 pairs.
 - Folder enumeration retains at most 100,000 supported image URLs and checks cancellation during traversal.
 - New folder registrations stop at 32 unique canonical paths. Existing installations with more saved folders continue to show every folder and let the user remove them. Each folder image must be 32 MiB or smaller. The app bounds directory traversal, rejects special files and symbolic links, and reads an immutable, size-bounded snapshot before ImageIO parses it.
+- Use the Refresh control next to a saved folder to scan it again after its files change. Memorable automatically retries only folders whose earlier scan did not finish; ordinary Apple Photos changes do not rescan saved folders.
 - Indexing uses bounded batches and one prefetched image batch.
 - Search keeps the newest 8,000 media items in a resident fast window. If the index contains more media, the app searches the remaining rows in bounded 512-media database pages.
 - PhotoKit and video loaders use cancellation-aware timeouts.

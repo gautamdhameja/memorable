@@ -3,7 +3,184 @@ import GRDB
 import os
 @testable import Memorable
 
+private final class FailingResetFileManager: FileManager, @unchecked Sendable {
+    private let failingPath: String
+
+    init(failingPath: String) {
+        self.failingPath = failingPath
+        super.init()
+    }
+
+    override func removeItem(at URL: URL) throws {
+        if URL.path == failingPath {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try super.removeItem(at: URL)
+    }
+}
+
 final class DatabaseTests: XCTestCase {
+
+    func testDeferredPersistentStoreResetDeletesStoreAndFolderAccessArtifacts() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storeDirectory = root.appendingPathComponent("Memorable", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: storeDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let storeURL = storeDirectory.appendingPathComponent("photos.sqlite")
+        let unrelatedURL = storeDirectory.appendingPathComponent("keep.txt")
+        let bookmarkDirectory = storeDirectory.appendingPathComponent(
+            "FolderBookmarks",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: bookmarkDirectory,
+            withIntermediateDirectories: true
+        )
+        let bookmarkURL = bookmarkDirectory.appendingPathComponent("saved.bookmark")
+        for url in [storeURL, URL(fileURLWithPath: storeURL.path + "-wal"), URL(fileURLWithPath: storeURL.path + "-shm"), unrelatedURL] {
+            XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: Data([1])))
+        }
+        XCTAssertTrue(FileManager.default.createFile(atPath: bookmarkURL.path, contents: Data([2])))
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "DatabaseTests.\(UUID().uuidString)"))
+        defer { defaults.removePersistentDomain(forName: defaults.volatileDomainNames.first ?? "") }
+        let legacyBookmarkKey = AppKeys.folderBookmark(sourceId: "legacy-source")
+        defaults.set(Data([3]), forKey: legacyBookmarkKey)
+        defaults.set("preserve", forKey: "unrelated.default")
+        AppDatabase.schedulePersistentStoreReset(defaults: defaults)
+
+        XCTAssertTrue(AppDatabase.isPersistentStoreResetScheduled(defaults: defaults))
+        XCTAssertTrue(try AppDatabase.performPendingPersistentStoreReset(
+            fileManager: .default,
+            applicationSupportURL: root,
+            defaults: defaults
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storeURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storeURL.path + "-wal"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storeURL.path + "-shm"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bookmarkDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedURL.path))
+        XCTAssertNil(defaults.data(forKey: legacyBookmarkKey))
+        XCTAssertEqual(defaults.string(forKey: "unrelated.default"), "preserve")
+        XCTAssertFalse(AppDatabase.isPersistentStoreResetScheduled(defaults: defaults))
+    }
+
+    func testPersistentStoreResetRetainsMarkerAfterDeletionFailureAndRetries() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storeDirectory = root.appendingPathComponent("Memorable", isDirectory: true)
+        try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let storeURL = storeDirectory.appendingPathComponent("photos.sqlite")
+        try FileManager.default.createDirectory(at: storeURL, withIntermediateDirectories: true)
+        let blockingFile = storeURL.appendingPathComponent("blocked")
+        XCTAssertTrue(FileManager.default.createFile(atPath: blockingFile.path, contents: Data([1])))
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "DatabaseTests.\(UUID().uuidString)"))
+        defer { defaults.removePersistentDomain(forName: defaults.volatileDomainNames.first ?? "") }
+        AppDatabase.schedulePersistentStoreReset(defaults: defaults)
+
+        XCTAssertThrowsError(try AppDatabase.performPendingPersistentStoreReset(
+            fileManager: FailingResetFileManager(failingPath: storeURL.path),
+            applicationSupportURL: root,
+            defaults: defaults
+        ))
+        XCTAssertTrue(AppDatabase.isPersistentStoreResetScheduled(defaults: defaults))
+
+        XCTAssertTrue(try AppDatabase.performPendingPersistentStoreReset(
+            fileManager: .default,
+            applicationSupportURL: root,
+            defaults: defaults
+        ))
+        XCTAssertFalse(AppDatabase.isPersistentStoreResetScheduled(defaults: defaults))
+    }
+
+    func testPersistentStoreResetRetryDoesNotDeleteReplacementStoreOrBookmarks() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storeDirectory = root.appendingPathComponent("Memorable", isDirectory: true)
+        let bookmarkDirectory = storeDirectory.appendingPathComponent(
+            "FolderBookmarks",
+            isDirectory: true
+        )
+        let pendingBookmarkDirectory = storeDirectory.appendingPathComponent(
+            "FolderBookmarks.reset-pending",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: bookmarkDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let storeURL = storeDirectory.appendingPathComponent("photos.sqlite")
+        XCTAssertTrue(FileManager.default.createFile(atPath: storeURL.path, contents: Data([1])))
+        XCTAssertTrue(FileManager.default.createFile(
+            atPath: bookmarkDirectory.appendingPathComponent("old.bookmark").path,
+            contents: Data([2])
+        ))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "DatabaseTests.\(UUID().uuidString)"))
+        defer { defaults.removePersistentDomain(forName: defaults.volatileDomainNames.first ?? "") }
+        AppDatabase.schedulePersistentStoreReset(defaults: defaults)
+
+        XCTAssertThrowsError(try AppDatabase.performPendingPersistentStoreReset(
+            fileManager: FailingResetFileManager(failingPath: pendingBookmarkDirectory.path),
+            applicationSupportURL: root,
+            defaults: defaults
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storeURL.path))
+        XCTAssertTrue(AppDatabase.isPersistentStoreResetScheduled(defaults: defaults))
+
+        XCTAssertTrue(FileManager.default.createFile(atPath: storeURL.path, contents: Data([3])))
+        try FileManager.default.createDirectory(
+            at: bookmarkDirectory,
+            withIntermediateDirectories: true
+        )
+        let replacementBookmark = bookmarkDirectory.appendingPathComponent("new.bookmark")
+        XCTAssertTrue(FileManager.default.createFile(atPath: replacementBookmark.path, contents: Data([4])))
+
+        XCTAssertTrue(try AppDatabase.performPendingPersistentStoreReset(
+            fileManager: .default,
+            applicationSupportURL: root,
+            defaults: defaults
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: storeURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: replacementBookmark.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pendingBookmarkDirectory.path))
+        XCTAssertFalse(AppDatabase.isPersistentStoreResetScheduled(defaults: defaults))
+    }
+
+    func testPendingResetCleanupDisablesPersistentIndexingWrites() {
+        let database = AppDatabase(persistentStoreAvailable: false)
+
+        XCTAssertFalse(database.allowsIndexingWrites)
+        XCTAssertTrue(database.isAvailable)
+        XCTAssertTrue(AppDatabase.isInMemoryFallback)
+    }
+
+    func testPersistentStoreResetDoesNothingUntilScheduled() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storeDirectory = root.appendingPathComponent("Memorable", isDirectory: true)
+        try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storeURL = storeDirectory.appendingPathComponent("photos.sqlite")
+        XCTAssertTrue(FileManager.default.createFile(atPath: storeURL.path, contents: Data([1])))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "DatabaseTests.\(UUID().uuidString)"))
+
+        XCTAssertFalse(try AppDatabase.performPendingPersistentStoreReset(
+            fileManager: .default,
+            applicationSupportURL: root,
+            defaults: defaults
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: storeURL.path))
+    }
 
     override func tearDown() {
         AppDatabase.isInMemoryFallback = false
@@ -971,16 +1148,19 @@ final class DatabaseTests: XCTestCase {
             filePath: "/tmp/folder-cleanup-failure/photo.jpg"
         ))
 
-        XCTAssertThrowsError(try database.deleteSource(sourceID) { _ in
-            throw ForcedFailure.removeDenied
-        }) {
+        XCTAssertThrowsError(try database.deleteSource(
+            sourceID,
+            stageBookmark: { throw ForcedFailure.removeDenied },
+            finalizeBookmark: { XCTFail("Nothing was staged") },
+            restoreBookmark: { XCTFail("Nothing was staged") }
+        )) {
             XCTAssertEqual($0 as? FolderSourceDeletionError, .bookmarkCleanupFailed)
         }
         XCTAssertEqual(try database.listSources().map(\.id), [sourceID])
         XCTAssertTrue(try database.isIndexed(localIdentifier: "folder-photo-cleanup-failure"))
     }
 
-    func testDeleteSourcePropagatesDatabaseFailureAfterRemovingBookmark() throws {
+    func testDeleteSourceDatabaseFailureDoesNotRemoveBookmark() throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("delete-source-\(UUID().uuidString).sqlite")
         defer {
@@ -1006,14 +1186,17 @@ final class DatabaseTests: XCTestCase {
             photoCount: 0
         ))
         try queue.close()
-        var didRemoveBookmark = false
+        var bookmarkIsStaged = false
 
-        XCTAssertThrowsError(try database.deleteSource(sourceID) { _ in
-            didRemoveBookmark = true
-        }) { error in
+        XCTAssertThrowsError(try database.deleteSource(
+            sourceID,
+            stageBookmark: { bookmarkIsStaged = true },
+            finalizeBookmark: { XCTFail("Database deletion did not commit") },
+            restoreBookmark: { bookmarkIsStaged = false }
+        )) { error in
             XCTAssertTrue(error is DatabaseError)
         }
-        XCTAssertTrue(didRemoveBookmark)
+        XCTAssertFalse(bookmarkIsStaged)
 
         let verificationQueue = try DatabaseQueue(path: databaseURL.path)
         let persistedSourceIDs = try verificationQueue.read { db in
@@ -1230,6 +1413,258 @@ final class DatabaseTests: XCTestCase {
         }
     }
 
+    func testFolderSourceRegistrationRejectsCanonicalAncestorAndDescendantOverlap() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let parent = PhotoSource(
+            id: "parent",
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/memorable-family",
+            name: "Parent",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 0
+        )
+        try database.insertSource(parent)
+
+        XCTAssertThrowsError(try database.insertSource(PhotoSource(
+            id: "child",
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/memorable-family/child",
+            name: "Child",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 0
+        ))) {
+            XCTAssertEqual($0 as? PhotoSourceRegistrationError, .overlappingFolder)
+        }
+        XCTAssertThrowsError(try database.insertSource(PhotoSource(
+            id: "ancestor",
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp",
+            name: "Ancestor",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 0
+        ))) {
+            XCTAssertEqual($0 as? PhotoSourceRegistrationError, .overlappingFolder)
+        }
+    }
+
+    func testFolderSourceOverlapUsesPathComponentBoundaries() throws {
+        XCTAssertTrue(PhotoSourcePolicy.pathsOverlap("/tmp/folder", "/tmp/folder/child"))
+        XCTAssertFalse(PhotoSourcePolicy.pathsOverlap("/tmp/folder", "/tmp/folder-2"))
+        XCTAssertFalse(PhotoSourcePolicy.pathsOverlap("/tmp/folder", "/tmp/folderish/child"))
+    }
+
+    func testFolderExistingPathsAreScopedToOwningSource() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let path = "/tmp/shared/photo.jpg"
+        try database.insertPhoto(makePhoto(
+            localIdentifier: "source-a-photo",
+            sourceId: "source-a",
+            filePath: path
+        ))
+
+        XCTAssertEqual(
+            try database.existingFilePaths(in: [path], sourceId: "source-a"),
+            [path]
+        )
+        XCTAssertTrue(try database.existingFilePaths(
+            in: [path],
+            sourceId: "source-b"
+        ).isEmpty)
+    }
+
+    func testCompleteFolderReconciliationRemovesOnlyStaleRowsAndRepairsExactCount() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let sourceID = "reconcile-source"
+        try database.insertSource(PhotoSource(
+            id: sourceID,
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/reconcile",
+            name: "Reconcile",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 99
+        ))
+        let retainedPath = "/tmp/reconcile/keep.jpg"
+        try database.insertPhoto(makePhoto(
+            localIdentifier: "keep",
+            sourceId: sourceID,
+            filePath: retainedPath
+        ))
+        try database.insertPhoto(makePhoto(
+            localIdentifier: "stale",
+            sourceId: sourceID,
+            filePath: "/tmp/reconcile/stale.jpg"
+        ))
+        try database.insertPhoto(makePhoto(
+            localIdentifier: "other-source",
+            sourceId: "other-source",
+            filePath: "/tmp/other/photo.jpg"
+        ))
+
+        let count = try database.reconcileFolderSource(
+            sourceID,
+            scannedFilePaths: [retainedPath],
+            scanWasComplete: true
+        )
+
+        XCTAssertEqual(count, 1)
+        XCTAssertTrue(try database.isIndexed(localIdentifier: "keep"))
+        XCTAssertFalse(try database.isIndexed(localIdentifier: "stale"))
+        XCTAssertTrue(try database.isIndexed(localIdentifier: "other-source"))
+        XCTAssertEqual(try XCTUnwrap(database.listSources().first).photoCount, 1)
+    }
+
+    func testIncompleteFolderReconciliationKeepsRowsAndRepairsExactCount() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let sourceID = "incomplete-source"
+        try database.insertSource(PhotoSource(
+            id: sourceID,
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/incomplete",
+            name: "Incomplete",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 99
+        ))
+        try database.insertPhoto(makePhoto(
+            localIdentifier: "unseen-during-partial-scan",
+            sourceId: sourceID,
+            filePath: "/tmp/incomplete/unseen.jpg"
+        ))
+
+        let count = try database.reconcileFolderSource(
+            sourceID,
+            scannedFilePaths: [],
+            scanWasComplete: false
+        )
+
+        XCTAssertEqual(count, 1)
+        XCTAssertTrue(try database.isIndexed(localIdentifier: "unseen-during-partial-scan"))
+        let source = try XCTUnwrap(database.listSources().first)
+        XCTAssertEqual(source.photoCount, 1)
+        XCTAssertNil(source.lastIndexedAt)
+    }
+
+    func testCancelledFolderReconciliationDoesNotDeleteRows() async throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let sourceID = "cancelled-reconciliation-source"
+        try database.insertSource(PhotoSource(
+            id: sourceID,
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/cancelled-reconciliation",
+            name: "Cancelled reconciliation",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 1
+        ))
+        try database.insertPhoto(makePhoto(
+            localIdentifier: "keep-after-cancellation",
+            sourceId: sourceID,
+            filePath: "/tmp/cancelled-reconciliation/keep.jpg"
+        ))
+
+        let reconciliation = Task {
+            while !Task.isCancelled { await Task.yield() }
+            return try database.reconcileFolderSource(
+                sourceID,
+                scannedFilePaths: [],
+                scanWasComplete: true
+            )
+        }
+        reconciliation.cancel()
+
+        do {
+            _ = try await reconciliation.value
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertTrue(try database.isIndexed(localIdentifier: "keep-after-cancellation"))
+        XCTAssertEqual(try XCTUnwrap(database.listSources().first).photoCount, 1)
+    }
+
+    func testFolderIntegrityMigrationAddsSourcePathIndexAndRepairsCountsWithoutDeletingRows() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v9-search-pagination-indexes")
+        let sourceID = "migration-count-source"
+        let emptySourceID = "migration-empty-source"
+        try queue.write { db in
+            try PhotoSource(
+                id: sourceID,
+                type: PhotoSourceType.folder.rawValue,
+                path: "/tmp/migration-count",
+                name: "Migration count",
+                addedAt: Date(),
+                lastIndexedAt: nil,
+                photoCount: 42
+            ).insert(db)
+            try PhotoSource(
+                id: emptySourceID,
+                type: PhotoSourceType.folder.rawValue,
+                path: "/tmp/migration-empty",
+                name: "Migration empty",
+                addedAt: Date(),
+                lastIndexedAt: Date(),
+                photoCount: 42
+            ).insert(db)
+            try makePhoto(
+                localIdentifier: "migration-count-photo",
+                sourceId: sourceID,
+                filePath: "/tmp/migration-count/photo.jpg"
+            ).insert(db)
+        }
+
+        try AppDatabase.migrator.migrate(queue)
+
+        let result = try queue.read { db -> (Int, Int, Date?, Int, [String]) in
+            let sourceCount = try Int.fetchOne(
+                db,
+                sql: "SELECT photoCount FROM photo_sources WHERE id = ?",
+                arguments: [sourceID]
+            ) ?? -1
+            let emptySource = try Row.fetchOne(
+                db,
+                sql: "SELECT photoCount, lastIndexedAt FROM photo_sources WHERE id = ?",
+                arguments: [emptySourceID]
+            )
+            let emptySourceCount: Int = emptySource?["photoCount"] ?? -1
+            let emptySourceLastIndexedAt: Date? = emptySource?["lastIndexedAt"]
+            let photoCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM indexed_photos") ?? -1
+            let indexes = try Row.fetchAll(db, sql: "PRAGMA index_list(indexed_photos)")
+                .map { $0["name"] as String }
+            return (
+                sourceCount,
+                emptySourceCount,
+                emptySourceLastIndexedAt,
+                photoCount,
+                indexes
+            )
+        }
+        XCTAssertEqual(result.0, 1)
+        XCTAssertEqual(result.1, 0)
+        XCTAssertNil(result.2)
+        XCTAssertEqual(result.3, 1)
+        XCTAssertTrue(result.4.contains("idx_photos_source_file_path"))
+    }
+
     func testListSourcesReturnsGrandfatheredFoldersBeyondCurrentInsertionLimit() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },
@@ -1284,7 +1719,6 @@ final class DatabaseTests: XCTestCase {
             sourceId: sourceID,
             filePath: "/tmp/rebuild-folder/photo.jpg"
         ))
-        try database.updateSourceStats(sourceID, photoCount: 1)
         UserDefaults.standard.set(
             Data([7, 8, 9]),
             forKey: AppKeys.folderBookmark(sourceId: sourceID)

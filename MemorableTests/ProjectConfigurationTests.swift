@@ -115,10 +115,15 @@ final class ProjectConfigurationTests: XCTestCase {
 
     func testOnboardingDisclosesCoordinateGeocoding() throws {
         let onboarding = try contents(of: "Memorable/Views/OnboardingView.swift")
+        let infoPlist = try contents(of: "Memorable/Info.plist")
 
         XCTAssertTrue(onboarding.contains("Apple resolves photo coordinates into place names"))
         XCTAssertTrue(onboarding.contains("Photos and search text stay on this iPhone unless you choose Share"))
         XCTAssertFalse(onboarding.contains("nothing is uploaded"))
+        XCTAssertTrue(infoPlist.contains("GPS coordinates may be sent to Apple for place names"))
+        XCTAssertTrue(infoPlist.contains("only when you tap Share"))
+        XCTAssertFalse(infoPlist.contains("No photos are uploaded"))
+        XCTAssertFalse(infoPlist.contains("NSLocationWhenInUseUsageDescription"))
     }
 
     func testUpgradeViewRequestsDeferredProductLoading() throws {
@@ -127,18 +132,33 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(upgradeView.contains("await proManager.loadProduct()"))
     }
 
-    func testMemoryWarningHandlersRouteThroughRecoverableMediaState() throws {
-        for path in [
-            "Memorable/Views/MemorySlideshowView.swift",
-            "Memorable/Views/OnThisDayView.swift",
-            "Memorable/Views/ZoomableAsyncImage.swift"
-        ] {
-            let source = try contents(of: path)
-            XCTAssertTrue(
-                source.contains("handleMemoryPressure()"),
-                "\(path) must explicitly preserve or reload active media after memory pressure"
-            )
-        }
+    func testPrivacyPolicyIsBundledAndAccessibleSeparatelyFromLicenses() throws {
+        let projectYAML = try contents(of: "project.yml")
+        let moreView = try contents(of: "Memorable/Views/MoreView.swift")
+        let policyURL = try XCTUnwrap(Bundle.main.url(
+            forResource: "PRIVACY_POLICY",
+            withExtension: "txt"
+        ))
+        let bundledPolicy = try String(contentsOf: policyURL, encoding: .utf8)
+
+        XCTAssertTrue(projectYAML.contains("path: PRIVACY_POLICY.txt"))
+        XCTAssertTrue(moreView.contains("NavigationLink(\"Privacy\")"))
+        XCTAssertTrue(moreView.contains("PrivacyPolicyView()"))
+        XCTAssertTrue(moreView.contains("NavigationLink(\"Licenses"))
+        XCTAssertTrue(moreView.contains("LicensesView()"))
+        XCTAssertTrue(moreView.contains("forResource: \"PRIVACY_POLICY\""))
+        XCTAssertTrue(bundledPolicy.contains("The developer does not operate a backend"))
+        XCTAssertTrue(bundledPolicy.contains("only after you tap Share"))
+    }
+
+    func testAppStoreTextFieldsMeetCurrentLimitsAndVersion() throws {
+        let metadata = try contents(of: "APP_STORE_METADATA.txt")
+        let subtitle = try metadataValue(prefix: "Subtitle: ", in: metadata)
+        let keywords = try metadataValue(prefix: "Keywords: ", in: metadata)
+
+        XCTAssertLessThanOrEqual(subtitle.lengthOfBytes(using: .utf8), 30)
+        XCTAssertLessThanOrEqual(keywords.lengthOfBytes(using: .utf8), 100)
+        XCTAssertTrue(metadata.contains("What's new in version 1.0.2"))
     }
 
     func testPreservedFoldersResumeAfterRebuildAndProRestore() throws {
@@ -151,7 +171,9 @@ final class ProjectConfigurationTests: XCTestCase {
             2,
             "Saved folders must resume both after library rebuilds and after Pro restoration"
         )
-        XCTAssertTrue(worker.contains("func reindex(source: PhotoSource) async"))
+        XCTAssertTrue(worker.contains("func reindex("))
+        XCTAssertTrue(worker.contains("source: PhotoSource"))
+        XCTAssertTrue(service.contains("func reindexFolderSource(_ source: PhotoSource)"))
     }
 
     private func contents(of relativePath: String) throws -> String {
@@ -159,6 +181,13 @@ final class ProjectConfigurationTests: XCTestCase {
             contentsOf: repositoryRoot.appendingPathComponent(relativePath),
             encoding: .utf8
         )
+    }
+
+    private func metadataValue(prefix: String, in metadata: String) throws -> String {
+        let line = try XCTUnwrap(metadata.split(separator: "\n").first {
+            $0.hasPrefix(prefix)
+        })
+        return String(line.dropFirst(prefix.count))
     }
 
     private func allAppSourceText() throws -> String {

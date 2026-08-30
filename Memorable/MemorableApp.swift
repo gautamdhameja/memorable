@@ -10,15 +10,48 @@ struct MemorableApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(appState)
-                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
-                    #if DEBUG
-                    logger.warning("[App] Memory warning received, dropping search index")
-                    #endif
-                    appState.handleMemoryWarning()
+            Group {
+                if appState.isDeviceSupported {
+                    ContentView()
+                } else {
+                    UnsupportedDeviceView()
                 }
+            }
+            .environmentObject(appState)
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                #if DEBUG
+                logger.warning("[App] Memory warning received, dropping search index")
+                #endif
+                appState.handleMemoryWarning()
+            }
         }
+    }
+}
+
+private struct UnsupportedDeviceView: View {
+    var body: some View {
+        ZStack {
+            Celestial.Colors.background.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 18) {
+                Spacer()
+                Image(systemName: "iphone.slash")
+                    .font(.system(size: 42, weight: .light))
+                    .foregroundStyle(Celestial.Colors.error)
+                    .accessibilityHidden(true)
+                Text("This iPhone is not supported")
+                    .font(.title.bold())
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text(DeviceCompatibility.unsupportedMessage)
+                    .font(.body)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                Text("The app does not start photo access, indexing, or AI models on this device.")
+                    .font(.subheadline)
+                    .foregroundStyle(Celestial.Colors.outline)
+                Spacer()
+            }
+            .padding(.horizontal, 26)
+        }
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -28,6 +61,7 @@ class AppState: ObservableObject {
     @Published var readiness = AppReadiness()
     @Published var errorMessage: String?
     @Published var loadingStatus: String = "Preparing your experience..."
+    @Published private(set) var isDeviceSupported: Bool
 
     var imageEncoder: ImageEncoder?
     var textEncoder: TextEncoder?
@@ -39,8 +73,26 @@ class AppState: ObservableObject {
     private var isCoreWarmupRunning = false
     private var currentWarmupPriority: SemanticWarmupPriority = .postPaint
     private var captionPreparationTask: Task<Void, Never>?
+    private let requestPhotoAuthorization: () async -> PHAuthorizationStatus
+    private let currentPhotoAuthorization: () -> PHAuthorizationStatus
+    private let deviceSupportProvider: () -> Bool
 
-    init(shareItemCleanup: () -> Void = { PhotoLibrary.cleanupShareItems() }) {
+    init(
+        shareItemCleanup: () -> Void = { PhotoLibrary.cleanupShareItems() },
+        requestPhotoAuthorization: @escaping () async -> PHAuthorizationStatus = {
+            await PhotoLibrary.requestAuthorization()
+        },
+        currentPhotoAuthorization: @escaping () -> PHAuthorizationStatus = {
+            PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        },
+        isDeviceSupported: @escaping () -> Bool = {
+            DeviceCompatibility.isCurrentDeviceSupported
+        }
+    ) {
+        self.requestPhotoAuthorization = requestPhotoAuthorization
+        self.currentPhotoAuthorization = currentPhotoAuthorization
+        self.deviceSupportProvider = isDeviceSupported
+        self.isDeviceSupported = isDeviceSupported()
         shareItemCleanup()
         SurpriseQueryCache.migrateLegacyDefaults()
         semanticRuntime.setWarmupLoader { [weak self] priority in
@@ -52,7 +104,27 @@ class AppState: ObservableObject {
     }
 
     func initialize() async {
+        await initialize(knownAuthorizationStatus: nil)
+    }
+
+    func refreshPhotoAuthorization() async {
+        guard isDeviceSupported else { return }
+        let refreshedStatus = currentPhotoAuthorization()
+        if authorizationStatus != refreshedStatus {
+            authorizationStatus = refreshedStatus
+        }
+        guard PhotoAuthorizationRecoveryPolicy.shouldInitialize(
+            authorizationStatus: refreshedStatus,
+            isShellReady: readiness.isShellReady,
+            isInitializing: isInitializing
+        ) else { return }
+        await initialize(knownAuthorizationStatus: refreshedStatus)
+    }
+
+    private func initialize(knownAuthorizationStatus: PHAuthorizationStatus?) async {
         guard !isInitializing && !readiness.isShellReady else { return }
+        isDeviceSupported = deviceSupportProvider()
+        guard isDeviceSupported else { return }
         isInitializing = true
         defer { isInitializing = false }
         #if DEBUG
@@ -60,7 +132,11 @@ class AppState: ObservableObject {
         logger.info("[AppState] initialize() started")
         #endif
 
-        authorizationStatus = await PhotoLibrary.requestAuthorization()
+        if let knownAuthorizationStatus {
+            authorizationStatus = knownAuthorizationStatus
+        } else {
+            authorizationStatus = await requestPhotoAuthorization()
+        }
 
         #if DEBUG
         logger.info("[AppState] Photo auth status: \(String(describing: self.authorizationStatus))")

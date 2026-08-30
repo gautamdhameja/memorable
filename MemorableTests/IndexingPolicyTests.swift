@@ -4,6 +4,150 @@ import os
 @testable import Memorable
 
 final class IndexingPolicyTests: XCTestCase {
+    func testIncrementalPhotoChangeReconcilerHandlesSameCountReplacement() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.insertPhoto(makeOrphanPolicyPhoto(localIdentifier: "removed-photo"))
+        for index in 0..<9 {
+            try database.insertPhoto(makeOrphanPolicyPhoto(
+                localIdentifier: "retained-photo-\(index)"
+            ))
+        }
+        let event = PhotoLibraryChangeEvent(
+            insertedPhotoIDs: ["new-photo"],
+            removedPhotoIDs: ["removed-photo"]
+        )
+
+        let result = try PhotoLibraryChangeReconciler.reconcile(
+            event,
+            database: database,
+            authorizationStatus: .authorized
+        )
+
+        XCTAssertTrue(result.hasNewMedia)
+        XCTAssertEqual(result.orphanedPhotoIDs, ["removed-photo"])
+        XCTAssertTrue(result.orphanedVideoIDs.isEmpty)
+    }
+
+    func testIncrementalPhotoChangeReconcilerDoesNotDeleteUnderLimitedAccess() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.insertPhoto(makeOrphanPolicyPhoto(localIdentifier: "hidden-photo"))
+
+        let result = try PhotoLibraryChangeReconciler.reconcile(
+            PhotoLibraryChangeEvent(removedPhotoIDs: ["hidden-photo"]),
+            database: database,
+            authorizationStatus: .limited
+        )
+
+        XCTAssertFalse(result.hasNewMedia)
+        XCTAssertTrue(result.orphanedPhotoIDs.isEmpty)
+    }
+
+    func testOrphanCleanupRequiresFullPhotosAuthorization() {
+        XCTAssertTrue(PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(.authorized))
+        XCTAssertFalse(PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(.limited))
+        XCTAssertFalse(PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(.denied))
+        XCTAssertFalse(PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(.restricted))
+        XCTAssertFalse(PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(.notDetermined))
+    }
+
+    func testFolderScanIsIncompleteWhenAnyDiscoveredFileFails() {
+        XCTAssertTrue(FolderScanCompletionPolicy.isComplete(
+            directoryScanWasComplete: true,
+            failedFileCount: 0,
+            successfullyHandledFileCount: 1
+        ))
+        XCTAssertFalse(FolderScanCompletionPolicy.isComplete(
+            directoryScanWasComplete: true,
+            failedFileCount: 1,
+            successfullyHandledFileCount: 0
+        ))
+        XCTAssertTrue(FolderScanCompletionPolicy.isComplete(
+            directoryScanWasComplete: true,
+            failedFileCount: 1,
+            successfullyHandledFileCount: 1
+        ))
+        XCTAssertFalse(FolderScanCompletionPolicy.isComplete(
+            directoryScanWasComplete: false,
+            failedFileCount: 0,
+            successfullyHandledFileCount: 1
+        ))
+    }
+
+    func testFolderWarningOutcomeCompletesRecoveryWithoutMaskingHardFailures() {
+        XCTAssertTrue(FolderIndexingOutcome.completed.didComplete)
+        XCTAssertTrue(FolderIndexingOutcome.completedWithWarnings.didComplete)
+        XCTAssertFalse(FolderIndexingOutcome.failed.didComplete)
+        XCTAssertFalse(FolderIndexingOutcome.cancelled.didComplete)
+    }
+
+    func testPhotoLibraryChangeEventsCoalesceWithoutReintroducingRemovedInserts() {
+        var event = PhotoLibraryChangeEvent(insertedPhotoIDs: ["one", "two"])
+        event.merge(PhotoLibraryChangeEvent(
+            insertedPhotoIDs: ["three"],
+            removedPhotoIDs: ["two"]
+        ))
+
+        XCTAssertEqual(event.insertedPhotoIDs, ["one", "three"])
+        XCTAssertEqual(event.removedPhotoIDs, ["two"])
+    }
+
+    func testPhotoChangeCallbacksCoalesceWhileIndexingAndDrainWhenIdle() {
+        var state = PhotoChangeScanState()
+
+        XCTAssertFalse(state.requestScan(isIndexing: true))
+        XCTAssertTrue(state.hasPendingChange)
+        XCTAssertTrue(state.startPendingScanIfPossible(isIndexing: false))
+        XCTAssertTrue(state.isScanning)
+        XCTAssertFalse(state.hasPendingChange)
+    }
+
+    func testPhotoChangeCallbacksCoalesceDuringScanIntoOneFollowUp() {
+        var state = PhotoChangeScanState()
+
+        XCTAssertTrue(state.requestScan(isIndexing: false))
+        XCTAssertFalse(state.requestScan(isIndexing: false))
+        XCTAssertFalse(state.requestScan(isIndexing: false))
+        XCTAssertTrue(state.hasPendingChange)
+        XCTAssertTrue(state.finishScan(isIndexing: false))
+        XCTAssertFalse(state.hasPendingChange)
+        XCTAssertTrue(state.isScanning)
+        XCTAssertFalse(state.finishScan(isIndexing: false))
+    }
+
+    func testSameCountReplacementReportsNewAndOrphanedPhotoAndVideo() {
+        let result = PhotoLibraryChangeDiff.evaluate(
+            libraryPhotos: ["new-photo"],
+            libraryVideos: ["new-video"],
+            indexedPhotos: ["old-photo"],
+            indexedVideos: ["old-video"],
+            allowsOrphanCleanup: true
+        )
+
+        XCTAssertTrue(result.hasNewMedia)
+        XCTAssertEqual(result.orphanedPhotoIDs, ["old-photo"])
+        XCTAssertEqual(result.orphanedVideoIDs, ["old-video"])
+    }
+
+    func testLimitedPhotoAccessNeverAuthorizesOrphanCleanup() {
+        let result = PhotoLibraryChangeDiff.evaluate(
+            libraryPhotos: ["new-photo"],
+            libraryVideos: [],
+            indexedPhotos: ["old-photo"],
+            indexedVideos: ["old-video"],
+            allowsOrphanCleanup: false
+        )
+
+        XCTAssertTrue(result.hasNewMedia)
+        XCTAssertTrue(result.orphanedPhotoIDs.isEmpty)
+        XCTAssertTrue(result.orphanedVideoIDs.isEmpty)
+    }
+
     func testThermalSafetyCancelsActiveWorkAtSeriousAndCriticalLevels() {
         for thermalState in [ProcessInfo.ThermalState.serious, .critical] {
             let transition = ThermalSafetyPolicy.transition(
@@ -286,7 +430,15 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertTrue(FolderIndexingWorker.shouldPersistFolderWrite(isCancelled: false))
     }
 
-    func testSavedFolderReindexPolicySelectsOnlyPreservedEmptySourcesForPro() {
+    func testFolderPendingBatchIsClearedBeforePersistenceCanFail() {
+        var batch = [1, 2, 3]
+        let pending = FolderPendingBatch.takeAll(&batch)
+
+        XCTAssertEqual(pending, [1, 2, 3])
+        XCTAssertTrue(batch.isEmpty)
+    }
+
+    func testSavedFolderReindexPolicySelectsOnlyUnfinishedFoldersForPro() {
         let empty = PhotoSource(
             id: "empty-folder",
             type: PhotoSourceType.folder.rawValue,
@@ -454,7 +606,7 @@ final class IndexingPolicyTests: XCTestCase {
                     await Task.yield()
                 }
                 observation.markCancellationSeen()
-                return []
+                return FolderScanner.ScanResult(imageURLs: [], isComplete: false)
             }
         }
 

@@ -23,10 +23,8 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
 	</dict>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Memorable uses your photo locations to show place names in search results. Coordinates are resolved to names using Apple&apos;s geocoding service. No photos or search queries are sent.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Memorable needs access to your photos to build a searchable index. Photo and search processing happens on your device. No photos are uploaded.</string>
+	<string>Memorable processes locally available photos and search text on this iPhone. GPS coordinates may be sent to Apple for place names. A selected photo leaves the app only when you tap Share.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

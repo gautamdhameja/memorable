@@ -4,7 +4,14 @@ import Darwin
 import CryptoKit
 
 enum FolderBookmarkStore {
-    static func bookmarkURL(for sourceId: String) throws -> URL {
+    struct DeletionToken: Equatable {
+        let liveURL: URL
+        let pendingURL: URL
+    }
+
+    private static let pendingDeletionSuffix = ".deletion-pending"
+
+    private static func bookmarkDirectoryURL() throws -> URL {
         guard let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -15,6 +22,11 @@ enum FolderBookmarkStore {
             .appendingPathComponent("Memorable", isDirectory: true)
             .appendingPathComponent("FolderBookmarks", isDirectory: true)
         try LocalOnlyStorage.prepareDirectory(at: root)
+        return root
+    }
+
+    static func bookmarkURL(for sourceId: String) throws -> URL {
+        let root = try bookmarkDirectoryURL()
         let digest = SHA256.hash(data: Data(sourceId.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
@@ -23,16 +35,20 @@ enum FolderBookmarkStore {
 
     static func data(for sourceId: String) -> Data? {
         do {
-            try migrateLegacyDataIfNeeded(for: sourceId)
-            let url = try bookmarkURL(for: sourceId)
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                return nil
-            }
-            return try Data(contentsOf: url, options: .mappedIfSafe)
+            return try loadData(for: sourceId)
         } catch {
             logger.error("[FolderBookmarkStore] Read or migration failed: \(error.safeDiagnosticCode)")
             return nil
         }
+    }
+
+    static func loadData(for sourceId: String) throws -> Data? {
+        try migrateLegacyDataIfNeeded(for: sourceId)
+        let url = try bookmarkURL(for: sourceId)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        return try Data(contentsOf: url, options: .mappedIfSafe)
     }
 
     static func migrateLegacyDataIfNeeded(for sourceId: String) throws {
@@ -60,6 +76,84 @@ enum FolderBookmarkStore {
         )
     }
 
+    static func stageDeletion(for sourceId: String) throws -> DeletionToken? {
+        try migrateLegacyDataIfNeeded(for: sourceId)
+        let liveURL = try bookmarkURL(for: sourceId)
+        let pendingURL = URL(fileURLWithPath: liveURL.path + pendingDeletionSuffix)
+        if FileManager.default.fileExists(atPath: pendingURL.path) {
+            return DeletionToken(liveURL: liveURL, pendingURL: pendingURL)
+        }
+        guard FileManager.default.fileExists(atPath: liveURL.path) else { return nil }
+        try FileManager.default.moveItem(at: liveURL, to: pendingURL)
+        return DeletionToken(liveURL: liveURL, pendingURL: pendingURL)
+    }
+
+    static func restoreStagedDeletion(_ token: DeletionToken?) throws {
+        guard let token,
+              FileManager.default.fileExists(atPath: token.pendingURL.path) else { return }
+        if FileManager.default.fileExists(atPath: token.liveURL.path) {
+            try FileManager.default.removeItem(at: token.pendingURL)
+        } else {
+            try FileManager.default.moveItem(at: token.pendingURL, to: token.liveURL)
+        }
+    }
+
+    static func finalizeStagedDeletion(_ token: DeletionToken?) throws {
+        guard let token else { return }
+        do {
+            try FileManager.default.removeItem(at: token.pendingURL)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            // The desired state is already present.
+        }
+    }
+
+    static func recoverStagedDeletionIfNeeded(for sourceId: String) throws {
+        let liveURL = try bookmarkURL(for: sourceId)
+        let pendingURL = URL(fileURLWithPath: liveURL.path + pendingDeletionSuffix)
+        try restoreStagedDeletion(DeletionToken(liveURL: liveURL, pendingURL: pendingURL))
+    }
+
+    static func reconcileStagedDeletions(liveSourceIDs: [String]) -> [String] {
+        var failedSourceIDs: [String] = []
+        var protectedPendingPaths: Set<String> = []
+        for sourceID in liveSourceIDs {
+            do {
+                let liveURL = try bookmarkURL(for: sourceID)
+                protectedPendingPaths.insert(liveURL.path + pendingDeletionSuffix)
+                try recoverStagedDeletionIfNeeded(for: sourceID)
+            } catch {
+                failedSourceIDs.append(sourceID)
+                logger.error("[FolderBookmarkStore] Failed to recover a staged bookmark deletion: \(error.safeDiagnosticCode)")
+            }
+        }
+        do {
+            try cleanupCommittedStagedDeletions(
+                in: bookmarkDirectoryURL(),
+                protectedPendingPaths: protectedPendingPaths
+            )
+        } catch {
+            logger.error("[FolderBookmarkStore] Failed to clean committed staged bookmark deletions: \(error.safeDiagnosticCode)")
+        }
+        return failedSourceIDs
+    }
+
+    static func cleanupCommittedStagedDeletions(
+        in directory: URL,
+        protectedPendingPaths: Set<String>,
+        fileManager: FileManager = .default
+    ) throws {
+        let files = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        for file in files where
+            file.path.hasSuffix(pendingDeletionSuffix)
+                && !protectedPendingPaths.contains(file.path) {
+            try fileManager.removeItem(at: file)
+        }
+    }
+
     static func remove(
         for sourceId: String,
         removeItem: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }
@@ -77,6 +171,11 @@ enum FolderBookmarkStore {
 }
 
 class FolderScanner {
+    struct ScanResult: Sendable, Equatable {
+        let imageURLs: [URL]
+        let isComplete: Bool
+    }
+
     struct ValidatedImageSnapshot: Sendable {
         let data: Data
         let typeIdentifier: String
@@ -390,48 +489,76 @@ class FolderScanner {
         return "folder:\(sourceId):\(relativePath)"
     }
 
-    // Scan a folder and return a bounded, sorted batch of image file URLs.
+    // Scan a folder and report whether every entry was examined. Callers must
+    // only remove stale database rows after a complete traversal.
     static func scanFolder(
         at url: URL,
         maximumImageCount: Int = maximumScannedImages,
         maximumVisitedEntryCount: Int = maximumVisitedEntries
-    ) -> [URL] {
+    ) -> ScanResult {
         let limit = max(0, maximumImageCount)
         let visitLimit = max(0, maximumVisitedEntryCount)
-        guard limit > 0, visitLimit > 0, !Task.isCancelled else { return [] }
+        guard limit > 0, visitLimit > 0, !Task.isCancelled else {
+            return ScanResult(imageURLs: [], isComplete: false)
+        }
         var imageURLs: [URL] = []
         imageURLs.reserveCapacity(min(limit, 1_000))
         var visitedEntryCount = 0
+        var isComplete = true
 
         guard let enumerator = FileManager.default.enumerator(
             at: url,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants],
+            errorHandler: { _, error in
+                isComplete = false
+                logger.error("[FolderScanner] Could not inspect part of a selected folder: \(error.safeDiagnosticCode)")
+                return true
+            }
         ) else {
-            return []
+            return ScanResult(imageURLs: [], isComplete: false)
         }
 
         for case let fileURL as URL in enumerator {
-            guard !Task.isCancelled else { break }
+            guard !Task.isCancelled else {
+                isComplete = false
+                break
+            }
+            guard visitedEntryCount < visitLimit else {
+                isComplete = false
+                break
+            }
             visitedEntryCount += 1
-            guard visitedEntryCount <= visitLimit else { break }
-            let values = try? fileURL.resourceValues(forKeys: [
-                .isRegularFileKey,
-                .isSymbolicLinkKey,
-            ])
+            let values: URLResourceValues
+            do {
+                values = try fileURL.resourceValues(forKeys: [
+                    .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                ])
+            } catch {
+                logger.error("[FolderScanner] Could not read selected-folder attributes: \(error.safeDiagnosticCode)")
+                isComplete = false
+                continue
+            }
             // Skip symlinks and special files before retaining a candidate.
-            if values?.isSymbolicLink == true {
+            if values.isSymbolicLink == true {
                 enumerator.skipDescendants()
                 continue
             }
             let ext = fileURL.pathExtension.lowercased()
-            if values?.isRegularFile == true, supportedExtensions.contains(ext) {
+            if values.isRegularFile == true, supportedExtensions.contains(ext) {
+                guard imageURLs.count < limit else {
+                    isComplete = false
+                    break
+                }
                 imageURLs.append(fileURL)
-                if imageURLs.count == limit { break }
             }
         }
 
-        return imageURLs.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        return ScanResult(
+            imageURLs: imageURLs.sorted { $0.lastPathComponent < $1.lastPathComponent },
+            isComplete: isComplete
+        )
     }
 
     // Load a UIImage from a file URL at the target size for embedding

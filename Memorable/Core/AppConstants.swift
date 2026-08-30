@@ -13,16 +13,33 @@ enum PhotoSourcePolicy {
     static func canonicalPath(_ url: URL) -> String {
         url.standardizedFileURL.resolvingSymlinksInPath().path
     }
+
+    static func pathsOverlap(_ first: String, _ second: String) -> Bool {
+        let first = canonicalPath(URL(fileURLWithPath: first))
+        let second = canonicalPath(URL(fileURLWithPath: second))
+        guard first != second else { return true }
+        return isAncestor(first, of: second) || isAncestor(second, of: first)
+    }
+
+    private static func isAncestor(_ candidate: String, of path: String) -> Bool {
+        if candidate == "/" {
+            return path.hasPrefix("/") && path != "/"
+        }
+        return path.hasPrefix(candidate + "/")
+    }
 }
 
 enum PhotoSourceRegistrationError: LocalizedError, Equatable {
     case duplicateFolder
+    case overlappingFolder
     case sourceLimitReached
 
     var errorDescription: String? {
         switch self {
         case .duplicateFolder:
             return "This folder is already added."
+        case .overlappingFolder:
+            return "Choose a folder that is not inside an added folder and does not contain one."
         case .sourceLimitReached:
             return "You can add up to \(PhotoSourcePolicy.maximumFolderSources) folders."
         }
@@ -45,9 +62,12 @@ enum AppKeys {
     static let startIndexAfterOnboarding = "start_index_after_onboarding"
     static let surpriseValidatedQueries = "memorable_validated_surprise_queries"
     static let surpriseLastValidatedCount = "memorable_surprise_last_validated_count"
+    static let persistentStoreReset = "storage.resetPersistentStoreOnNextLaunch"
+    static let persistentStoreResetStoreDeleted = "storage.resetPersistentStoreFilesDeleted"
+    static let folderBookmarkPrefix = "folder_bookmark_"
 
     static func folderBookmark(sourceId: String) -> String {
-        "folder_bookmark_\(sourceId)"
+        "\(folderBookmarkPrefix)\(sourceId)"
     }
 }
 

@@ -14,6 +14,7 @@ struct SearchView: View {
     @State private var showSaveAlbum = false
     @State private var albumName = ""
     @ObservedObject private var proManager = ProManager.shared
+    @Environment(\.database) private var database
     @Environment(\.scenePhase) private var scenePhase
     @State private var smartAlbums: [SmartAlbum] = []
     @State private var totalLibraryCount: Int = 0
@@ -21,6 +22,8 @@ struct SearchView: View {
     @State private var placeholderTimer: Task<Void, Never>?
     @State private var findSimilarTask: Task<Void, Never>?
     @State private var findSimilarGeneration = 0
+    @State private var showStorageResetConfirm = false
+    @AppStorage(AppKeys.persistentStoreReset) private var storageResetScheduled = false
 
     // Keep the existing persisted key stable. SearchViewModel owns the runtime
     // sort state; this wrapper is the SwiftUI persistence adapter.
@@ -138,17 +141,25 @@ struct SearchView: View {
 
                     // Database warning
                     if AppDatabase.isInMemoryFallback {
-                        HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 10) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(Celestial.Colors.error)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Storage issue")
+                                Text("Indexing is unavailable")
                                     .font(.subheadline.weight(.medium))
                                     .foregroundStyle(Celestial.Colors.onSurface)
-                                Text("Your search index won't be saved between sessions. Free up device storage.")
+                                Text("Memorable could not open its local search database. Free storage, then close and reopen the app.")
                                     .font(.caption)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
+                            }
+                            Button(storageResetScheduled ? "Reset scheduled for next launch" : "Reset local search data") {
+                                showStorageResetConfirm = true
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Celestial.Colors.primaryDim)
+                            .disabled(storageResetScheduled)
                         }
                         .padding(16)
                         .modifier(GlassPanelModifier(cornerRadius: 16))
@@ -249,6 +260,14 @@ struct SearchView: View {
                 Button("Cancel", role: .cancel) { albumName = "" }
             } message: {
                 Text("This album will auto-update when new matching photos are indexed.")
+            }
+            .alert("Reset local search data?", isPresented: $showStorageResetConfirm) {
+                Button("Reset on next launch", role: .destructive) {
+                    AppDatabase.schedulePersistentStoreReset()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Close and reopen Memorable to complete the reset. Apple Photos are not changed. The reset deletes the local search index, search history, saved albums, and folder registrations. Rebuild the index and add folders again afterward.")
             }
             .onAppear {
                 viewModel.setSortMode(rawValue: sortModeRaw)
@@ -547,6 +566,7 @@ struct SearchView: View {
             .padding(.top, 10)
             .frame(maxWidth: .infinity)
             .accessibilityHint("Resumes indexing media that was skipped before the Pro upgrade")
+            .disabled(!database.allowsIndexingWrites)
         }
     }
 
@@ -958,6 +978,7 @@ struct SearchView: View {
                     }
                     .padding(.top, 24)
                     .accessibilityHint("Clears the incompatible search index and rebuilds it on this device")
+                    .disabled(!database.allowsIndexingWrites)
                 } else {
                     Text("Make your library searchable")
                         .font(.title.bold())
@@ -978,6 +999,7 @@ struct SearchView: View {
                     }
                     .padding(.top, 24)
                     .accessibilityHint("Scans your photo library and builds a searchable index")
+                    .disabled(!database.allowsIndexingWrites)
                 }
             }
         }

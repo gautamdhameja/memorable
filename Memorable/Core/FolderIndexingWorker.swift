@@ -49,12 +49,12 @@ enum FolderSourceRegistration {
                     try await Task.detached(priority: .utility) {
                         try removeSource()
                     }.value
-                    shouldRemoveBookmark = true
-                } catch FolderSourceDeletionError.bookmarkCleanupFailed {
-                    // Database rows are already gone; retry only the remaining
-                    // bookmark cleanup below.
+                    // Production source deletion already performs rollback-safe
+                    // bookmark cleanup. The extra idempotent cleanup preserves
+                    // this helper's injected-operation contract in tests.
                     shouldRemoveBookmark = true
                 } catch let rollbackError {
+                    shouldRemoveBookmark = false
                     logger.error("Failed to roll back cancelled folder source registration: \(rollbackError.safeDiagnosticCode)")
                 }
             }
@@ -72,8 +72,8 @@ enum FolderSourceRegistration {
 
 enum FolderScanOperation {
     static func run(
-        operation: @escaping @Sendable () async -> [URL]
-    ) async -> [URL] {
+        operation: @escaping @Sendable () async -> FolderScanner.ScanResult
+    ) async -> FolderScanner.ScanResult {
         let scanTask = Task.detached(priority: .utility) {
             await operation()
         }
@@ -89,6 +89,36 @@ private enum FolderSourceRegistrationError: Error {
     case bookmarkPersistenceFailed
 }
 
+enum FolderIndexingOutcome: Equatable {
+    case completed
+    case completedWithWarnings
+    case failed
+    case cancelled
+
+    var didComplete: Bool {
+        self == .completed || self == .completedWithWarnings
+    }
+}
+
+enum FolderPendingBatch {
+    static func takeAll<Element>(_ batch: inout [Element]) -> [Element] {
+        let pending = batch
+        batch.removeAll(keepingCapacity: true)
+        return pending
+    }
+}
+
+enum FolderScanCompletionPolicy {
+    static func isComplete(
+        directoryScanWasComplete: Bool,
+        failedFileCount: Int,
+        successfullyHandledFileCount: Int
+    ) -> Bool {
+        directoryScanWasComplete
+            && (failedFileCount == 0 || successfullyHandledFileCount > 0)
+    }
+}
+
 @MainActor
 final class FolderIndexingWorker {
     nonisolated static func shouldPersistFolderWrite(isCancelled: Bool) -> Bool {
@@ -98,7 +128,8 @@ final class FolderIndexingWorker {
     struct Callbacks {
         let searchableCount: () -> Int
         let setProgress: (IndexingProgress) -> Void
-        let reloadSearchIndex: () async -> Void
+        let reportError: (String) -> Void
+        let reloadSearchIndex: () async -> Bool
     }
 
     private let imageEncoder: ImageEncoder
@@ -118,37 +149,66 @@ final class FolderIndexingWorker {
         self.callbacks = callbacks
     }
 
-    func index(url: URL, name: String) async {
-        await index(url: url, name: name, existingSource: nil)
+    func index(url: URL, name: String) async -> FolderIndexingOutcome {
+        await index(
+            url: url,
+            name: name,
+            existingSource: nil,
+            reloadSearchIndex: true
+        )
     }
 
-    func reindex(source: PhotoSource) async {
-        guard source.type == PhotoSourceType.folder.rawValue,
-              let url = FolderScanner.resolveBookmark(forSourceId: source.id) else {
-            logger.error("Could not resolve a saved folder bookmark for re-indexing")
-            return
+    func reindex(
+        source: PhotoSource,
+        reloadSearchIndex: Bool = true
+    ) async -> FolderIndexingOutcome {
+        guard source.type == PhotoSourceType.folder.rawValue else {
+            callbacks.reportError("This saved source is not a folder.")
+            logger.error("Refusing to re-index a non-folder source")
+            return .failed
         }
-        await index(url: url, name: source.name, existingSource: source)
+        guard let url = FolderScanner.resolveBookmark(forSourceId: source.id) else {
+            callbacks.reportError("Memorable can no longer access \(source.name). Remove it and add the folder again.")
+            logger.error("Could not resolve a saved folder bookmark for re-indexing")
+            return .failed
+        }
+        return await index(
+            url: url,
+            name: source.name,
+            existingSource: source,
+            reloadSearchIndex: reloadSearchIndex
+        )
     }
 
     private func index(
         url: URL,
         name: String,
-        existingSource: PhotoSource?
-    ) async {
+        existingSource: PhotoSource?,
+        reloadSearchIndex: Bool
+    ) async -> FolderIndexingOutcome {
         let displayName = FolderDisplayNamePolicy.sanitized(name)
         let hasAccess = url.startAccessingSecurityScopedResource()
         guard hasAccess else {
+            callbacks.reportError("Memorable could not access this folder. Choose it again.")
             logger.error("[IndexingService] Could not acquire security-scoped folder access")
-            return
+            return .failed
         }
         defer { url.stopAccessingSecurityScopedResource() }
 
         let db = database
-        let imageURLs = await FolderScanOperation.run {
+        let scan = await FolderScanOperation.run {
             FolderScanner.scanFolder(at: url)
         }
-        guard !Task.isCancelled, !imageURLs.isEmpty else { return }
+        guard !Task.isCancelled else { return .cancelled }
+        let imageURLs = scan.imageURLs
+        guard existingSource != nil || !imageURLs.isEmpty else {
+            callbacks.reportError(
+                scan.isComplete
+                    ? "This folder does not contain supported photos."
+                    : "Memorable could not finish scanning this folder safely. Choose a smaller folder."
+            )
+            return .failed
+        }
 
         let sourceId = existingSource?.id ?? UUID().uuidString
         if existingSource == nil {
@@ -160,8 +220,9 @@ final class FolderIndexingWorker {
                     relativeTo: nil
                 )
             } catch {
+                callbacks.reportError("Memorable could not save access to this folder. Try again.")
                 logger.error("Failed to save folder bookmark: \(error.safeDiagnosticCode)")
-                return
+                return .failed
             }
 
             let source = PhotoSource(
@@ -186,9 +247,14 @@ final class FolderIndexingWorker {
                         try FolderBookmarkStore.remove(for: sourceId)
                     }
                 )
-            } catch {
+            } catch let error as PhotoSourceRegistrationError {
+                callbacks.reportError(error.localizedDescription)
                 logger.error("Failed to create source: \(error.safeDiagnosticCode)")
-                return
+                return .failed
+            } catch {
+                callbacks.reportError("The folder could not be added. Try again.")
+                logger.error("Failed to create source: \(error.safeDiagnosticCode)")
+                return .failed
             }
         }
 
@@ -220,7 +286,7 @@ final class FolderIndexingWorker {
         }
         guard !Task.isCancelled else {
             await rollbackIncompleteSource()
-            return
+            return .cancelled
         }
         var currentProgress = IndexingProgress(
             total: imageURLs.count,
@@ -231,8 +297,8 @@ final class FolderIndexingWorker {
         callbacks.setProgress(currentProgress)
 
         var indexed = 0
-        var persisted = 0
-        var alreadyIndexed = 0
+        var failedFileCount = 0
+        var successfullyHandledFileCount = 0
         var batch: [IndexedPhoto] = []
 
         var existingPaths: Set<String> = []
@@ -247,15 +313,17 @@ final class FolderIndexingWorker {
                 do {
                     let db = database
                     existingPaths = try await Task.detached(priority: .utility) {
-                        try db.existingFilePaths(in: paths)
+                        try db.existingFilePaths(in: paths, sourceId: sourceId)
                     }.value
                 } catch {
+                    callbacks.reportError("Memorable could not read the saved folder index. Try again.")
                     logger.error("Failed to check indexed folder paths: \(error.safeDiagnosticCode)")
-                    return
+                    await rollbackIncompleteSource()
+                    return .failed
                 }
             }
             if existingPaths.contains(imageURL.path) {
-                alreadyIndexed += 1
+                successfullyHandledFileCount += 1
                 indexed += 1
                 currentProgress.completed = indexed
                 callbacks.setProgress(currentProgress)
@@ -267,6 +335,7 @@ final class FolderIndexingWorker {
             }
             guard !Task.isCancelled else { break }
             guard let image = loadedImage else {
+                failedFileCount += 1
                 indexed += 1
                 currentProgress.completed = indexed
                 callbacks.setProgress(currentProgress)
@@ -304,15 +373,24 @@ final class FolderIndexingWorker {
                     sourceId: sourceId,
                     filePath: imageURL.path
                 ))
+                successfullyHandledFileCount += 1
                 if batch.count >= batchSize {
-                    let photosToInsert = batch
-                    try await persist(photosToInsert)
-                    persisted += photosToInsert.count
-                    batch.removeAll(keepingCapacity: true)
+                    let photosToInsert = FolderPendingBatch.takeAll(&batch)
+                    do {
+                        try await persist(photosToInsert)
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        callbacks.reportError("Memorable could not save this folder's search data. Free storage and try again.")
+                        logger.error("Failed to save a bounded folder batch: \(error.safeDiagnosticCode)")
+                        await rollbackIncompleteSource()
+                        return .failed
+                    }
                 }
             } catch is CancellationError {
                 break
             } catch {
+                failedFileCount += 1
                 logger.error("Failed to index a folder image: \(error.safeDiagnosticCode)")
             }
 
@@ -324,57 +402,76 @@ final class FolderIndexingWorker {
 
         guard !Task.isCancelled else {
             await rollbackIncompleteSource()
-            return
+            return .cancelled
         }
         if !batch.isEmpty {
+            let photosToInsert = FolderPendingBatch.takeAll(&batch)
             do {
-                let photosToInsert = batch
                 try await persist(photosToInsert)
-                persisted += photosToInsert.count
             } catch is CancellationError {
                 await rollbackIncompleteSource()
-                return
+                return .cancelled
             } catch {
-                logger.error("Failed to flush folder batch: \(error.safeDiagnosticCode), retrying individually")
-                for photo in batch {
-                    do {
-                        try await persist([photo])
-                        persisted += 1
-                    } catch is CancellationError {
-                        await rollbackIncompleteSource()
-                        return
-                    } catch {
-                        logger.error("Failed to insert a folder photo: \(error.safeDiagnosticCode)")
-                    }
-                }
+                callbacks.reportError("Memorable could not save this folder's search data. Free storage and try again.")
+                logger.error("Failed to flush a bounded folder batch: \(error.safeDiagnosticCode)")
+                await rollbackIncompleteSource()
+                return .failed
             }
         }
 
         guard !Task.isCancelled else {
             await rollbackIncompleteSource()
-            return
+            return .cancelled
         }
-        let totalPersistedForSource = persisted + alreadyIndexed
-        guard totalPersistedForSource > 0 else {
-            await rollbackIncompleteSource()
-            return
-        }
+        let totalPersistedForSource: Int
+        let scanWasComplete = FolderScanCompletionPolicy.isComplete(
+            directoryScanWasComplete: scan.isComplete,
+            failedFileCount: failedFileCount,
+            successfullyHandledFileCount: successfullyHandledFileCount
+        )
         do {
             let db = database
-            try await Task.detached(priority: .utility) {
-                try db.updateSourceStats(sourceId, photoCount: totalPersistedForSource)
-            }.value
+            totalPersistedForSource = try await CancellableDetachedOperation.run {
+                try db.reconcileFolderSource(
+                    sourceId,
+                    scannedFilePaths: Set(imageURLs.map(\.path)),
+                    scanWasComplete: scanWasComplete
+                )
+            }
+            try Task.checkCancellation()
+        } catch is CancellationError {
+            await rollbackIncompleteSource()
+            return .cancelled
         } catch {
-            logger.error("Failed to update source stats: \(error.safeDiagnosticCode)")
+            callbacks.reportError("Memorable could not finish updating this folder. Try again.")
+            logger.error("Failed to reconcile folder source: \(error.safeDiagnosticCode)")
+            await rollbackIncompleteSource()
+            return .failed
+        }
+        guard existingSource != nil || totalPersistedForSource > 0 else {
+            await rollbackIncompleteSource()
+            callbacks.reportError("Memorable could not index any supported photos in this folder.")
+            return .failed
+        }
+
+        guard failedFileCount == 0 else {
+            callbacks.reportError("Memorable skipped \(failedFileCount) unreadable photo(s). You can refresh this folder later.")
+            if reloadSearchIndex {
+                guard await callbacks.reloadSearchIndex() else { return .failed }
+            }
+            return successfullyHandledFileCount > 0 ? .completedWithWarnings : .failed
         }
 
         guard !Task.isCancelled else {
             await rollbackIncompleteSource()
-            return
+            return .cancelled
         }
-        await callbacks.reloadSearchIndex()
-        currentProgress.searchableCount = callbacks.searchableCount()
-        currentProgress.isRunning = false
-        callbacks.setProgress(currentProgress)
+        if reloadSearchIndex {
+            guard await callbacks.reloadSearchIndex() else {
+                callbacks.reportError("Memorable saved the folder but could not refresh search. Try again.")
+                return .failed
+            }
+        }
+        return .completed
     }
 }

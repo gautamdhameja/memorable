@@ -257,7 +257,7 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func insertPhotos(_ photos: [IndexedPhoto], completingRequiredRebuild: Bool) throws -> Bool { false }
     func isIndexed(localIdentifier: String) throws -> Bool { false }
     func allIndexedIdentifiers() throws -> Set<String> { [] }
-    func allIndexedFilePaths() throws -> Set<String> { [] }
+    func existingFilePaths(in filePaths: [String], sourceId: String) throws -> Set<String> { [] }
     func resetIndexedMedia() throws {}
     func deletePhoto(localIdentifier: String) throws {}
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws {}
@@ -288,7 +288,11 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func insertSource(_ source: PhotoSource) throws {}
     func listSources() throws -> [PhotoSource] { [] }
     func deleteSource(_ id: String) throws {}
-    func updateSourceStats(_ id: String, photoCount: Int) throws {}
+    func reconcileFolderSource(
+        _ id: String,
+        scannedFilePaths: Set<String>,
+        scanWasComplete: Bool
+    ) throws -> Int { 0 }
     func onThisDayPhotos() throws -> [(year: Int, photos: [IndexedPhotoReference])] { [] }
     func addSearchHistory(_ query: String) throws {}
     func loadSearchHistory() throws -> [String] { [] }

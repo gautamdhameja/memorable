@@ -407,8 +407,7 @@ protocol DatabaseProtocol: Sendable {
     func existingPhotoIdentifiers(in localIdentifiers: [String]) throws -> Set<String>
     func allIndexedIdentifiers() throws -> Set<String>
     func loadIndexedPhotoIdentifierPage(after: String?, limit: Int) throws -> [String]
-    func allIndexedFilePaths() throws -> Set<String>
-    func existingFilePaths(in filePaths: [String]) throws -> Set<String>
+    func existingFilePaths(in filePaths: [String], sourceId: String) throws -> Set<String>
     func indexedCount() throws -> Int
     func hasIndexedPhotos() throws -> Bool
     func indexedMediaCounts() throws -> IndexedMediaCounts
@@ -471,7 +470,14 @@ protocol DatabaseProtocol: Sendable {
     func insertSource(_ source: PhotoSource) throws
     func listSources() throws -> [PhotoSource]
     func deleteSource(_ id: String) throws
-    func updateSourceStats(_ id: String, photoCount: Int) throws
+    /// Removes source-owned rows missing from a complete scan and always
+    /// repairs the persisted count from the rows that remain.
+    @discardableResult
+    func reconcileFolderSource(
+        _ id: String,
+        scannedFilePaths: Set<String>,
+        scanWasComplete: Bool
+    ) throws -> Int
 
     // Queries
     func onThisDayPhotos() throws -> [(year: Int, photos: [IndexedPhotoReference])]
@@ -495,11 +501,14 @@ struct FreeTierReconciliationResult: Equatable, Sendable {
 
 enum FolderSourceDeletionError: LocalizedError, Equatable {
     case bookmarkCleanupFailed
+    case bookmarkRestorationFailed
 
     var errorDescription: String? {
         switch self {
         case .bookmarkCleanupFailed:
             return "The folder could not be removed because its saved access could not be cleaned up."
+        case .bookmarkRestorationFailed:
+            return "The folder could not be removed because its saved access could not be restored safely."
         }
     }
 }
@@ -531,11 +540,6 @@ extension DatabaseProtocol {
             result.insert(identifier)
         }
         return result
-    }
-
-    func existingFilePaths(in filePaths: [String]) throws -> Set<String> {
-        let existing = try allIndexedFilePaths()
-        return Set(filePaths).intersection(existing)
     }
 
     func loadIndexedPhotoIdentifierPage(after: String?, limit: Int) throws -> [String] {
@@ -618,7 +622,18 @@ extension DatabaseProtocol {
 // MARK: - AppDatabase
 
 final class AppDatabase: DatabaseProtocol, Sendable {
-    static let shared = AppDatabase()
+    static let shared: AppDatabase = {
+        var persistentStoreAvailable = true
+        do {
+            if try performPendingPersistentStoreReset() {
+                logger.info("Scheduled local search store reset completed")
+            }
+        } catch {
+            persistentStoreAvailable = false
+            logger.error("Scheduled local search store reset failed: \(error.safeDiagnosticCode)")
+        }
+        return AppDatabase(persistentStoreAvailable: persistentStoreAvailable)
+    }()
     private static let fallbackState = OSAllocatedUnfairLock(initialState: false)
     static var isInMemoryFallback: Bool {
         get { fallbackState.withLock { $0 } }
@@ -647,12 +662,19 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     var allowsIndexingWrites: Bool { storageMode == .persistent }
     var isAvailable: Bool { storageMode != .unavailable }
 
-    private init() {
+    init(persistentStoreAvailable: Bool) {
+        let openQueue: () throws -> DatabaseQueue
+        if persistentStoreAvailable {
+            openQueue = Self.openOnDiskDatabase
+        } else {
+            openQueue = { throw DatabaseInitError.pendingResetCleanup }
+        }
         let result = Self.openMigratedDatabase(
-            openQueue: Self.openOnDiskDatabase,
+            openQueue: openQueue,
             migrate: { try Self.migrator.migrate($0) },
             fallbackMigrate: { try Self.migrator.migrate($0) },
-            migrateLegacyBookmark: FolderBookmarkStore.migrateLegacyDataIfNeeded
+            migrateLegacyBookmark: FolderBookmarkStore.migrateLegacyDataIfNeeded,
+            recoverPendingBookmarkDeletions: FolderBookmarkStore.reconcileStagedDeletions
         )
         dbQueue = RecoverableDatabaseQueue(result.queue)
         storageMode = result.mode
@@ -667,7 +689,8 @@ final class AppDatabase: DatabaseProtocol, Sendable {
             openQueue: openQueue,
             migrate: migrate,
             fallbackMigrate: migrate,
-            migrateLegacyBookmark: migrateLegacyBookmark
+            migrateLegacyBookmark: migrateLegacyBookmark,
+            recoverPendingBookmarkDeletions: { _ in [] }
         )
         dbQueue = RecoverableDatabaseQueue(result.queue)
         storageMode = result.mode
@@ -682,7 +705,8 @@ final class AppDatabase: DatabaseProtocol, Sendable {
             openQueue: openQueue,
             migrate: migrate,
             fallbackMigrate: fallbackMigrate,
-            migrateLegacyBookmark: FolderBookmarkStore.migrateLegacyDataIfNeeded
+            migrateLegacyBookmark: FolderBookmarkStore.migrateLegacyDataIfNeeded,
+            recoverPendingBookmarkDeletions: { _ in [] }
         )
         if let error = result.error { throw error }
         dbQueue = RecoverableDatabaseQueue(result.queue)
@@ -693,7 +717,8 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         openQueue: () throws -> DatabaseQueue,
         migrate: (DatabaseQueue) throws -> Void,
         fallbackMigrate: (DatabaseQueue) throws -> Void,
-        migrateLegacyBookmark: (String) throws -> Void
+        migrateLegacyBookmark: (String) throws -> Void,
+        recoverPendingBookmarkDeletions: ([String]) -> [String]
     ) -> OpenResult {
         Self.isInMemoryFallback = false
         do {
@@ -706,7 +731,11 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                 in: queue,
                 orientationMigrationWasAlreadyApplied: orientationMigrationWasAlreadyApplied
             )
-            _ = migrateLegacyFolderBookmarks(in: queue, migrate: migrateLegacyBookmark)
+            _ = migrateLegacyFolderBookmarks(
+                in: queue,
+                migrate: migrateLegacyBookmark,
+                recoverPendingDeletions: recoverPendingBookmarkDeletions
+            )
             #if DEBUG
             logger.info("[Database] Migrations completed successfully")
             #endif
@@ -742,10 +771,10 @@ final class AppDatabase: DatabaseProtocol, Sendable {
             throw DatabaseInitError.applicationSupportUnavailable
         }
 
-        let dbDir = appSupport.appendingPathComponent("Memorable", isDirectory: true)
+        let dbURL = persistentStoreURL(applicationSupportURL: appSupport)
+        let dbDir = dbURL.deletingLastPathComponent()
         try LocalOnlyStorage.prepareDirectory(at: dbDir)
 
-        let dbURL = dbDir.appendingPathComponent("photos.sqlite")
         let dbPath = dbURL.path
 
         let config = Configuration()
@@ -755,9 +784,97 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         return queue
     }
 
+    static func schedulePersistentStoreReset(defaults: UserDefaults = .standard) {
+        if !isPersistentStoreResetScheduled(defaults: defaults) {
+            defaults.removeObject(forKey: AppKeys.persistentStoreResetStoreDeleted)
+        }
+        defaults.set(true, forKey: AppKeys.persistentStoreReset)
+    }
+
+    static func isPersistentStoreResetScheduled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: AppKeys.persistentStoreReset)
+    }
+
+    /// Deletes the SQLite search store, its sidecars, and folder-access
+    /// bookmarks whose source registrations live in that store. The operation
+    /// runs before `shared` opens the store on the next app launch. The pending
+    /// marker is retained if any deletion fails so the app can try again later.
+    /// Once the old SQLite files are gone, a separate phase marker prevents a
+    /// retry from deleting a replacement store created after partial cleanup.
+    @discardableResult
+    static func performPendingPersistentStoreReset(
+        fileManager: FileManager = .default,
+        applicationSupportURL: URL? = nil,
+        defaults: UserDefaults = .standard
+    ) throws -> Bool {
+        guard isPersistentStoreResetScheduled(defaults: defaults) else { return false }
+        let supportURL: URL
+        if let applicationSupportURL {
+            supportURL = applicationSupportURL
+        } else {
+            guard let discoveredURL = fileManager.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first else {
+                throw DatabaseInitError.applicationSupportUnavailable
+            }
+            supportURL = discoveredURL
+        }
+
+        let bookmarkDirectory = supportURL
+            .appendingPathComponent("Memorable", isDirectory: true)
+            .appendingPathComponent("FolderBookmarks", isDirectory: true)
+        let pendingBookmarkDirectory = bookmarkDirectory
+            .deletingLastPathComponent()
+            .appendingPathComponent("FolderBookmarks.reset-pending", isDirectory: true)
+        let storeFilesAlreadyDeleted = defaults.bool(
+            forKey: AppKeys.persistentStoreResetStoreDeleted
+        )
+
+        if !storeFilesAlreadyDeleted {
+            if fileManager.fileExists(atPath: bookmarkDirectory.path),
+               !fileManager.fileExists(atPath: pendingBookmarkDirectory.path) {
+                try fileManager.moveItem(
+                    at: bookmarkDirectory,
+                    to: pendingBookmarkDirectory
+                )
+            }
+            for key in defaults.dictionaryRepresentation().keys where
+                key.hasPrefix(AppKeys.folderBookmarkPrefix) {
+                defaults.removeObject(forKey: key)
+            }
+
+            let storeURL = persistentStoreURL(applicationSupportURL: supportURL)
+            for path in [storeURL.path, storeURL.path + "-wal", storeURL.path + "-shm"] {
+                do {
+                    try fileManager.removeItem(at: URL(fileURLWithPath: path))
+                } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                    continue
+                }
+            }
+            defaults.set(true, forKey: AppKeys.persistentStoreResetStoreDeleted)
+        }
+
+        do {
+            try fileManager.removeItem(at: pendingBookmarkDirectory)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            // The desired state is already present.
+        }
+        defaults.removeObject(forKey: AppKeys.persistentStoreResetStoreDeleted)
+        defaults.removeObject(forKey: AppKeys.persistentStoreReset)
+        return true
+    }
+
+    private static func persistentStoreURL(applicationSupportURL: URL) -> URL {
+        applicationSupportURL
+            .appendingPathComponent("Memorable", isDirectory: true)
+            .appendingPathComponent("photos.sqlite", isDirectory: false)
+    }
+
     static func migrateLegacyFolderBookmarks(
         in queue: DatabaseQueue,
-        migrate: (String) throws -> Void = FolderBookmarkStore.migrateLegacyDataIfNeeded
+        migrate: (String) throws -> Void = FolderBookmarkStore.migrateLegacyDataIfNeeded,
+        recoverPendingDeletions: ([String]) -> [String] = { _ in [] }
     ) -> [String] {
         let sourceIDs: [String]
         do {
@@ -774,7 +891,7 @@ final class AppDatabase: DatabaseProtocol, Sendable {
             return []
         }
 
-        var failedSourceIDs: [String] = []
+        var failedSourceIDs = recoverPendingDeletions(sourceIDs)
         for sourceID in sourceIDs {
             do {
                 try migrate(sourceID)
@@ -879,9 +996,15 @@ final class AppDatabase: DatabaseProtocol, Sendable {
 
     private enum DatabaseInitError: LocalizedError {
         case applicationSupportUnavailable
+        case pendingResetCleanup
 
         var errorDescription: String? {
-            "Application Support directory not found"
+            switch self {
+            case .applicationSupportUnavailable:
+                return "Application Support directory not found"
+            case .pendingResetCleanup:
+                return "Persistent store reset cleanup is still pending"
+            }
         }
     }
 
@@ -1065,6 +1188,30 @@ final class AppDatabase: DatabaseProtocol, Sendable {
             )
         }
 
+        // Speed source-scoped folder ownership checks and repair source counts
+        // without deleting any existing user-derived index rows.
+        migrator.registerMigration("v10-folder-source-integrity") { db in
+            try db.execute(
+                sql: """
+                    CREATE INDEX idx_photos_source_file_path
+                    ON indexed_photos(sourceId, filePath)
+                    WHERE filePath IS NOT NULL;
+                    UPDATE photo_sources
+                    SET photoCount = (
+                        SELECT COUNT(*) FROM indexed_photos
+                        WHERE indexed_photos.sourceId = photo_sources.id
+                    ),
+                    lastIndexedAt = CASE
+                        WHEN (
+                            SELECT COUNT(*) FROM indexed_photos
+                            WHERE indexed_photos.sourceId = photo_sources.id
+                        ) = 0 THEN NULL
+                        ELSE lastIndexedAt
+                    END;
+                """
+            )
+        }
+
         return migrator
     }
 
@@ -1199,23 +1346,25 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         }
     }
 
-    func allIndexedFilePaths() throws -> Set<String> {
+    func existingFilePaths(in filePaths: [String], sourceId: String) throws -> Set<String> {
+        guard !filePaths.isEmpty else { return [] }
+        var matches: Set<String> = []
         try dbQueue.read { db in
-            try Self.loadIdentifierSet(
-                db,
-                sql: """
-                    SELECT filePath FROM indexed_photos
-                    WHERE filePath IS NOT NULL
-                    ORDER BY creationDate DESC, id ASC
-                    LIMIT ?
-                """,
-                limit: SearchIndexLimits.maximumPhotoRows
-            )
+            for chunk in filePaths.chunked(into: 899) {
+                try Task.checkCancellation()
+                let placeholders = chunk.map { _ in "?" }.joined(separator: ",")
+                let rows = try String.fetchAll(
+                    db,
+                    sql: """
+                        SELECT filePath FROM indexed_photos
+                        WHERE sourceId = ? AND filePath IN (\(placeholders))
+                    """,
+                    arguments: StatementArguments([sourceId] + chunk)
+                )
+                matches.formUnion(rows)
+            }
         }
-    }
-
-    func existingFilePaths(in filePaths: [String]) throws -> Set<String> {
-        try existingStrings(filePaths, table: "indexed_photos", column: "filePath")
+        return matches
     }
 
     private func existingStrings(
@@ -2008,6 +2157,21 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                         URL(fileURLWithPath: path)
                     )
                 }
+                if let path = source.path {
+                    let registeredPaths = try String.fetchAll(
+                        db,
+                        sql: "SELECT path FROM photo_sources WHERE type = ? AND path IS NOT NULL",
+                        arguments: [PhotoSourceType.folder.rawValue]
+                    )
+                    guard !registeredPaths.contains(path) else {
+                        throw PhotoSourceRegistrationError.duplicateFolder
+                    }
+                    guard !registeredPaths.contains(where: {
+                        PhotoSourcePolicy.pathsOverlap($0, path)
+                    }) else {
+                        throw PhotoSourceRegistrationError.overlappingFolder
+                    }
+                }
                 let folderCount = try Int.fetchOne(
                     db,
                     sql: "SELECT COUNT(*) FROM photo_sources WHERE type = ?",
@@ -2015,16 +2179,6 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                 ) ?? 0
                 guard folderCount < PhotoSourcePolicy.maximumFolderSources else {
                     throw PhotoSourceRegistrationError.sourceLimitReached
-                }
-                if let path = source.path {
-                    let duplicateCount = try Int.fetchOne(
-                        db,
-                        sql: "SELECT COUNT(*) FROM photo_sources WHERE type = ? AND path = ?",
-                        arguments: [PhotoSourceType.folder.rawValue, path]
-                    ) ?? 0
-                    guard duplicateCount == 0 else {
-                        throw PhotoSourceRegistrationError.duplicateFolder
-                    }
                 }
             }
             try source.insert(db)
@@ -2040,33 +2194,102 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     }
 
     func deleteSource(_ id: String) throws {
-        try deleteSource(id) { sourceID in
-            try FolderBookmarkStore.remove(for: sourceID)
-        }
+        var deletionToken: FolderBookmarkStore.DeletionToken?
+        try deleteSource(
+            id,
+            stageBookmark: {
+                deletionToken = try FolderBookmarkStore.stageDeletion(for: id)
+            },
+            finalizeBookmark: {
+                try FolderBookmarkStore.finalizeStagedDeletion(deletionToken)
+            },
+            restoreBookmark: {
+                try FolderBookmarkStore.restoreStagedDeletion(deletionToken)
+            }
+        )
     }
 
     func deleteSource(
         _ id: String,
-        removeBookmark: (String) throws -> Void
+        stageBookmark: () throws -> Void,
+        finalizeBookmark: () throws -> Void,
+        restoreBookmark: () throws -> Void
     ) throws {
         do {
-            try removeBookmark(id)
+            try stageBookmark()
         } catch {
-            logger.error("Failed to clean up a folder bookmark before deletion: \(error.safeDiagnosticCode)")
+            logger.error("Failed to stage a folder bookmark for deletion: \(error.safeDiagnosticCode)")
             throw FolderSourceDeletionError.bookmarkCleanupFailed
         }
-        try dbQueue.write { db in
-            _ = try IndexedPhoto.filter(Column("sourceId") == id).deleteAll(db)
-            _ = try PhotoSource.filter(Column("id") == id).deleteAll(db)
+
+        do {
+            try dbQueue.write { db in
+                _ = try IndexedPhoto.filter(Column("sourceId") == id).deleteAll(db)
+                _ = try PhotoSource.filter(Column("id") == id).deleteAll(db)
+            }
+        } catch {
+            do {
+                try restoreBookmark()
+            } catch {
+                logger.error("Failed to restore a staged folder bookmark after database deletion failed: \(error.safeDiagnosticCode)")
+                throw FolderSourceDeletionError.bookmarkRestorationFailed
+            }
+            logger.error("Folder source database deletion rolled back: \(error.safeDiagnosticCode)")
+            throw error
+        }
+
+        do {
+            try finalizeBookmark()
+        } catch {
+            // The source is committed as deleted. A leftover staged file has no
+            // live access path and can be removed by a later local cleanup.
+            logger.error("Failed to finalize a staged folder bookmark deletion: \(error.safeDiagnosticCode)")
         }
     }
 
-    func updateSourceStats(_ id: String, photoCount: Int) throws {
-        try dbQueue.write { db in
+    @discardableResult
+    func reconcileFolderSource(
+        _ id: String,
+        scannedFilePaths: Set<String>,
+        scanWasComplete: Bool
+    ) throws -> Int {
+        try requireIndexingWrites()
+        return try dbQueue.write { db in
+            try Task.checkCancellation()
+            if scanWasComplete {
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: "SELECT id, filePath FROM indexed_photos WHERE sourceId = ?",
+                    arguments: [id]
+                )
+                let staleIDs = rows.compactMap { row -> String? in
+                    let filePath: String? = row["filePath"]
+                    guard let filePath, scannedFilePaths.contains(filePath) else {
+                        return row["id"]
+                    }
+                    return nil
+                }
+                for chunk in staleIDs.chunked(into: 900) {
+                    try Task.checkCancellation()
+                    let placeholders = chunk.map { _ in "?" }.joined(separator: ",")
+                    try db.execute(
+                        sql: "DELETE FROM indexed_photos WHERE id IN (\(placeholders))",
+                        arguments: StatementArguments(chunk)
+                    )
+                }
+            }
+            let count = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM indexed_photos WHERE sourceId = ?",
+                arguments: [id]
+            ) ?? 0
+            let lastIndexedAt: Date? = scanWasComplete ? Date() : nil
             try db.execute(
                 sql: "UPDATE photo_sources SET photoCount = ?, lastIndexedAt = ? WHERE id = ?",
-                arguments: [photoCount, Date(), id]
+                arguments: [count, lastIndexedAt, id]
             )
+            try Task.checkCancellation()
+            return count
         }
     }
 

@@ -1,8 +1,47 @@
 import XCTest
 import AVKit
+import os
 @testable import Memorable
 
 final class SharedUtilitiesTests: XCTestCase {
+    func testStagedBookmarkDeletionRecoversAfterInterruptedDatabaseCommit() throws {
+        let sourceID = "staged-deletion-\(UUID().uuidString)"
+        let bookmark = Data([7, 4, 1])
+        defer { try? FolderBookmarkStore.remove(for: sourceID) }
+        try FolderBookmarkStore.set(bookmark, for: sourceID)
+
+        let token = try XCTUnwrap(FolderBookmarkStore.stageDeletion(for: sourceID))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: token.liveURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: token.pendingURL.path))
+
+        try FolderBookmarkStore.recoverStagedDeletionIfNeeded(for: sourceID)
+
+        XCTAssertEqual(FolderBookmarkStore.data(for: sourceID), bookmark)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: token.pendingURL.path))
+    }
+
+    func testCommittedStagedBookmarkDeletionIsRemovedOnRecoverySweep() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let committed = directory.appendingPathComponent("removed.bookmark.deletion-pending")
+        let protected = directory.appendingPathComponent("live.bookmark.deletion-pending")
+        let ordinary = directory.appendingPathComponent("keep.bookmark")
+        for file in [committed, protected, ordinary] {
+            XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data([1])))
+        }
+
+        try FolderBookmarkStore.cleanupCommittedStagedDeletions(
+            in: directory,
+            protectedPendingPaths: [protected.path]
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: committed.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: protected.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: ordinary.path))
+    }
+
     func testLocalOnlyDirectoryIsExcludedFromBackup() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -95,6 +134,66 @@ final class SharedUtilitiesTests: XCTestCase {
             startedGeneration: 2,
             currentGeneration: 2,
             isCancelled: false
+        ))
+    }
+
+    @MainActor
+    func testSlideshowSelectionRetriesRepeatedRowsUntilItFindsAlternative() async {
+        let candidates = OSAllocatedUnfairLock(initialState: ["shown", "shown", "alternative"])
+        let attempts = OSAllocatedUnfairLock(initialState: 0)
+
+        let selection = await SlideshowSelectionPolicy.next(
+            recentIDs: ["shown"],
+            historyLimit: 50,
+            maxAttempts: 5,
+            fetch: {
+                attempts.withLock { $0 += 1 }
+                return candidates.withLock { values in
+                    values.isEmpty ? nil : values.removeFirst()
+                }
+            },
+            identifier: { $0 }
+        )
+
+        XCTAssertEqual(selection?.item, "alternative")
+        XCTAssertEqual(selection?.recentIDs, ["shown", "alternative"])
+        XCTAssertEqual(attempts.withLock { $0 }, 3)
+    }
+
+    @MainActor
+    func testSlideshowSelectionBoundsRetriesWhenDatabaseRepeatsOnlyRow() async {
+        let attempts = OSAllocatedUnfairLock(initialState: 0)
+
+        let selection = await SlideshowSelectionPolicy.next(
+            recentIDs: ["only"],
+            historyLimit: 50,
+            maxAttempts: 4,
+            fetch: {
+                attempts.withLock { $0 += 1 }
+                return "only"
+            },
+            identifier: { $0 }
+        )
+
+        XCTAssertEqual(selection?.item, "only")
+        XCTAssertEqual(selection?.recentIDs, ["only"])
+        XCTAssertEqual(attempts.withLock { $0 }, 4)
+    }
+
+    func testMemoryPressureGenerationInvalidatesEveryInFlightCompletion() {
+        let completedBeforeWarning = [1, 2, 3].filter {
+            ImageLoadGenerationPolicy.acceptsCompletion(
+                startedGeneration: UInt($0),
+                currentGeneration: 4,
+                isCancelled: false
+            )
+        }
+
+        XCTAssertTrue(completedBeforeWarning.isEmpty)
+        XCTAssertFalse(ImageLoadGenerationPolicy.acceptsCompletion(
+            startedGeneration: 4,
+            currentGeneration: 4,
+            isCancelled: true
         ))
     }
 

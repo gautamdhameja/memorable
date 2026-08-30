@@ -33,6 +33,21 @@ final class PhotoChangeObserverTests: XCTestCase {
         XCTAssertEqual(registrar.registrationCount, 1)
         XCTAssertEqual(registrar.unregistrationCount, 1)
     }
+
+    @MainActor
+    func testQueuedDeliveryDoesNotRunAfterStop() async {
+        let registrar = RecordingPhotoChangeRegistrar()
+        let observer = PhotoChangeObserver(registrar: registrar)
+        let callback = expectation(description: "stopped callback")
+        callback.isInverted = true
+
+        observer.startObserving()
+        observer.onPhotoLibraryChange = { _ in callback.fulfill() }
+        observer.enqueueDelivery(PhotoLibraryChangeEvent(insertedPhotoIDs: ["new-photo"]))
+        observer.stopObserving()
+
+        await fulfillment(of: [callback], timeout: 0.1)
+    }
 }
 
 private final class RecordingPhotoChangeRegistrar: PhotoChangeObservationRegistrar {

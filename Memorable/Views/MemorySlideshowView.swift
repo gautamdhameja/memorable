@@ -219,14 +219,18 @@ struct MemorySlideshowView: View {
 
     private func getRandomSharpPhoto() async -> SlideshowPhoto? {
         let database = database
-        guard let photo = try? await CancellableDetachedOperation.run({
-            try database.fetchRandomPhoto(sharp: true)
-        }) else { return nil }
-        if shownIds.contains(photo.id) {
-            shownIds.removeAll(keepingCapacity: true)
-        }
-        shownIds.insert(photo.id)
-        if shownIds.count > 100 { shownIds.removeAll(keepingCapacity: true) }
-        return photo
+        let selection = await SlideshowSelectionPolicy.next(
+            recentIDs: shownIds,
+            historyLimit: 100,
+            fetch: {
+                try? await CancellableDetachedOperation.run {
+                    try database.fetchRandomPhoto(sharp: true)
+                }
+            },
+            identifier: \.id
+        )
+        guard let selection else { return nil }
+        shownIds = selection.recentIDs
+        return selection.item
     }
 }

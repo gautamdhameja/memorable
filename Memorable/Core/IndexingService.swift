@@ -6,10 +6,226 @@ import Combine
 
 private let hitFreeLimitKey = "indexing.hitFreeLimit"
 
-private enum PhotoLibraryChangeScanResult: Sendable {
-    case none
-    case newPhotos
-    case orphanedPhotos(Set<String>)
+struct PhotoLibraryChangeDiff: Equatable, Sendable {
+    var hasNewMedia: Bool
+    var orphanedPhotoIDs: Set<String>
+    var orphanedVideoIDs: Set<String>
+
+    static func evaluate(
+        libraryPhotos: Set<String>,
+        libraryVideos: Set<String>,
+        indexedPhotos: Set<String>,
+        indexedVideos: Set<String>,
+        allowsOrphanCleanup: Bool
+    ) -> PhotoLibraryChangeDiff {
+        PhotoLibraryChangeDiff(
+            hasNewMedia: !libraryPhotos.subtracting(indexedPhotos).isEmpty
+                || !libraryVideos.subtracting(indexedVideos).isEmpty,
+            orphanedPhotoIDs: allowsOrphanCleanup
+                ? indexedPhotos.subtracting(libraryPhotos)
+                : [],
+            orphanedVideoIDs: allowsOrphanCleanup
+                ? indexedVideos.subtracting(libraryVideos)
+                : []
+        )
+    }
+}
+
+struct PhotoLibraryChangeEvent: Equatable, Sendable {
+    var insertedPhotoIDs: Set<String> = []
+    var insertedVideoIDs: Set<String> = []
+    var removedPhotoIDs: Set<String> = []
+    var removedVideoIDs: Set<String> = []
+    var requiresFullReconciliation = false
+
+    static let fullReconciliation = PhotoLibraryChangeEvent(
+        requiresFullReconciliation: true
+    )
+
+    var hasWork: Bool {
+        requiresFullReconciliation
+            || !insertedPhotoIDs.isEmpty
+            || !insertedVideoIDs.isEmpty
+            || !removedPhotoIDs.isEmpty
+            || !removedVideoIDs.isEmpty
+    }
+
+    mutating func merge(_ other: PhotoLibraryChangeEvent) {
+        requiresFullReconciliation = requiresFullReconciliation
+            || other.requiresFullReconciliation
+        for id in other.insertedPhotoIDs {
+            removedPhotoIDs.remove(id)
+            insertedPhotoIDs.insert(id)
+        }
+        for id in other.insertedVideoIDs {
+            removedVideoIDs.remove(id)
+            insertedVideoIDs.insert(id)
+        }
+        for id in other.removedPhotoIDs {
+            insertedPhotoIDs.remove(id)
+            removedPhotoIDs.insert(id)
+        }
+        for id in other.removedVideoIDs {
+            insertedVideoIDs.remove(id)
+            removedVideoIDs.insert(id)
+        }
+    }
+}
+
+struct PhotoChangeScanState: Equatable {
+    private(set) var hasPendingChange = false
+    private(set) var isScanning = false
+
+    mutating func requestScan(isIndexing: Bool) -> Bool {
+        hasPendingChange = true
+        return startPendingScanIfPossible(isIndexing: isIndexing)
+    }
+
+    mutating func startPendingScanIfPossible(isIndexing: Bool) -> Bool {
+        guard hasPendingChange, !isIndexing, !isScanning else { return false }
+        hasPendingChange = false
+        isScanning = true
+        return true
+    }
+
+    mutating func finishScan(isIndexing: Bool) -> Bool {
+        isScanning = false
+        return startPendingScanIfPossible(isIndexing: isIndexing)
+    }
+
+    mutating func cancel() {
+        hasPendingChange = false
+        isScanning = false
+    }
+}
+
+enum PhotoLibraryOrphanCleanupAuthorizationPolicy {
+    static func allowsCleanup(_ status: PHAuthorizationStatus) -> Bool {
+        status == .authorized
+    }
+}
+
+enum PhotoLibraryChangeReconciler {
+    static func reconcile(
+        _ event: PhotoLibraryChangeEvent,
+        database: DatabaseProtocol,
+        authorizationStatus: PHAuthorizationStatus
+    ) throws -> PhotoLibraryChangeDiff {
+        if event.requiresFullReconciliation {
+            return try fullReconciliation(database: database)
+        }
+
+        let indexedInsertedPhotos = try database.existingPhotoIdentifiers(
+            in: Array(event.insertedPhotoIDs)
+        )
+        let indexedInsertedVideos = try database.existingVideoIdentifiers(
+            in: Array(event.insertedVideoIDs)
+        )
+        var orphanedPhotos: Set<String> = []
+        var orphanedVideos: Set<String> = []
+        if authorizationStatus == .authorized {
+            orphanedPhotos = try database.existingPhotoIdentifiers(
+                in: Array(event.removedPhotoIDs)
+            )
+            orphanedVideos = try database.existingVideoIdentifiers(
+                in: Array(event.removedVideoIDs)
+            )
+            let indexedCount = try database.photoLibraryIndexedMediaCounts().total
+            if OrphanCleanupSafetyPolicy.exceedsSafetyThreshold(
+                candidateRemovalCount: orphanedPhotos.count + orphanedVideos.count,
+                photoLibraryIndexedCount: indexedCount
+            ) {
+                orphanedPhotos.removeAll(keepingCapacity: false)
+                orphanedVideos.removeAll(keepingCapacity: false)
+            }
+        }
+        return PhotoLibraryChangeDiff(
+            hasNewMedia: !event.insertedPhotoIDs.subtracting(indexedInsertedPhotos).isEmpty
+                || !event.insertedVideoIDs.subtracting(indexedInsertedVideos).isEmpty,
+            orphanedPhotoIDs: orphanedPhotos,
+            orphanedVideoIDs: orphanedVideos
+        )
+    }
+
+    private static func fullReconciliation(
+        database: DatabaseProtocol
+    ) throws -> PhotoLibraryChangeDiff {
+        let allMedia = PhotoLibrary.fetchAllMedia()
+        var hasNewMedia = false
+        let pageSize = SearchIndexLimits.databasePageMediaItems
+        for pageStart in stride(from: 0, to: allMedia.count, by: pageSize) {
+            try Task.checkCancellation()
+            let pageEnd = min(pageStart + pageSize, allMedia.count)
+            var photoIDs: [String] = []
+            var videoIDs: [String] = []
+            photoIDs.reserveCapacity(pageEnd - pageStart)
+            videoIDs.reserveCapacity(pageEnd - pageStart)
+            for index in pageStart..<pageEnd {
+                let asset = allMedia.object(at: index)
+                if asset.mediaType == .video {
+                    videoIDs.append(asset.localIdentifier)
+                } else {
+                    photoIDs.append(asset.localIdentifier)
+                }
+            }
+            let pageDiff = PhotoLibraryChangeDiff.evaluate(
+                libraryPhotos: Set(photoIDs),
+                libraryVideos: Set(videoIDs),
+                indexedPhotos: try database.existingPhotoIdentifiers(in: photoIDs),
+                indexedVideos: try database.existingVideoIdentifiers(in: videoIDs),
+                allowsOrphanCleanup: false
+            )
+            hasNewMedia = hasNewMedia || pageDiff.hasNewMedia
+        }
+
+        var orphanedPhotos: Set<String> = []
+        var orphanedVideos: Set<String> = []
+        if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized {
+            let indexedCount = try database.photoLibraryIndexedMediaCounts().total
+            var cursor: SearchMediaPageCursor?
+            repeat {
+                try Task.checkCancellation()
+                let page = try database.loadIndexedMediaIdentifierPage(
+                    after: cursor,
+                    limit: pageSize
+                )
+                let identifiers = page.photos + page.videos
+                guard !identifiers.isEmpty else { break }
+                let existingAssets = PHAsset.fetchAssets(
+                    withLocalIdentifiers: identifiers,
+                    options: nil
+                )
+                var existing: Set<String> = []
+                existing.reserveCapacity(existingAssets.count)
+                existingAssets.enumerateObjects { asset, _, _ in
+                    existing.insert(asset.localIdentifier)
+                }
+                let pageDiff = PhotoLibraryChangeDiff.evaluate(
+                    libraryPhotos: Set(page.photos).intersection(existing),
+                    libraryVideos: Set(page.videos).intersection(existing),
+                    indexedPhotos: Set(page.photos),
+                    indexedVideos: Set(page.videos),
+                    allowsOrphanCleanup: true
+                )
+                orphanedPhotos.formUnion(pageDiff.orphanedPhotoIDs)
+                orphanedVideos.formUnion(pageDiff.orphanedVideoIDs)
+                if OrphanCleanupSafetyPolicy.exceedsSafetyThreshold(
+                    candidateRemovalCount: orphanedPhotos.count + orphanedVideos.count,
+                    photoLibraryIndexedCount: indexedCount
+                ) {
+                    orphanedPhotos.removeAll(keepingCapacity: false)
+                    orphanedVideos.removeAll(keepingCapacity: false)
+                    break
+                }
+                cursor = page.nextCursor
+            } while cursor != nil
+        }
+        return PhotoLibraryChangeDiff(
+            hasNewMedia: hasNewMedia,
+            orphanedPhotoIDs: orphanedPhotos,
+            orphanedVideoIDs: orphanedVideos
+        )
+    }
 }
 
 enum ThermalIndexingEffect: Equatable {
@@ -132,11 +348,15 @@ enum PhotoEnrichmentTask {
 enum ProFolderIndexingOperation {
     static func run(
         isEntitled: () -> Bool,
-        operation: () async -> Void
+        operation: () async -> FolderIndexingOutcome
     ) async -> IndexingJobOutcome {
         guard isEntitled() else { return .cancelled }
-        await operation()
-        return Task.isCancelled ? .cancelled : .completed
+        switch await operation() {
+        case .completed, .completedWithWarnings:
+            return Task.isCancelled ? .cancelled : .completed
+        case .failed, .cancelled:
+            return .cancelled
+        }
     }
 }
 
@@ -147,7 +367,7 @@ enum SavedFolderReindexPolicy {
     ) -> [PhotoSource] {
         guard isPro else { return [] }
         return sources.filter {
-            $0.type == PhotoSourceType.folder.rawValue && $0.photoCount == 0
+            $0.type == PhotoSourceType.folder.rawValue && $0.lastIndexedAt == nil
         }
     }
 }
@@ -196,10 +416,13 @@ private final class SystemPhotoChangeObservationRegistrar: PhotoChangeObservatio
 }
 
 final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
-    private let callback = OSAllocatedUnfairLock<(@MainActor @Sendable () -> Void)?>(
+    private let callback = OSAllocatedUnfairLock<(@MainActor @Sendable (PhotoLibraryChangeEvent) -> Void)?>(
         initialState: nil
     )
     private let observing = OSAllocatedUnfairLock(initialState: false)
+    private let fetchResult = OSAllocatedUnfairLock<PHFetchResult<PHAsset>?>(
+        initialState: nil
+    )
     private let registrar: PhotoChangeObservationRegistrar
 
     override convenience init() {
@@ -211,7 +434,7 @@ final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchec
         super.init()
     }
 
-    var onNewPhotosDetected: (@MainActor @Sendable () -> Void)? {
+    var onPhotoLibraryChange: (@MainActor @Sendable (PhotoLibraryChangeEvent) -> Void)? {
         get { callback.withLock { $0 } }
         set { callback.withLock { $0 = newValue } }
     }
@@ -224,6 +447,7 @@ final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchec
         }
         guard shouldRegister else { return }
         registrar.register(self)
+        fetchResult.withLock { $0 = PhotoLibrary.fetchAllMedia() }
     }
 
     func stopObserving() {
@@ -233,14 +457,49 @@ final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchec
             return true
         }
         callback.withLock { $0 = nil }
+        fetchResult.withLock { $0 = nil }
         guard shouldUnregister else { return }
         registrar.unregister(self)
     }
 
     func photoLibraryDidChange(_ changeInstance: PHChange) {
-        let callback = callback.withLock { $0 }
-        DispatchQueue.main.async {
-            callback?()
+        let event = fetchResult.withLock { storedResult -> PhotoLibraryChangeEvent in
+            guard let beforeChanges = storedResult,
+                  let details = changeInstance.changeDetails(for: beforeChanges) else {
+                storedResult = PhotoLibrary.fetchAllMedia()
+                return .fullReconciliation
+            }
+            storedResult = details.fetchResultAfterChanges
+            guard details.hasIncrementalChanges else {
+                return .fullReconciliation
+            }
+            var event = PhotoLibraryChangeEvent()
+            for asset in details.insertedObjects {
+                if asset.mediaType == .video {
+                    event.insertedVideoIDs.insert(asset.localIdentifier)
+                } else {
+                    event.insertedPhotoIDs.insert(asset.localIdentifier)
+                }
+            }
+            for asset in details.removedObjects {
+                if asset.mediaType == .video {
+                    event.removedVideoIDs.insert(asset.localIdentifier)
+                } else {
+                    event.removedPhotoIDs.insert(asset.localIdentifier)
+                }
+            }
+            return event
+        }
+        guard event.hasWork else { return }
+        enqueueDelivery(event)
+    }
+
+    func enqueueDelivery(_ event: PhotoLibraryChangeEvent) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.observing.withLock({ $0 }),
+                  let callback = self.callback.withLock({ $0 }) else { return }
+            callback(event)
         }
     }
 
@@ -276,7 +535,14 @@ struct IndexingBatchCursor<Item> {
 
 @MainActor
 class IndexingService: ObservableObject {
-    @Published var progress = IndexingProgress(total: 0, completed: 0, isRunning: false)
+    @Published var progress = IndexingProgress(total: 0, completed: 0, isRunning: false) {
+        didSet {
+            guard oldValue.isRunning, !progress.isRunning else { return }
+            if photoChangeScanState.startPendingScanIfPossible(isIndexing: false) {
+                startPhotoChangeScan()
+            }
+        }
+    }
     @Published var isReady = false {
         didSet {
             #if DEBUG
@@ -305,6 +571,7 @@ class IndexingService: ObservableObject {
         }
     }
     @Published private(set) var isThermallyPaused = false
+    @Published private(set) var folderIndexingError: String?
     // Background reverse-geocoding progress. Nil when idle or finished.
     @Published var geocodingProgress: (completed: Int, total: Int)? {
         didSet {
@@ -330,6 +597,8 @@ class IndexingService: ObservableObject {
     private var isObservingPhotoChanges = false
     private var launchLibraryCountSnapshot: Int?
     private var photoChangeCheckTask: Task<Void, Never>?
+    private var photoChangeScanState = PhotoChangeScanState()
+    private var pendingPhotoLibraryChange = PhotoLibraryChangeEvent()
     private var proRevocationTask: Task<Void, Never>?
     private var activeProReconciliationID: UUID?
     private var storageMutationTask: Task<Void, Error>?
@@ -371,7 +640,8 @@ class IndexingService: ObservableObject {
         callbacks: FolderIndexingWorker.Callbacks(
             searchableCount: { [weak self] in self?.searchEngine.totalSize ?? 0 },
             setProgress: { [weak self] in self?.progress = $0 },
-            reloadSearchIndex: { [weak self] in _ = await self?.reloadSearchIndex() }
+            reportError: { [weak self] in self?.folderIndexingError = $0 },
+            reloadSearchIndex: { [weak self] in await self?.reloadSearchIndex() == true }
         )
     )
 
@@ -550,8 +820,6 @@ class IndexingService: ObservableObject {
     private func stopIndexing(preserveThermalResume: Bool) {
         jobQueue.cancelAll()
         scheduledSavedFolderSourceIDs.removeAll()
-        photoChangeCheckTask?.cancel()
-        photoChangeCheckTask = nil
         librarySession = nil
         geocodingProgress = nil
         progress.isRunning = false
@@ -581,7 +849,8 @@ class IndexingService: ObservableObject {
         proRevocationTask = nil
         activeProReconciliationID = nil
         photoChangeCheckTask?.cancel()
-        photoChangeCheckTask = nil
+        photoChangeScanState.cancel()
+        pendingPhotoLibraryChange = PhotoLibraryChangeEvent()
         librarySession = nil
         geocodingProgress = nil
         progress.isRunning = false
@@ -617,6 +886,7 @@ class IndexingService: ObservableObject {
             guard let self else { return .cancelled }
             defer {
                 self.clearThermalResumeIntent(ifOwnedBy: intent.id)
+                self.progress.isRunning = false
             }
             return await ProFolderIndexingOperation.run(
                 isEntitled: { ProManager.shared.isPro }
@@ -624,16 +894,55 @@ class IndexingService: ObservableObject {
                 self.beginBackgroundTask()
                 defer {
                     self.endBackgroundTask()
-                    self.progress.isRunning = false
                 }
-                await self.folderWorker.index(url: url, name: name)
-                guard !Task.isCancelled else { return }
+                let outcome = await self.folderWorker.index(url: url, name: name)
+                guard outcome.didComplete, !Task.isCancelled else { return outcome }
                 self.enqueueEnrichment(workflowID: workflowID)
                 if shouldResumeGeocoding {
                     self.enqueueGeocoding(workflowID: workflowID)
                 }
+                return .completed
             }
         })
+    }
+
+    func reindexFolderSource(_ source: PhotoSource) {
+        guard ProManager.shared.isPro,
+              source.type == PhotoSourceType.folder.rawValue else {
+            logger.error("Folder refresh requires an active Pro entitlement and folder source")
+            return
+        }
+        let resume: () -> Void = { [weak self] in self?.reindexFolderSource(source) }
+        let intent = ThermalResumeIntent(id: UUID(), action: resume)
+        guard canStartIndexing(resumeWhenCool: intent) else { return }
+        searchEngine.resumeAfterMemoryPressure()
+        cancelEnrichmentWork()
+        guard markRunningIfIdle() else { return }
+        thermalResumeIntent = intent
+        scheduledSavedFolderSourceIDs.insert(source.id)
+        jobQueue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .indexFolder,
+            priority: .userInitiated
+        ) { [weak self] in
+            guard let self else { return .cancelled }
+            defer {
+                self.scheduledSavedFolderSourceIDs.remove(source.id)
+                self.clearThermalResumeIntent(ifOwnedBy: intent.id)
+                self.progress.isRunning = false
+            }
+            return await ProFolderIndexingOperation.run(
+                isEntitled: { ProManager.shared.isPro }
+            ) {
+                self.beginBackgroundTask()
+                defer { self.endBackgroundTask() }
+                return await self.folderWorker.reindex(source: source)
+            }
+        })
+    }
+
+    func clearFolderIndexingError() {
+        folderIndexingError = nil
     }
 
     func deleteFolderSource(id: String) async throws {
@@ -838,8 +1147,8 @@ class IndexingService: ObservableObject {
 
     private func startObservingPhotoChanges() {
         guard !isObservingPhotoChanges else { return }
-        changeObserver.onNewPhotosDetected = { [weak self] in
-            Task { @MainActor in self?.checkForNewPhotos() }
+        changeObserver.onPhotoLibraryChange = { [weak self] event in
+            Task { @MainActor in self?.checkForPhotoLibraryChange(event) }
         }
         changeObserver.startObserving()
         isObservingPhotoChanges = true
@@ -851,52 +1160,32 @@ class IndexingService: ObservableObject {
         isObservingPhotoChanges = false
     }
 
-    private func checkForNewPhotos() {
-        guard !progress.isRunning, photoChangeCheckTask == nil else { return }
+    private func checkForPhotoLibraryChange(_ event: PhotoLibraryChangeEvent) {
+        guard event.hasWork else { return }
+        pendingPhotoLibraryChange.merge(event)
+        guard photoChangeScanState.requestScan(isIndexing: progress.isRunning) else { return }
+        startPhotoChangeScan()
+    }
+
+    private func startPhotoChangeScan() {
+        guard photoChangeCheckTask == nil, pendingPhotoLibraryChange.hasWork else { return }
         let db = database
-        let engine = searchEngine
+        let event = pendingPhotoLibraryChange
+        pendingPhotoLibraryChange = PhotoLibraryChangeEvent()
         photoChangeCheckTask = Task { [weak self] in
             guard let self else { return }
-            defer { photoChangeCheckTask = nil }
+            defer {
+                photoChangeCheckTask = nil
+                if photoChangeScanState.finishScan(isIndexing: progress.isRunning) {
+                    startPhotoChangeScan()
+                }
+            }
             let scanTask = Task.detached(priority: .utility) {
-                let totalIndexed = try db.photoLibraryIndexedMediaCounts().total
-                let allMedia = PhotoLibrary.fetchAllMedia()
-                let totalInLibrary = allMedia.count
-
-                if totalInLibrary > totalIndexed {
-                    return PhotoLibraryChangeScanResult.newPhotos
-                }
-                guard totalInLibrary < totalIndexed else { return .none }
-                guard PHPhotoLibrary.authorizationStatus(for: .readWrite) != .limited else {
-                    return .none
-                }
-
-                var orphaned: Set<String> = []
-                var cursor: String?
-                repeat {
-                    try Task.checkCancellation()
-                    let page = try db.loadIndexedPhotoIdentifierPage(
-                        after: cursor,
-                        limit: SearchIndexLimits.databasePageMediaItems
-                    )
-                    guard !page.isEmpty else { break }
-                    let existingAssets = PHAsset.fetchAssets(
-                        withLocalIdentifiers: page,
-                        options: nil
-                    )
-                    var existing: Set<String> = []
-                    existing.reserveCapacity(existingAssets.count)
-                    existingAssets.enumerateObjects { asset, _, _ in
-                        existing.insert(asset.localIdentifier)
-                    }
-                    orphaned.formUnion(page.filter { !existing.contains($0) })
-                    guard orphaned.count < totalIndexed / 2 else { return .none }
-                    cursor = page.count == SearchIndexLimits.databasePageMediaItems
-                        ? page.last
-                        : nil
-                } while cursor != nil
-                guard !orphaned.isEmpty, orphaned.count < totalIndexed / 2 else { return .none }
-                return .orphanedPhotos(orphaned)
+                try PhotoLibraryChangeReconciler.reconcile(
+                    event,
+                    database: db,
+                    authorizationStatus: PHPhotoLibrary.authorizationStatus(for: .readWrite)
+                )
             }
             do {
                 let result = try await withTaskCancellationHandler {
@@ -905,16 +1194,14 @@ class IndexingService: ObservableObject {
                     scanTask.cancel()
                 }
                 guard !Task.isCancelled else { return }
-                switch result {
-                case .none:
-                    break
-                case .newPhotos:
+                if result.hasNewMedia {
                     newPhotosAvailable = true
-                case .orphanedPhotos(let orphaned):
+                }
+                if !result.orphanedPhotoIDs.isEmpty || !result.orphanedVideoIDs.isEmpty {
                     enqueueLightweightOrphanCleanup(
-                        orphanedPhotoIDs: orphaned,
-                        database: db,
-                        searchEngine: engine
+                        orphanedPhotoIDs: result.orphanedPhotoIDs,
+                        orphanedVideoIDs: result.orphanedVideoIDs,
+                        database: db
                     )
                 }
             } catch {
@@ -1146,25 +1433,67 @@ class IndexingService: ObservableObject {
             isPro: ProManager.shared.isPro
         ).filter { !scheduledSavedFolderSourceIDs.contains($0.id) }
 
-        for source in candidates {
-            scheduledSavedFolderSourceIDs.insert(source.id)
-            let workflowID = UUID()
-            jobQueue.enqueue(IndexingJob(
-                workflowID: workflowID,
-                kind: .indexFolder,
-                priority: .userInitiated
-            ) { [weak self] in
-                guard let self else { return .cancelled }
-                defer { self.scheduledSavedFolderSourceIDs.remove(source.id) }
-                return await ProFolderIndexingOperation.run(
-                    isEntitled: { ProManager.shared.isPro }
-                ) {
-                    self.beginBackgroundTask()
-                    defer { self.endBackgroundTask() }
-                    await self.folderWorker.reindex(source: source)
+        guard !candidates.isEmpty else { return }
+        let candidateIDs = Set(candidates.map(\.id))
+        scheduledSavedFolderSourceIDs.formUnion(candidateIDs)
+        jobQueue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .indexFolder,
+            priority: .userInitiated
+        ) { [weak self] in
+            guard let self else { return .cancelled }
+            defer { self.scheduledSavedFolderSourceIDs.subtract(candidateIDs) }
+            return await ProFolderIndexingOperation.run(
+                isEntitled: { ProManager.shared.isPro }
+            ) {
+                self.beginBackgroundTask()
+                self.progress.isRunning = true
+                defer {
+                    self.endBackgroundTask()
+                    self.progress.isRunning = false
                 }
-            })
+                var didCompleteSource = false
+                for source in candidates {
+                    guard ProManager.shared.isPro else { return .cancelled }
+                    if Task.isCancelled {
+                        if didCompleteSource {
+                            _ = await self.reloadSearchIndexInFreshTask()
+                        }
+                        return .cancelled
+                    }
+                    let outcome = await self.folderWorker.reindex(
+                        source: source,
+                        reloadSearchIndex: false
+                    )
+                    if outcome.didComplete {
+                        didCompleteSource = true
+                        continue
+                    }
+                    if outcome == .cancelled || Task.isCancelled {
+                        if didCompleteSource {
+                            _ = await self.reloadSearchIndexInFreshTask()
+                        }
+                        return .cancelled
+                    } else {
+                        return await self.reloadSearchIndex() ? outcome : .failed
+                    }
+                }
+                if Task.isCancelled {
+                    if didCompleteSource {
+                        _ = await self.reloadSearchIndexInFreshTask()
+                    }
+                    return .cancelled
+                }
+                return await self.reloadSearchIndex() ? .completed : .failed
+            }
+        })
+    }
+
+    private func reloadSearchIndexInFreshTask() async -> Bool {
+        let task = Task { @MainActor [weak self] in
+            await self?.reloadSearchIndex() == true
         }
+        return await task.value
     }
 
     private func resumeIndexingAfterProUnlock() async {
@@ -1233,10 +1562,9 @@ class IndexingService: ObservableObject {
 
     private func enqueueLightweightOrphanCleanup(
         orphanedPhotoIDs: Set<String>,
-        database: DatabaseProtocol,
-        searchEngine: SearchEngine
+        orphanedVideoIDs: Set<String>,
+        database: DatabaseProtocol
     ) {
-        _ = searchEngine
         jobQueue.enqueue(IndexingJob(
             workflowID: UUID(),
             kind: .cleanOrphans,
@@ -1244,13 +1572,20 @@ class IndexingService: ObservableObject {
         ) { [weak self] in
             guard let self else { return .cancelled }
             do {
-                let deleteTask = Task.detached(priority: .utility) {
-                    try database.deleteOrphanedPhotos(localIdentifiers: orphanedPhotoIDs)
-                }
-                try await withTaskCancellationHandler {
-                    try await deleteTask.value
-                } onCancel: {
-                    deleteTask.cancel()
+                try await CancellableDetachedOperation.run {
+                    if !orphanedPhotoIDs.isEmpty {
+                        guard PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(
+                            PHPhotoLibrary.authorizationStatus(for: .readWrite)
+                        ) else { throw CancellationError() }
+                        try database.deleteOrphanedPhotos(localIdentifiers: orphanedPhotoIDs)
+                    }
+                    try Task.checkCancellation()
+                    if !orphanedVideoIDs.isEmpty {
+                        guard PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(
+                            PHPhotoLibrary.authorizationStatus(for: .readWrite)
+                        ) else { throw CancellationError() }
+                        try database.deleteOrphanedVideos(localIdentifiers: orphanedVideoIDs)
+                    }
                 }
                 guard !Task.isCancelled else { return .cancelled }
                 return await self.reloadSearchIndex() ? .completed : .cancelled
@@ -1488,15 +1823,15 @@ class IndexingService: ObservableObject {
 
     private func cleanOrphanedEmbeddings() async {
         do {
-            guard PHPhotoLibrary.authorizationStatus(for: .readWrite) != .limited else {
+            guard PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(
+                PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            ) else {
                 #if DEBUG
-                logger.info("[IndexingService] Skipping orphan cleanup under limited Photos access")
+                logger.info("[IndexingService] Skipping orphan cleanup without full Photos access")
                 #endif
                 return
             }
             let db = database
-            let skipKey = "orphanCleanupConsecutiveSkips"
-            let forceCleanup = UserDefaults.standard.integer(forKey: skipKey) >= 2
             let scanTask = Task.detached(priority: .utility) {
                 let photoLibraryIndexedCount = try db.photoLibraryIndexedMediaCounts().total
                 var orphanedPhotos: Set<String> = []
@@ -1521,11 +1856,10 @@ class IndexingService: ObservableObject {
                     }
                     orphanedPhotos.formUnion(page.photos.filter { !existing.contains($0) })
                     orphanedVideos.formUnion(page.videos.filter { !existing.contains($0) })
-                    guard forceCleanup
-                            || !OrphanCleanupSafetyPolicy.exceedsSafetyThreshold(
-                                candidateRemovalCount: orphanedPhotos.count + orphanedVideos.count,
-                                photoLibraryIndexedCount: photoLibraryIndexedCount
-                            ) else {
+                    guard !OrphanCleanupSafetyPolicy.exceedsSafetyThreshold(
+                        candidateRemovalCount: orphanedPhotos.count + orphanedVideos.count,
+                        photoLibraryIndexedCount: photoLibraryIndexedCount
+                    ) else {
                         return (Set<String>(), Set<String>(), true)
                     }
                     cursor = page.nextCursor
@@ -1539,17 +1873,15 @@ class IndexingService: ObservableObject {
             }
             try Task.checkCancellation()
             if exceededSafetyThreshold {
-                let consecutiveSkips = UserDefaults.standard.integer(forKey: skipKey) + 1
-                UserDefaults.standard.set(consecutiveSkips, forKey: skipKey)
-                logger.warning("Orphan cleanup skipped (\(consecutiveSkips)/3): candidate removals exceed the 20% safety threshold")
+                logger.warning("Orphan cleanup skipped: candidate removals exceed the 20% safety threshold")
                 return
             }
 
             let totalOrphans = orphanedPhotos.count + orphanedVideos.count
             guard totalOrphans > 0 else { return }
 
-            // Safety: skip if more than 20% are orphaned (likely a permissions issue, not real deletions).
-            // But force cleanup after 3 consecutive skips so the index doesn't stay stale forever.
+            // Safety: never auto-delete when more than 20% appear orphaned.
+            // A large mismatch can reflect a transient PhotoKit visibility issue.
             let photoLibraryIndexedCount = try await CancellableDetachedOperation.run {
                 try db.photoLibraryIndexedMediaCounts().total
             }
@@ -1558,15 +1890,9 @@ class IndexingService: ObservableObject {
                 photoLibraryIndexedCount: photoLibraryIndexedCount
             )
             if orphanRatio > IndexingConfig.maxOrphanRatio {
-                let consecutiveSkips = UserDefaults.standard.integer(forKey: skipKey) + 1
-                if consecutiveSkips < 3 {
-                    UserDefaults.standard.set(consecutiveSkips, forKey: skipKey)
-                    logger.warning("Orphan cleanup skipped (\(consecutiveSkips)/3): \(totalOrphans)/\(photoLibraryIndexedCount) (\(Int(orphanRatio * 100))%) exceeds 20% threshold")
-                    return
-                }
-                logger.info("Forcing orphan cleanup after \(consecutiveSkips) consecutive skips: \(totalOrphans)/\(photoLibraryIndexedCount) orphaned")
+                logger.warning("Orphan cleanup skipped: \(totalOrphans)/\(photoLibraryIndexedCount) (\(Int(orphanRatio * 100))%) exceeds 20% threshold")
+                return
             }
-            UserDefaults.standard.set(0, forKey: skipKey)
 
             // Delete orphaned photos
             if !orphanedPhotos.isEmpty {
@@ -1574,6 +1900,9 @@ class IndexingService: ObservableObject {
                 let photoIDsToDelete = orphanedPhotos
                 let photoDeleteCount = photoIDsToDelete.count
                 try await CancellableDetachedOperation.run {
+                    guard PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(
+                        PHPhotoLibrary.authorizationStatus(for: .readWrite)
+                    ) else { throw CancellationError() }
                     try db.deleteOrphanedPhotos(localIdentifiers: photoIDsToDelete)
                 }
                 try Task.checkCancellation()
@@ -1588,6 +1917,9 @@ class IndexingService: ObservableObject {
                 let videoIDsToDelete = orphanedVideos
                 let videoDeleteCount = videoIDsToDelete.count
                 try await CancellableDetachedOperation.run {
+                    guard PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(
+                        PHPhotoLibrary.authorizationStatus(for: .readWrite)
+                    ) else { throw CancellationError() }
                     try db.deleteOrphanedVideos(localIdentifiers: videoIDsToDelete)
                 }
                 try Task.checkCancellation()

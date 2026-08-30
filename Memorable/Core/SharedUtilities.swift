@@ -136,6 +136,61 @@ enum ImageLoadGenerationPolicy {
     }
 }
 
+struct SlideshowSelection<Item: Sendable>: Sendable {
+    let item: Item
+    let recentIDs: Set<String>
+}
+
+@MainActor
+enum SlideshowSelectionPolicy {
+    static func next<Item: Sendable>(
+        recentIDs: Set<String>,
+        historyLimit: Int,
+        maxAttempts: Int = 5,
+        fetch: () async -> Item?,
+        identifier: (Item) -> String
+    ) async -> SlideshowSelection<Item>? {
+        let boundedAttempts = max(1, maxAttempts)
+        var fallback: Item?
+
+        for _ in 0..<boundedAttempts {
+            guard !Task.isCancelled else { return nil }
+            guard let candidate = await fetch() else { break }
+            fallback = candidate
+            if !recentIDs.contains(identifier(candidate)) {
+                return selection(
+                    candidate,
+                    recentIDs: recentIDs,
+                    historyLimit: historyLimit,
+                    identifier: identifier
+                )
+            }
+        }
+
+        guard let fallback else { return nil }
+        return selection(
+            fallback,
+            recentIDs: [],
+            historyLimit: historyLimit,
+            identifier: identifier
+        )
+    }
+
+    private static func selection<Item: Sendable>(
+        _ item: Item,
+        recentIDs: Set<String>,
+        historyLimit: Int,
+        identifier: (Item) -> String
+    ) -> SlideshowSelection<Item> {
+        var updated = recentIDs
+        if updated.count >= max(1, historyLimit) {
+            updated.removeAll(keepingCapacity: true)
+        }
+        updated.insert(identifier(item))
+        return SlideshowSelection(item: item, recentIDs: updated)
+    }
+}
+
 enum VideoPlaybackRequestPolicy {
     static func acceptsCompletion(
         startedGeneration: UInt,

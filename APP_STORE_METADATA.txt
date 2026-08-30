@@ -3,13 +3,13 @@ App Store metadata
 
 App name: Memorable - AI Photo Search
 
-Subtitle: Find photos by describing memories
+Subtitle: Find photos from a description
 
 Category: Photo & Video
 
 Price: Free, with a $4.99 one-time Pro in-app purchase in the US storefront
 
-Keywords: photo search, AI, memory, find photos, natural language, privacy, on-device, no subscription, visual search
+Keywords: AI,memory,natural language,privacy,on-device,no subscription,visual search,photo library,local
 
 Description
 -----------
@@ -56,6 +56,7 @@ Pro features
 - Index and search all locally available photos and videos.
 - Parse dates, seasons, places, time of day, and excluded terms.
 - Add up to 32 user-selected folder sources. Previously saved folders remain visible and removable.
+- Refresh a saved folder when you want Memorable to scan its local files again.
 - Use Find Similar and near-duplicate detection with bounded, cancellable processing.
 - Unlock Pro with one purchase. No subscription is required.
 
@@ -66,8 +67,8 @@ Requirements
 - iPhone with an A14 chip or later
 - Available storage for bundled AI models and the local search index
 
-What's new in version 1.0
--------------------------
+What's new in version 1.0.2
+---------------------------
 
 - Search photos and videos with SigLIP2.
 - Index locally available Photo Library media and up to 32 newly selected folder sources with Pro.
@@ -83,9 +84,9 @@ Screenshot plan
 4. Show Photo Library and an added folder in the source manager.
 5. Show initial indexing progress.
 
-Support URL: (your support page)
+Support URL: Complete the public URL step in RELEASE_MANUAL_CHECKLIST.md.
 
-Privacy policy URL: (host PRIVACY_POLICY.txt as a web page)
+Privacy policy URL: Complete the public URL step in RELEASE_MANUAL_CHECKLIST.md.
 
 App review notes
 ----------------

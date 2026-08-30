@@ -4,6 +4,10 @@ options:
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "16.0"
+configs:
+  Debug: debug
+  Release: release
+  ReleaseTest: release
 settings:
   base:
     SWIFT_VERSION: "6"
@@ -60,6 +64,7 @@ targets:
     configFiles:
       Debug: Config/Build.xcconfig
       Release: Config/Build.xcconfig
+      ReleaseTest: Config/Build.xcconfig
     sources:
       - path: Memorable
         excludes:
@@ -69,6 +74,9 @@ targets:
         buildPhase: resources
       - path: Memorable/Models/SigLIP2_TextEncoder.mlmodelc
         type: folder
+        buildPhase: resources
+      - path: PRIVACY_POLICY.txt
+        type: file
         buildPhase: resources
     resources:
       - path: Memorable/Resources
@@ -90,12 +98,16 @@ targets:
         SUPPORTS_MACCATALYST: "NO"
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: "NO"
+      configs:
+        ReleaseTest:
+          ENABLE_TESTABILITY: "YES"
   MemorableTests:
     type: bundle.unit-test
     platform: iOS
     configFiles:
       Debug: Config/Build.xcconfig
       Release: Config/Build.xcconfig
+      ReleaseTest: Config/Build.xcconfig
     sources:
       - path: MemorableTests
     dependencies:
@@ -126,6 +138,22 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Memorable.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Memorable"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  MemorableReleaseTests:
+    type: bundle.unit-test
+    platform: iOS
+    configFiles:
+      ReleaseTest: Config/Build.xcconfig
+    sources:
+      - path: MemorableReleaseTests
+    dependencies:
+      - target: Memorable
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.blockdeep.memorable.release-tests
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Memorable.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Memorable"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
   Memorable:
     build:
@@ -152,3 +180,12 @@ schemes:
       environmentVariables:
         MEMORABLE_RELEVANCE_PERTURBATION: "$(MEMORABLE_RELEVANCE_PERTURBATION)"
         MEMORABLE_RELEVANCE_SKIP_BASELINE: "$(MEMORABLE_RELEVANCE_SKIP_BASELINE)"
+  MemorableReleaseTests:
+    build:
+      targets:
+        Memorable: all
+        MemorableReleaseTests: [test]
+    test:
+      config: ReleaseTest
+      targets:
+        - MemorableReleaseTests

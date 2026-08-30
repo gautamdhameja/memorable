@@ -26,6 +26,7 @@ final class ProFolderIndexingOperationTests: XCTestCase {
         ) {
             await ProFolderIndexingOperation.run(isEntitled: { isPro }) {
                 folderOperationRan = true
+                return .completed
             }
         })
 
@@ -35,6 +36,14 @@ final class ProFolderIndexingOperationTests: XCTestCase {
         await queue.waitUntilIdle()
 
         XCTAssertFalse(folderOperationRan)
+    }
+
+    func testFailedFolderOperationDoesNotCompleteItsJob() async {
+        let outcome = await ProFolderIndexingOperation.run(isEntitled: { true }) {
+            .failed
+        }
+
+        XCTAssertEqual(outcome, .cancelled)
     }
 }
 

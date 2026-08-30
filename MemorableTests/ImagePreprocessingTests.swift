@@ -62,10 +62,52 @@ final class ImagePreprocessingTests: XCTestCase {
             XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data()))
         }
 
-        let results = FolderScanner.scanFolder(at: root, maximumImageCount: 5)
+        let scan = FolderScanner.scanFolder(at: root, maximumImageCount: 5)
 
-        XCTAssertEqual(results.count, 5)
-        XCTAssertEqual(results.map(\.lastPathComponent), results.map(\.lastPathComponent).sorted())
+        XCTAssertEqual(scan.imageURLs.count, 5)
+        XCTAssertEqual(
+            scan.imageURLs.map(\.lastPathComponent),
+            scan.imageURLs.map(\.lastPathComponent).sorted()
+        )
+        XCTAssertFalse(scan.isComplete)
+    }
+
+    func testFolderScanReportsIncompleteWhenVisitedEntryCeilingIsExceeded() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        for index in 0..<4 {
+            let file = root.appendingPathComponent("unsupported-\(index).txt")
+            XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data()))
+        }
+
+        let scan = FolderScanner.scanFolder(
+            at: root,
+            maximumImageCount: 10,
+            maximumVisitedEntryCount: 2
+        )
+
+        XCTAssertTrue(scan.imageURLs.isEmpty)
+        XCTAssertFalse(scan.isComplete)
+    }
+
+    func testFolderScanReportsCompleteAfterExhaustiveTraversal() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        XCTAssertTrue(FileManager.default.createFile(
+            atPath: root.appendingPathComponent("image.jpg").path,
+            contents: Data()
+        ))
+
+        let scan = FolderScanner.scanFolder(at: root, maximumImageCount: 10)
+
+        XCTAssertEqual(scan.imageURLs.map(\.lastPathComponent), ["image.jpg"])
+        XCTAssertTrue(scan.isComplete)
     }
 
     func testFolderScanHasAVisitedEntryCeiling() {
@@ -301,7 +343,7 @@ final class ImagePreprocessingTests: XCTestCase {
         XCTAssertEqual(mkfifo(fifoURL.path, S_IRUSR | S_IWUSR), 0)
 
         XCTAssertFalse(FolderScanner.isValidImageFile(fifoURL, within: root))
-        XCTAssertTrue(FolderScanner.scanFolder(at: root).isEmpty)
+        XCTAssertTrue(FolderScanner.scanFolder(at: root).imageURLs.isEmpty)
     }
 
     func testFolderScannerRejectsUnsupportedContentRenamedAsJPEG() throws {
@@ -339,7 +381,7 @@ final class ImagePreprocessingTests: XCTestCase {
         try imageData.write(to: scannedImage)
 
         let scanned = FolderScanner.scanFolder(at: root, maximumImageCount: 1)
-        XCTAssertEqual(scanned, [scannedImage])
+        XCTAssertEqual(scanned.imageURLs, [scannedImage])
 
         try FileManager.default.removeItem(at: scannedImage)
         try FileManager.default.createSymbolicLink(

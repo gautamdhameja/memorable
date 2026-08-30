@@ -96,10 +96,31 @@ enum EntitlementVerificationResult {
     case indeterminate
 }
 
+struct ProRuntimePolicy: Equatable {
+    let initiallyPro: Bool
+    let performsEntitlementVerification: Bool
+    let listensForTransactionUpdates: Bool
+
+    #if DEBUG
+    static let current = ProRuntimePolicy(
+        initiallyPro: true,
+        performsEntitlementVerification: false,
+        listensForTransactionUpdates: false
+    )
+    #else
+    static let current = ProRuntimePolicy(
+        initiallyPro: false,
+        performsEntitlementVerification: true,
+        listensForTransactionUpdates: true
+    )
+    #endif
+}
+
 @MainActor
 class ProManager: ObservableObject {
     typealias ProductLoader = @MainActor ([String]) async throws -> [Product]
     typealias RetryDelay = @MainActor () async throws -> Void
+    typealias EntitlementVerifier = @MainActor () async -> EntitlementVerificationResult
 
     static let shared = ProManager()
 
@@ -111,11 +132,7 @@ class ProManager: ObservableObject {
         entitlementProductIds.contains(productId)
     }
 
-    #if DEBUG
-    @Published var isPro: Bool = true
-    #else
-    @Published var isPro: Bool = false
-    #endif
+    @Published var isPro: Bool = ProRuntimePolicy.current.initiallyPro
     @Published var product: Product?
     @Published var purchaseError: String?
     @Published var isRestoring: Bool = false
@@ -129,6 +146,15 @@ class ProManager: ObservableObject {
     private var entitlementGeneration: UInt64 = 0
     private let productLoader: ProductLoader
     private let retryDelay: RetryDelay
+    private let entitlementVerifier: EntitlementVerifier
+    private let performsEntitlementVerification: Bool
+    private let listensForTransactionUpdates: Bool
+
+    #if DEBUG
+    var isTransactionListenerRunning: Bool {
+        transactionListener != nil
+    }
+    #endif
 
     /// Reconciles local Pro-only state whenever StoreKit verifies that the
     /// current account does not have an entitlement. The operation must be
@@ -136,8 +162,12 @@ class ProManager: ObservableObject {
     var onFreeTierReconciliationNeeded: (@MainActor () async -> Void)?
 
     private init() {
+        let runtimePolicy = ProRuntimePolicy.current
         productLoader = { try await Product.products(for: $0) }
         retryDelay = { try await Task.sleep(nanoseconds: 2_000_000_000) }
+        entitlementVerifier = { await Self.readCurrentEntitlement() }
+        performsEntitlementVerification = runtimePolicy.performsEntitlementVerification
+        listensForTransactionUpdates = runtimePolicy.listensForTransactionUpdates
     }
 
     /// Internal seam for deterministic lifecycle tests. Production always uses
@@ -146,10 +176,14 @@ class ProManager: ObservableObject {
         productLoader: @escaping ProductLoader,
         retryDelay: @escaping RetryDelay = {
             try await Task.sleep(nanoseconds: 2_000_000_000)
-        }
+        },
+        entitlementVerifier: @escaping EntitlementVerifier = { .indeterminate }
     ) {
         self.productLoader = productLoader
         self.retryDelay = retryDelay
+        self.entitlementVerifier = entitlementVerifier
+        performsEntitlementVerification = true
+        listensForTransactionUpdates = false
     }
 
     // MARK: - Product
@@ -251,9 +285,23 @@ class ProManager: ObservableObject {
     /// Called on every launch to verify the user still has the entitlement.
     /// If they got a refund, isPro is revoked.
     func verifyEntitlement() async {
-        startListeningForTransactionsIfNeeded()
-        #if !DEBUG
+        if listensForTransactionUpdates {
+            startListeningForTransactionsIfNeeded()
+        }
+        guard performsEntitlementVerification else { return }
         let generation = await beginEntitlementVerification()
+        let verificationResult = await entitlementVerifier()
+
+        await reconcileEntitlementVerification(
+            verificationResult,
+            generation: generation
+        )
+    }
+
+    /// Reads StoreKit's current entitlement sequence without mutating local
+    /// state. An unverified item makes the result indeterminate unless a valid
+    /// current Memorable entitlement is also present.
+    private static func readCurrentEntitlement() async -> EntitlementVerificationResult {
         var verificationResult = EntitlementVerificationResult.notEntitled
         for await result in Transaction.currentEntitlements {
             guard case .verified(let transaction) = result else {
@@ -267,12 +315,7 @@ class ProManager: ObservableObject {
                 break
             }
         }
-
-        await reconcileEntitlementVerification(
-            verificationResult,
-            generation: generation
-        )
-        #endif
+        return verificationResult
     }
 
     /// Applies a verified entitlement result. This is internal so lifecycle

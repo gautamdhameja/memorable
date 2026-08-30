@@ -95,8 +95,12 @@ struct MoreView: View {
 
                         HStack {
                             Button("Re-index library") { showReindexConfirm = true }
+                                .disabled(!database.allowsIndexingWrites)
                             Spacer()
-                            NavigationLink("Privacy · \(appVersionString)") { LicensesView() }
+                            NavigationLink("Privacy") { PrivacyPolicyView() }
+                            Text("·")
+                            NavigationLink("Licenses") { LicensesView() }
+                            Text("· \(appVersionString)")
                         }
                         .font(.caption)
                         .foregroundStyle(Celestial.Colors.outline)
@@ -179,6 +183,7 @@ struct MoreView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Celestial.Colors.primaryDim)
                 .padding(.top, 14)
+                .disabled(!database.allowsIndexingWrites)
             }
 
             if indexingService.newPhotosAvailable {
@@ -192,6 +197,7 @@ struct MoreView: View {
                     Button("Index now") { indexingService.indexNewPhotosOnly() }
                         .fontWeight(.medium)
                         .foregroundStyle(Celestial.Colors.primaryDim)
+                        .disabled(!database.allowsIndexingWrites)
                 }
                 .font(.subheadline)
                 .padding(.top, 14)
@@ -202,6 +208,7 @@ struct MoreView: View {
     }
 
     private var indexStatusTitle: String {
+        if !database.allowsIndexingWrites { return "Indexing unavailable" }
         if indexingService.progress.isRunning { return "Search index updating" }
         if indexingService.isReady { return "Search index up to date" }
         if indexingService.indexRebuildRequired { return "Search index update required" }
@@ -209,6 +216,9 @@ struct MoreView: View {
     }
 
     private var indexStatusDetail: String {
+        if !database.allowsIndexingWrites {
+            return "Free storage, then close and reopen Memorable"
+        }
         let searchableCount = searchEngine.indexSize + searchEngine.videoSize
         if searchableCount > 0 { return "\(searchableCount) items searchable" }
         if indexingService.indexRebuildRequired { return "Rebuild once to keep search results accurate" }
@@ -282,6 +292,41 @@ struct MoreView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Celestial.Colors.amber.opacity(0.35)).frame(height: 1)
         }
+    }
+}
+
+struct PrivacyPolicyView: View {
+    private static let policyText: String = {
+        guard let url = Bundle.main.url(
+            forResource: "PRIVACY_POLICY",
+            withExtension: "txt"
+        ) else {
+            logger.error("[PrivacyPolicy] Bundled policy resource is missing")
+            return "The privacy policy is unavailable. Close and reopen Memorable, then try again."
+        }
+        do {
+            return try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            logger.error("[PrivacyPolicy] Could not read bundled policy: \(error.safeDiagnosticCode)")
+            return "The privacy policy is unavailable. Close and reopen Memorable, then try again."
+        }
+    }()
+
+    var body: some View {
+        ZStack {
+            Celestial.Colors.background.ignoresSafeArea()
+            ScrollView {
+                Text(Self.policyText)
+                    .font(.body)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(24)
+            }
+        }
+        .navigationTitle("Privacy")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarColorScheme(.dark, for: .navigationBar)
     }
 }
 

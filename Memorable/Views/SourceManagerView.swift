@@ -39,12 +39,14 @@ struct SourceManagerView: View {
                                 indexingService.startIndexing()
                             }
                             .buttonStyle(CelestialButtonStyle())
+                            .disabled(!database.allowsIndexingWrites)
                         } else {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundStyle(Celestial.Colors.primaryDim)
                         }
                     }
                     .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+                    .disabled(!database.allowsIndexingWrites)
                 } header: {
                     Text("Photo Library")
                 } footer: {
@@ -71,6 +73,16 @@ struct SourceManagerView: View {
                                     .font(.caption)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
+                            Spacer()
+                            Button {
+                                indexingService.reindexFolderSource(source)
+                            } label: {
+                                Image(systemName: "arrow.clockwise.circle")
+                                    .foregroundStyle(Celestial.Colors.primaryDim)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(indexingService.progress.isRunning)
+                            .accessibilityLabel("Refresh \(source.name)")
                         }
                         .listRowBackground(Celestial.Colors.surfaceContainerHigh)
                     }
@@ -101,6 +113,7 @@ struct SourceManagerView: View {
                             .foregroundStyle(Celestial.Colors.primaryFixedDim)
                     }
                     .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+                    .disabled(!database.allowsIndexingWrites)
                 } header: {
                     Text("Folders")
                 }
@@ -118,16 +131,28 @@ struct SourceManagerView: View {
             }
         }
         .task { await loadSources() }
+        .onChange(of: indexingService.progress.isRunning) { wasRunning, isRunning in
+            guard wasRunning, !isRunning else { return }
+            Task { await loadSources() }
+        }
         .sheet(isPresented: $showUpgrade) {
             UpgradeView()
         }
         .alert("Error", isPresented: .init(
-            get: { deleteError != nil },
-            set: { if !$0 { deleteError = nil } }
+            get: { deleteError != nil || indexingService.folderIndexingError != nil },
+            set: {
+                if !$0 {
+                    deleteError = nil
+                    indexingService.clearFolderIndexingError()
+                }
+            }
         )) {
-            Button("OK") { deleteError = nil }
+            Button("OK") {
+                deleteError = nil
+                indexingService.clearFolderIndexingError()
+            }
         } message: {
-            Text(deleteError ?? "")
+            Text(deleteError ?? indexingService.folderIndexingError ?? "")
         }
     }
 

@@ -5,6 +5,83 @@ import os
 
 @MainActor
 final class ProManagerTests: XCTestCase {
+    func testRuntimePolicyMatchesBuildConfiguration() {
+        #if DEBUG
+        XCTAssertEqual(
+            ProRuntimePolicy.current,
+            ProRuntimePolicy(
+                initiallyPro: true,
+                performsEntitlementVerification: false,
+                listensForTransactionUpdates: false
+            )
+        )
+        #else
+        XCTAssertEqual(
+            ProRuntimePolicy.current,
+            ProRuntimePolicy(
+                initiallyPro: false,
+                performsEntitlementVerification: true,
+                listensForTransactionUpdates: true
+            )
+        )
+        #endif
+    }
+
+    func testInjectedEntitledVerificationPublishesProWithoutLiveListener() async {
+        var verificationCount = 0
+        let manager = ProManager(
+            productLoader: { _ in [] },
+            entitlementVerifier: {
+                verificationCount += 1
+                return .entitled
+            }
+        )
+        manager.isPro = false
+
+        await manager.verifyEntitlement()
+
+        XCTAssertEqual(verificationCount, 1)
+        XCTAssertTrue(manager.isPro)
+        #if DEBUG
+        XCTAssertFalse(manager.isTransactionListenerRunning)
+        #endif
+    }
+
+    func testInjectedMissingEntitlementRevokesAndReconciles() async {
+        let manager = ProManager(
+            productLoader: { _ in [] },
+            entitlementVerifier: { .notEntitled }
+        )
+        manager.isPro = true
+        var reconciliationCount = 0
+        manager.onFreeTierReconciliationNeeded = {
+            reconciliationCount += 1
+        }
+
+        await manager.verifyEntitlement()
+
+        XCTAssertFalse(manager.isPro)
+        XCTAssertEqual(reconciliationCount, 1)
+        #if DEBUG
+        XCTAssertFalse(manager.isTransactionListenerRunning)
+        #endif
+    }
+
+    func testInjectedIndeterminateVerificationPreservesEntitlement() async {
+        let manager = ProManager(
+            productLoader: { _ in [] },
+            entitlementVerifier: { .indeterminate }
+        )
+        manager.isPro = true
+
+        await manager.verifyEntitlement()
+
+        XCTAssertTrue(manager.isPro)
+        #if DEBUG
+        XCTAssertFalse(manager.isTransactionListenerRunning)
+        #endif
+    }
+
     func testProductLoadingIsDeferredAndConcurrentRequestsAreCoalesced() async {
         var loadCount = 0
         var delayCount = 0

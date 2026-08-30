@@ -1,4 +1,16 @@
 import Foundation
+import Photos
+
+enum PhotoAuthorizationRecoveryPolicy {
+    static func shouldInitialize(
+        authorizationStatus: PHAuthorizationStatus,
+        isShellReady: Bool,
+        isInitializing: Bool
+    ) -> Bool {
+        guard !isShellReady, !isInitializing else { return false }
+        return authorizationStatus == .authorized || authorizationStatus == .limited
+    }
+}
 
 enum ReadinessStatus: Equatable {
     case unavailable

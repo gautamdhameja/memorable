@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppKeys.onboardingComplete) private var onboardingComplete: Bool = false
     @AppStorage(AppKeys.startIndexAfterOnboarding) private var startIndexAfterOnboarding = false
 
@@ -33,6 +34,10 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .task(id: onboardingComplete) {
             await initializeIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active, onboardingComplete else { return }
+            Task { await appState.refreshPhotoAuthorization() }
         }
     }
 
