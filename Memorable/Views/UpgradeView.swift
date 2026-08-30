@@ -22,20 +22,20 @@ struct UpgradeView: View {
                         .foregroundStyle(Celestial.Colors.amber)
                         .padding(.top, 34)
 
-                    Text("Search more of\nyour library")
+                    Text("Search more local\nphotos and videos")
                         .font(.title.bold())
                         .tracking(-0.7)
                         .foregroundStyle(Celestial.Colors.onSurface)
                         .padding(.top, 16)
 
-                    Text("Move beyond the free 500-item index and make up to 8,000 photos and videos searchable.")
+                    Text("Move beyond the free 500-item index and search all photos and videos that are locally available to Memorable.")
                         .font(.body)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         .lineSpacing(5)
                         .padding(.top, 14)
 
                     VStack(spacing: 0) {
-                        proFeature("Larger index", detail: "Search up to 8,000 photos and videos")
+                        proFeature("Expanded local search", detail: "Search every locally available indexed photo and video")
                         proFeature("Find similar", detail: "Start from a photo instead of a description")
                         proFeature("Negative search", detail: "Leave things out, like “beach -crowds”")
                         proFeature("Folder sources", detail: "Index photos outside the Photos library")

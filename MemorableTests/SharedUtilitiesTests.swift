@@ -19,13 +19,43 @@ final class SharedUtilitiesTests: XCTestCase {
         let legacyKey = AppKeys.folderBookmark(sourceId: sourceID)
         let bookmark = Data([1, 2, 3, 4])
         UserDefaults.standard.set(bookmark, forKey: legacyKey)
-        defer { FolderBookmarkStore.remove(for: sourceID) }
+        defer { try? FolderBookmarkStore.remove(for: sourceID) }
 
         XCTAssertEqual(FolderBookmarkStore.data(for: sourceID), bookmark)
         XCTAssertNil(UserDefaults.standard.data(forKey: legacyKey))
         let bookmarkURL = try FolderBookmarkStore.bookmarkURL(for: sourceID)
         let values = try bookmarkURL.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(values.isExcludedFromBackup, true)
+    }
+
+    func testFolderBookmarkRemovalFailurePreservesLegacyDataForRetry() throws {
+        enum ForcedFailure: Error { case removeDenied }
+        let sourceID = UUID().uuidString
+        let legacyKey = AppKeys.folderBookmark(sourceId: sourceID)
+        let bookmark = Data([5, 4, 3])
+        UserDefaults.standard.set(bookmark, forKey: legacyKey)
+        defer { UserDefaults.standard.removeObject(forKey: legacyKey) }
+
+        XCTAssertThrowsError(try FolderBookmarkStore.remove(
+            for: sourceID,
+            removeItem: { _ in throw ForcedFailure.removeDenied }
+        )) { error in
+            XCTAssertTrue(error is ForcedFailure)
+        }
+        XCTAssertEqual(UserDefaults.standard.data(forKey: legacyKey), bookmark)
+    }
+
+    func testFolderBookmarkRemovalTreatsMissingFileAsSuccess() throws {
+        let sourceID = UUID().uuidString
+        let legacyKey = AppKeys.folderBookmark(sourceId: sourceID)
+        UserDefaults.standard.set(Data([9, 8, 7]), forKey: legacyKey)
+        defer { UserDefaults.standard.removeObject(forKey: legacyKey) }
+
+        try FolderBookmarkStore.remove(for: sourceID) { _ in
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        XCTAssertNil(UserDefaults.standard.data(forKey: legacyKey))
     }
 
     func testSurpriseMatchProfileMigratesToExcludedLocalState() throws {
@@ -87,15 +117,15 @@ final class SharedUtilitiesTests: XCTestCase {
     }
 
     @MainActor
-    func testVideoPlaybackDisablesExternalRoutesAndPictureInPicture() {
+    func testVideoPlaybackAllowsUserSelectedAirPlayAndPictureInPicture() {
         let player = AVPlayer()
         let controller = AVPlayerViewController()
 
         PrivateVideoPlaybackConfiguration.apply(to: player, controller: controller)
 
-        XCTAssertFalse(player.allowsExternalPlayback)
+        XCTAssertTrue(player.allowsExternalPlayback)
         XCTAssertFalse(player.usesExternalPlaybackWhileExternalScreenIsActive)
-        XCTAssertFalse(controller.allowsPictureInPicturePlayback)
+        XCTAssertTrue(controller.allowsPictureInPicturePlayback)
     }
 
     @MainActor
@@ -128,6 +158,41 @@ final class SharedUtilitiesTests: XCTestCase {
 
         XCTAssertNil(resource)
         XCTAssertNil(weakResource.value)
+    }
+
+    func testActiveImageMemoryPressurePolicyPreservesOrSchedulesOneRecovery() {
+        XCTAssertEqual(
+            MemoryPressureImageRecoveryPolicy.decision(
+                hasImage: true,
+                isActive: true,
+                preserveVisibleImage: true
+            ),
+            .preserve
+        )
+        XCTAssertEqual(
+            MemoryPressureImageRecoveryPolicy.decision(
+                hasImage: true,
+                isActive: true,
+                preserveVisibleImage: false
+            ),
+            .releaseAndRetry
+        )
+        XCTAssertEqual(
+            MemoryPressureImageRecoveryPolicy.decision(
+                hasImage: false,
+                isActive: true,
+                preserveVisibleImage: true
+            ),
+            .releaseAndRetry
+        )
+        XCTAssertEqual(
+            MemoryPressureImageRecoveryPolicy.decision(
+                hasImage: true,
+                isActive: false,
+                preserveVisibleImage: true
+            ),
+            .release
+        )
     }
 
     // MARK: - L2 Normalization

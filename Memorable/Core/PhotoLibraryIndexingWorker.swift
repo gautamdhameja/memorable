@@ -30,45 +30,32 @@ enum VideoPersistenceOperation {
 }
 
 private struct PhotoAssetBatchCursor {
-    struct Selection {
-        let assets: [PHAsset]
-        let skippedCount: Int
-    }
-
     private let assets: PHFetchResult<PHAsset>
-    private let excludedIdentifiers: Set<String>
     private let batchSize: Int
     private var nextIndex = 0
 
     init(
         assets: PHFetchResult<PHAsset>,
-        excludedIdentifiers: Set<String>,
         batchSize: Int
     ) {
         self.assets = assets
-        self.excludedIdentifiers = excludedIdentifiers
         self.batchSize = max(1, batchSize)
     }
 
     var hasRemaining: Bool { nextIndex < assets.count }
 
-    mutating func nextBatch(maxCount: Int? = nil) -> Selection {
+    mutating func nextBatch(maxCount: Int? = nil) -> [PHAsset] {
         let limit = min(batchSize, maxCount.map { max(0, $0) } ?? batchSize)
-        guard limit > 0 else { return Selection(assets: [], skippedCount: 0) }
+        guard limit > 0 else { return [] }
 
         var selected: [PHAsset] = []
         selected.reserveCapacity(limit)
-        var skippedCount = 0
         while nextIndex < assets.count && selected.count < limit {
             let asset = assets.object(at: nextIndex)
             nextIndex += 1
-            if excludedIdentifiers.contains(asset.localIdentifier) {
-                skippedCount += 1
-            } else {
-                selected.append(asset)
-            }
+            selected.append(asset)
         }
-        return Selection(assets: selected, skippedCount: skippedCount)
+        return selected
     }
 }
 
@@ -87,13 +74,11 @@ final class PhotoLibraryIndexingWorker {
         pendingCount: Int,
         reservedAssetCount: Int,
         isPro: Bool
-    ) -> Int {
-        max(
+    ) -> Int? {
+        guard !isPro else { return nil }
+        return max(
             0,
-            FreeTier.indexLimit(isPro: isPro)
-                - confirmedCount
-                - pendingCount
-                - reservedAssetCount
+            FreeTier.maxIndexedMedia - confirmedCount - pendingCount - reservedAssetCount
         )
     }
 
@@ -111,7 +96,6 @@ final class PhotoLibraryIndexingWorker {
 
     final class Session {
         let videoAssets: PHFetchResult<PHAsset>
-        let alreadyIndexedVideos: Set<String>
         let isPro: Bool
         let startedAt: CFAbsoluteTime
         let hasMediaCandidates: Bool
@@ -120,7 +104,6 @@ final class PhotoLibraryIndexingWorker {
 
         init(
             videoAssets: PHFetchResult<PHAsset>,
-            alreadyIndexedVideos: Set<String>,
             isPro: Bool,
             startedAt: CFAbsoluteTime,
             hasMediaCandidates: Bool,
@@ -128,7 +111,6 @@ final class PhotoLibraryIndexingWorker {
             hitFreeLimit: Bool = false
         ) {
             self.videoAssets = videoAssets
-            self.alreadyIndexedVideos = alreadyIndexedVideos
             self.isPro = isPro
             self.startedAt = startedAt
             self.hasMediaCandidates = hasMediaCandidates
@@ -144,7 +126,6 @@ final class PhotoLibraryIndexingWorker {
         let currentProgress: () -> IndexingProgress
         let setProgress: (IndexingProgress) -> Void
         let setHitFreeLimit: (Bool) -> Void
-        let setReachedDeviceIndexLimit: (Bool) -> Void
         let reloadSearchIndex: () async -> Bool
     }
 
@@ -180,37 +161,26 @@ final class PhotoLibraryIndexingWorker {
         let (photoAssets, videoAssets) = await (photoFetch, videoFetch)
         let total = photoAssets.count + videoAssets.count
         callbacks.setHitFreeLimit(false)
-        callbacks.setReachedDeviceIndexLimit(false)
 
         #if DEBUG
         logger.info("[IndexingService] Starting indexing: \(total) total assets in library")
         #endif
         let startedAt = CFAbsoluteTimeGetCurrent()
 
-        let indexedIdentifiers: IndexedMediaIdentifiers
         let indexedMediaCount: Int
         do {
             let db = database
-            let state = try await Task.detached(priority: .userInitiated) {
-                (
-                    identifiers: try db.allIndexedMediaIdentifiers(),
-                    count: try db.indexedMediaCounts().total
-                )
+            indexedMediaCount = try await Task.detached(priority: .userInitiated) {
+                try db.indexedMediaCounts().total
             }.value
-            indexedIdentifiers = state.identifiers
-            indexedMediaCount = state.count
         } catch {
-            logger.error("Failed to load indexed media identifiers: \(error.safeDiagnosticCode)")
-            indexedIdentifiers = IndexedMediaIdentifiers(photos: [], videos: [])
-            indexedMediaCount = FreeTier.indexLimit(isPro: ProManager.shared.isPro)
+            logger.error("Failed to load indexed media count: \(error.safeDiagnosticCode)")
+            indexedMediaCount = ProManager.shared.isPro ? 0 : FreeTier.maxIndexedMedia
         }
-        let alreadyIndexed = indexedIdentifiers.photos
-        let alreadyIndexedVideos = indexedIdentifiers.videos
         let isPro = ProManager.shared.isPro
         var indexed = 0
         let populatedSession = Session(
             videoAssets: videoAssets,
-            alreadyIndexedVideos: alreadyIndexedVideos,
             isPro: isPro,
             startedAt: startedAt,
             hasMediaCandidates: photoAssets.count > 0 || videoAssets.count > 0,
@@ -218,7 +188,7 @@ final class PhotoLibraryIndexingWorker {
         )
 
         #if DEBUG
-        logger.info("[IndexingService] Library breakdown: \(photoAssets.count) photos, \(videoAssets.count) videos, \(alreadyIndexed.count) photos and \(alreadyIndexedVideos.count) videos already indexed")
+        logger.info("[IndexingService] Library breakdown: \(photoAssets.count) photos, \(videoAssets.count) videos, \(indexedMediaCount) media already indexed")
         #endif
 
         var currentProgress = IndexingProgress(
@@ -232,14 +202,13 @@ final class PhotoLibraryIndexingWorker {
 
         let checkpointInterval = searchableCheckpointInterval(forLibrarySize: total)
         var nextSearchableReloadCount = nextSearchableCheckpoint(
-            after: alreadyIndexed.count + alreadyIndexedVideos.count,
+            after: indexedMediaCount,
             isPro: isPro,
             interval: checkpointInterval
         )
         var lastProgressiveReloadAt: Date?
         var batchCursor = PhotoAssetBatchCursor(
             assets: photoAssets,
-            excludedIdentifiers: alreadyIndexed,
             batchSize: IndexingConfig.batchEncodeSize
         )
         var nextLoadTask: Task<LoadedPhotoBatch, Never>?
@@ -248,7 +217,7 @@ final class PhotoLibraryIndexingWorker {
         var reservedAssetCount = 0
         let prefetchEnabled = isPro && IndexingConfig.prefetchBatchCapacity > 0
 
-        func makeBatch() -> [PHAsset] {
+        func makeBatch() async -> [PHAsset] {
             let remainingAllowed = Self.remainingPhotoCapacity(
                 confirmedCount: populatedSession.indexedMediaCount,
                 pendingCount: batch.count,
@@ -256,16 +225,30 @@ final class PhotoLibraryIndexingWorker {
                 isPro: isPro
             )
             let selection = batchCursor.nextBatch(maxCount: remainingAllowed)
-            reservedAssetCount += selection.assets.count
-            if selection.skippedCount > 0 {
-                indexed += selection.skippedCount
+            guard !selection.isEmpty else { return [] }
+            let identifiers = selection.map(\.localIdentifier)
+            let existing: Set<String>
+            do {
+                let db = database
+                existing = try await Task.detached(priority: .utility) {
+                    try db.existingPhotoIdentifiers(in: identifiers)
+                }.value
+            } catch {
+                logger.error("Failed to check indexed photo batch: \(error.safeDiagnosticCode)")
+                return []
+            }
+            let assets = selection.filter { !existing.contains($0.localIdentifier) }
+            reservedAssetCount += assets.count
+            let skippedCount = selection.count - assets.count
+            if skippedCount > 0 {
+                indexed += skippedCount
                 currentProgress.completed = indexed
                 callbacks.setProgress(currentProgress)
             }
-            return selection.assets
+            return assets
         }
 
-        let firstBatch = makeBatch()
+        let firstBatch = await makeBatch()
         currentProgress.rateBaselineCompleted = indexed
         currentProgress.phaseStartedAt = Date()
         callbacks.setProgress(currentProgress)
@@ -286,13 +269,13 @@ final class PhotoLibraryIndexingWorker {
                 loadTask = prefetchedTask
                 nextLoadTask = nil
             } else {
-                let batchToLoad = makeBatch()
-                guard !batchToLoad.isEmpty else { break }
+                let batchToLoad = await makeBatch()
+                if batchToLoad.isEmpty { continue }
                 loadTask = loadPhotoBatchTask(assets: batchToLoad)
             }
 
             if prefetchEnabled {
-                let nextBatch = makeBatch()
+                let nextBatch = await makeBatch()
                 nextLoadTask = nextBatch.isEmpty ? nil : loadPhotoBatchTask(assets: nextBatch)
             }
 
@@ -441,10 +424,31 @@ final class PhotoLibraryIndexingWorker {
             callbacks.setProgress(currentProgress)
         }
 
+        var existingVideos: Set<String> = []
         for index in 0..<session.videoAssets.count {
             if Task.isCancelled { break }
+            if index.isMultiple(of: SearchIndexLimits.databasePageMediaItems) {
+                let end = min(
+                    session.videoAssets.count,
+                    index + SearchIndexLimits.databasePageMediaItems
+                )
+                var identifiers: [String] = []
+                identifiers.reserveCapacity(end - index)
+                for batchIndex in index..<end {
+                    identifiers.append(session.videoAssets.object(at: batchIndex).localIdentifier)
+                }
+                do {
+                    let db = database
+                    existingVideos = try await Task.detached(priority: .utility) {
+                        try db.existingVideoIdentifiers(in: identifiers)
+                    }.value
+                } catch {
+                    logger.error("Failed to check indexed video batch: \(error.safeDiagnosticCode)")
+                    return
+                }
+            }
             let asset = session.videoAssets.object(at: index)
-            if session.alreadyIndexedVideos.contains(asset.localIdentifier) {
+            if existingVideos.contains(asset.localIdentifier) {
                 indexed += 1
                 currentProgress.completed = indexed
                 callbacks.setProgress(currentProgress)
@@ -499,7 +503,6 @@ final class PhotoLibraryIndexingWorker {
 
     private func markIndexLimitReached(isPro: Bool) {
         callbacks.setHitFreeLimit(!isPro)
-        callbacks.setReachedDeviceIndexLimit(isPro)
     }
 
     private func persistPhotoBatch(_ photos: [IndexedPhoto]) async -> Int {
@@ -611,12 +614,6 @@ final class PhotoLibraryIndexingWorker {
 
     /// Separates successful persistence from the optional rebuild-state transition.
     private func indexVideo(asset: PHAsset) async -> VideoIndexingOutcome {
-        let db = database
-        let localIdentifier = asset.localIdentifier
-        let alreadyIndexed = await Task.detached(priority: .utility) {
-            (try? db.isVideoIndexed(localIdentifier: localIdentifier)) == true
-        }.value
-        guard !alreadyIndexed else { return .notPersisted }
         let durationSeconds = asset.duration
         guard durationSeconds > 0 else { return .notPersisted }
 

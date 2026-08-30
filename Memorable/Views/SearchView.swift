@@ -444,7 +444,7 @@ struct SearchView: View {
             if !viewModel.searchHistory.isEmpty {
                 searchHistoryView
             }
-            if (indexingService.hitFreeLimit || indexingService.reachedDeviceIndexLimit)
+            if indexingService.hitFreeLimit
                 && totalLibraryCount > searchEngine.totalSize {
                 Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
                     .font(.footnote)
@@ -534,13 +534,7 @@ struct SearchView: View {
     // re-scan already-indexed photos (startIndexing() skips those).
     @ViewBuilder
     private var resumeIndexingButton: some View {
-        if indexingService.reachedDeviceIndexLimit {
-            Text("Memorable limits the on-device index to 8,000 photos and videos to protect device memory.")
-                .font(.caption)
-                .foregroundStyle(Celestial.Colors.outline)
-                .multilineTextAlignment(.center)
-                .padding(.top, 10)
-        } else if proManager.isPro {
+        if proManager.isPro {
             Button(action: {
                 Haptics.medium()
                 indexingService.startIndexing()
@@ -916,7 +910,7 @@ struct SearchView: View {
             .padding(.bottom, 42)
 
             if indexingService.isReady && searchEngine.totalSize > 0 {
-                if (indexingService.hitFreeLimit || indexingService.reachedDeviceIndexLimit)
+                if indexingService.hitFreeLimit
                     && totalLibraryCount > searchEngine.totalSize {
                     Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
                         .font(.title3.weight(.semibold))

@@ -13,8 +13,11 @@ final class StoreKitConfigTests: XCTestCase {
         XCTAssertEqual(products[0].type, "NonConsumable")
         XCTAssertTrue(products[0].familyShareable)
         let descriptions = products[0].localizations.map(\.description)
-        XCTAssertTrue(descriptions.contains { $0.contains("8,000") })
-        XCTAssertFalse(descriptions.contains { $0.localizedCaseInsensitiveContains("unlimited") })
+        XCTAssertFalse(descriptions.contains { $0.contains("8,000") })
+        XCTAssertTrue(descriptions.contains {
+            $0.localizedCaseInsensitiveContains("locally available")
+                && $0.localizedCaseInsensitiveContains("photos and videos")
+        })
     }
 
     func testCurrentAndLegacyProductIdentifiersGrantProEntitlement() {

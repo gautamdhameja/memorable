@@ -81,11 +81,11 @@ private final class IndexLoadCoordinator: @unchecked Sendable {
     }
 }
 
-/// Coordinates immutable snapshot readers with replacement construction.
-/// Reloads wait for current readers, prevent new readers, and release the old
-/// snapshot before allocating its replacement so steady-state index memory is
-/// never intentionally doubled.
-private final class SearchActivityCoordinator: @unchecked Sendable {
+/// Prevents a reload from retaining accelerator-backed snapshots in active
+/// searches while a complete replacement is constructed. A reload blocks new
+/// searches, waits for current searches to release their snapshot, and then
+/// performs one bounded ownership transition. Waiters remain cancelable.
+private final class SearchIndexAccessCoordinator: @unchecked Sendable {
     private let condition = NSCondition()
     private var reloadInProgress = false
     private var activeSearches = 0
@@ -104,14 +104,8 @@ private final class SearchActivityCoordinator: @unchecked Sendable {
         activeSearches += 1
         condition.unlock()
 
-        do {
-            let result = try operation()
-            finishSearch()
-            return result
-        } catch {
-            finishSearch()
-            throw error
-        }
+        defer { finishSearch() }
+        return try operation()
     }
 
     func withSearchUnlessCancelled<T>(_ operation: () -> T) -> T? {
@@ -126,16 +120,23 @@ private final class SearchActivityCoordinator: @unchecked Sendable {
         activeSearches += 1
         condition.unlock()
 
-        let result = operation()
-        finishSearch()
-        return result
+        defer { finishSearch() }
+        return operation()
     }
 
     func withExclusiveReload(_ operation: () throws -> Void) throws {
         condition.lock()
         reloadInProgress = true
         while activeSearches > 0 {
-            condition.wait()
+            _ = condition.wait(until: Date().addingTimeInterval(0.025))
+            do {
+                try Task.checkCancellation()
+            } catch {
+                reloadInProgress = false
+                condition.broadcast()
+                condition.unlock()
+                throw error
+            }
         }
         condition.unlock()
 
@@ -158,13 +159,30 @@ private final class SearchActivityCoordinator: @unchecked Sendable {
     }
 }
 
+enum SearchIndexReloadPhase: Equatable, Sendable {
+    case idle
+    case loadingResidentData
+    case buildingAccelerators
+}
+
+struct SearchIndexMemoryState: Equatable, Sendable {
+    let reloadPhase: SearchIndexReloadPhase
+    let residentMediaCount: Int
+    let ownsPhotoAccelerator: Bool
+    let ownsVideoAccelerator: Bool
+}
+
 final class SearchEngine: Sendable {
     private let indexSnapshot: OSAllocatedUnfairLock<SearchIndexSnapshot>
     private let indexLoadCoordinator = IndexLoadCoordinator()
-    private let searchActivity = SearchActivityCoordinator()
+    private let indexAccessCoordinator = SearchIndexAccessCoordinator()
+    private let indexReloadPhase = OSAllocatedUnfairLock(
+        initialState: SearchIndexReloadPhase.idle
+    )
 
     private let embeddingDim = EmbeddingConfig.dimensions
     private let minimumScoreThreshold = SearchConfig.minimumScoreThreshold
+    private let residentMediaLimit: Int
 
     static let maxRecommendedPhotos = IndexingConfig.largeLibraryThreshold
     /// The UI progressively reveals results, but retaining every match can
@@ -181,12 +199,14 @@ final class SearchEngine: Sendable {
         textEncoder: TextEmbeddingEncoding,
         database: DatabaseProtocol = AppDatabase.shared,
         photoSimilaritySearch: SimilaritySearching? = nil,
-        videoSimilaritySearch: SimilaritySearching? = nil
+        videoSimilaritySearch: SimilaritySearching? = nil,
+        residentMediaLimit: Int = SearchIndexLimits.residentMediaItems
     ) {
         self.textEncoder = textEncoder
         self.database = database
         self.injectedPhotoSimilaritySearch = photoSimilaritySearch
         self.injectedVideoSimilaritySearch = videoSimilaritySearch
+        self.residentMediaLimit = max(1, min(residentMediaLimit, SearchIndexLimits.residentMediaItems))
         self.indexSnapshot = OSAllocatedUnfairLock(
             initialState: SearchIndexSnapshot(
                 photoSimilaritySearch: photoSimilaritySearch,
@@ -198,7 +218,7 @@ final class SearchEngine: Sendable {
     func loadIndex() throws {
         guard !isMemoryPressureSuspended else { return }
         try indexLoadCoordinator.run { [self] in
-            try searchActivity.withExclusiveReload {
+            try indexAccessCoordinator.withExclusiveReload {
                 guard !isMemoryPressureSuspended else { return }
                 try loadIndexOnce()
             }
@@ -210,28 +230,64 @@ final class SearchEngine: Sendable {
         let loadStart = CFAbsoluteTimeGetCurrent()
         #endif
 
-        // The safety-first reload contract deliberately gives up serving the
-        // previous index if construction fails. Keeping it here would double
-        // the largest allocation on every reload and can terminate the app on
-        // memory-constrained devices. A later reload repopulates the index.
-        let canLoad = indexSnapshot.withLock { snapshot in
-            guard !snapshot.isMemoryPressureSuspended else { return false }
-            snapshot = SearchIndexSnapshot()
-            return true
+        let loadGeneration = indexSnapshot.withLock { snapshot -> UInt? in
+            snapshot.isMemoryPressureSuspended ? nil : snapshot.memoryPressureGeneration
         }
-        guard canLoad else { return }
+        guard let loadGeneration else { return }
 
+        indexReloadPhase.withLock { $0 = .loadingResidentData }
+        defer { indexReloadPhase.withLock { $0 = .idle } }
+
+        // Active searches have drained and new searches are blocked. Release
+        // the old accelerator owners before allocating replacement rows. The
+        // previous CPU snapshot remains available for a failed or canceled
+        // database load, which is the minimum extra copy needed for recovery.
+        let retiredAccelerators = indexSnapshot.withLock { snapshot in
+            let accelerators = (
+                photo: snapshot.photoSimilaritySearch,
+                video: snapshot.videoSimilaritySearch
+            )
+            snapshot.photoSimilaritySearch = nil
+            snapshot.videoSimilaritySearch = nil
+            return accelerators
+        }
+        retiredAccelerators.photo?.buildIndex(embeddings: [], count: 0)
+        if retiredAccelerators.video !== retiredAccelerators.photo {
+            retiredAccelerators.video?.buildIndex(embeddings: [], count: 0)
+        }
         try Task.checkCancellation()
-        let photoIndex = try database.loadAllEmbeddings()
+        let residentPage = try database.loadSearchMediaPage(after: nil, limit: residentMediaLimit)
+        let photoIndex = residentPage.photos
+        let videoIndex = residentPage.videos
         try Task.checkCancellation()
-        guard !isMemoryPressureSuspended else { return }
-        let videoIndex = try database.loadAllVideoEmbeddings()
-        try Task.checkCancellation()
-        guard !isMemoryPressureSuspended else { return }
+        guard isSearchGenerationActive(loadGeneration) else { return }
         guard photoIndex.kind == .photo, videoIndex.kind == .videoFrame else {
             logger.error("[SearchEngine] Persisted index has unexpected media kinds")
             throw SearchEngineError.corruptedIndex
         }
+
+        // Commit validated CPU data first. These MediaIndex values share their
+        // backing array storage with residentPage, so this swap does not copy
+        // the embedding matrix. The old CPU snapshot is released before any
+        // replacement GPU buffer is allocated.
+        let installedResidentData = indexSnapshot.withLock { snapshot -> Bool in
+            guard !snapshot.isMemoryPressureSuspended,
+                  snapshot.memoryPressureGeneration == loadGeneration else { return false }
+            snapshot = SearchIndexSnapshot(
+                photos: photoIndex,
+                videos: videoIndex,
+                uniqueVideoCount: videoIndex.uniqueIDCount,
+                persistedPhotoCount: residentPage.totalPhotoCount,
+                persistedVideoCount: residentPage.totalVideoCount,
+                nextPageCursor: residentPage.nextCursor,
+                memoryPressureGeneration: loadGeneration
+            )
+            return true
+        }
+        guard installedResidentData else { return }
+
+        indexReloadPhase.withLock { $0 = .buildingAccelerators }
+        try Task.checkCancellation()
 
         let newGPUSearch: SimilaritySearching?
         let newGPUVideoSearch: SimilaritySearching?
@@ -239,8 +295,8 @@ final class SearchEngine: Sendable {
         newGPUSearch = injectedPhotoSimilaritySearch
         newGPUVideoSearch = injectedVideoSimilaritySearch
         #else
-        // Build into fresh production scorers so an in-flight search can keep
-        // using the previous immutable index until the locked swap below.
+        // Build fresh production scorers only after the old snapshot and its
+        // GPU buffers have been released.
         newGPUSearch = injectedPhotoSimilaritySearch ?? GPUSimilaritySearch()
         newGPUVideoSearch = injectedVideoSimilaritySearch ?? GPUSimilaritySearch()
         #endif
@@ -249,22 +305,16 @@ final class SearchEngine: Sendable {
         newGPUSearch?.buildIndex(embeddings: photoIndex.embeddings, count: photoIndex.count)
         try Task.checkCancellation()
         if videoIndex.count > 0 {
-            guard !isMemoryPressureSuspended else { return }
+            guard isSearchGenerationActive(loadGeneration) else { return }
             newGPUVideoSearch?.buildIndex(embeddings: videoIndex.embeddings, count: videoIndex.count)
         }
         try Task.checkCancellation()
 
         indexSnapshot.withLock {
-            guard !$0.isMemoryPressureSuspended else { return }
-            let memoryPressureGeneration = $0.memoryPressureGeneration
-            $0 = SearchIndexSnapshot(
-                photos: photoIndex,
-                videos: videoIndex,
-                uniqueVideoCount: videoIndex.uniqueIDCount,
-                photoSimilaritySearch: newGPUSearch,
-                videoSimilaritySearch: videoIndex.count == 0 ? nil : newGPUVideoSearch,
-                memoryPressureGeneration: memoryPressureGeneration
-            )
+            guard !$0.isMemoryPressureSuspended,
+                  $0.memoryPressureGeneration == loadGeneration else { return }
+            $0.photoSimilaritySearch = newGPUSearch
+            $0.videoSimilaritySearch = videoIndex.count == 0 ? nil : newGPUVideoSearch
         }
 
         let count = photoIndex.count
@@ -288,6 +338,18 @@ final class SearchEngine: Sendable {
         }
     }
 
+    var indexMemoryState: SearchIndexMemoryState {
+        let phase = indexReloadPhase.withLock { $0 }
+        return indexSnapshot.withLock {
+            SearchIndexMemoryState(
+                reloadPhase: phase,
+                residentMediaCount: $0.photos.count + $0.videos.count,
+                ownsPhotoAccelerator: $0.photoSimilaritySearch != nil,
+                ownsVideoAccelerator: $0.videoSimilaritySearch != nil
+            )
+        }
+    }
+
     var isLargeLibrary: Bool {
         indexSnapshot.withLock {
             ($0.photos.count + $0.videos.count) > Self.maxRecommendedPhotos
@@ -295,19 +357,23 @@ final class SearchEngine: Sendable {
     }
 
     var indexSize: Int {
-        indexSnapshot.withLock { $0.photos.count }
+        indexSnapshot.withLock { $0.persistedPhotoCount }
     }
 
     var videoSize: Int {
-        indexSnapshot.withLock { $0.uniqueVideoCount }
+        indexSnapshot.withLock { $0.persistedVideoCount }
     }
 
     var totalSize: Int {
+        indexSnapshot.withLock { $0.persistedPhotoCount + $0.persistedVideoCount }
+    }
+
+    var residentSize: Int {
         indexSnapshot.withLock { $0.photos.count + $0.uniqueVideoCount }
     }
 
     var isIndexLoaded: Bool {
-        indexSnapshot.withLock { $0.photos.count + $0.videos.count > 0 }
+        indexSnapshot.withLock { $0.persistedPhotoCount + $0.persistedVideoCount > 0 }
     }
 
     var isMemoryPressureSuspended: Bool {
@@ -433,7 +499,7 @@ final class SearchEngine: Sendable {
         featurePolicy: SearchFeaturePolicy,
         memoryPressureGeneration: UInt
     ) throws -> SearchResponse {
-        try searchActivity.withSearch {
+        try indexAccessCoordinator.withSearch {
             try SearchCancellation.$additionalCheck.withValue({ [weak self] in
                 guard let self else { throw CancellationError() }
                 try self.checkSearchGeneration(memoryPressureGeneration)
@@ -460,6 +526,9 @@ final class SearchEngine: Sendable {
     private func performHybridSearch(hints: QueryHints) throws -> SearchResponse {
         try SearchCancellation.checkNow()
         let snapshot = indexSnapshot.withLock { $0 }
+        if snapshot.nextPageCursor != nil {
+            return try performWholeLibrarySearch(hints: hints, residentSnapshot: snapshot)
+        }
         let photos = snapshot.photos
         let videos = snapshot.videos
 
@@ -853,6 +922,329 @@ final class SearchEngine: Sendable {
         return SearchResponse(results: allResults, fallbackResults: [], filtersApplied: appliedSummary)
     }
 
+    private struct WholeLibrarySearchPlan {
+        let hints: QueryHints
+        let locationMatcher: LocationMatcher.Matcher?
+        let targetLocation: CLLocation?
+        let queryEmbedding: [Float]?
+        let negativeEmbeddings: [[Float]]
+    }
+
+    private struct WholeLibrarySearchPage {
+        let photos: MediaIndex
+        let videos: MediaIndex
+        let photoGPU: SimilaritySearching?
+        let videoGPU: SimilaritySearching?
+    }
+
+    private struct WholeLibrarySearchAccumulator {
+        var photoCandidates: [SearchResult] = []
+        var videoCandidates: [SearchResult] = []
+        var locationCandidates: [SearchResult] = []
+        var unfilteredPhotoFallback: [SearchResult] = []
+        var photoCandidateCount = 0
+        var videoCandidateFrameCount = 0
+
+        mutating func retainPhoto(_ result: SearchResult) {
+            BoundedTopK.insert(
+                result,
+                into: &photoCandidates,
+                limit: SearchEngine.maximumRetainedResults,
+                isPreferred: SearchResultRanking.isPreferred
+            )
+        }
+
+        mutating func retainVideo(_ result: SearchResult) {
+            BoundedTopK.insert(
+                result,
+                into: &videoCandidates,
+                limit: SearchEngine.maximumRetainedResults,
+                isPreferred: SearchResultRanking.isPreferred
+            )
+        }
+
+        mutating func retainLocation(_ result: SearchResult) {
+            BoundedTopK.insert(
+                result,
+                into: &locationCandidates,
+                limit: SearchEngine.maximumRetainedResults,
+                isPreferred: SearchResultRanking.isPreferredLocation
+            )
+        }
+
+        mutating func retainUnfilteredFallback(_ result: SearchResult) {
+            BoundedTopK.insert(
+                result,
+                into: &unfilteredPhotoFallback,
+                limit: 5,
+                isPreferred: SearchResultRanking.isPreferred
+            )
+        }
+    }
+
+    /// Searches the persisted library a bounded page at a time. Threshold and
+    /// sparse-fallback decisions are deferred until every page has contributed,
+    /// so page boundaries cannot change global ranking semantics.
+    private func performWholeLibrarySearch(
+        hints: QueryHints,
+        residentSnapshot: SearchIndexSnapshot
+    ) throws -> SearchResponse {
+        var accumulator = WholeLibrarySearchAccumulator()
+        let locationMatcher: LocationMatcher.Matcher? = hints.locationHint.map {
+            LocationMatcher.makeMatcher(
+                queryLower: $0.lowercased(),
+                locality: hints.locationLocality,
+                adminArea: hints.locationAdminArea,
+                country: hints.locationCountryName
+            )
+        }
+        let targetLoc: CLLocation?
+        if let coordinate = hints.locationCoordinate,
+           hints.locationHint != nil,
+           hints.locationRadiusKm != nil {
+            targetLoc = CLLocation(latitude: coordinate.lat, longitude: coordinate.lon)
+        } else {
+            targetLoc = nil
+        }
+
+        let queryEmbedding = isPureLocationQuery(hints)
+            ? nil
+            : try encodeQuery(text: hints.textQuery)
+        var negativeEmbeddings: [[Float]] = []
+        if queryEmbedding != nil {
+            for negativeTerm in hints.negativeTerms {
+                try SearchCancellation.checkNow()
+                negativeEmbeddings.append(try encodeQuery(text: negativeTerm))
+            }
+        }
+        let plan = WholeLibrarySearchPlan(
+            hints: hints,
+            locationMatcher: locationMatcher,
+            targetLocation: targetLoc,
+            queryEmbedding: queryEmbedding,
+            negativeEmbeddings: negativeEmbeddings
+        )
+
+        try accumulateSearchPage(
+            WholeLibrarySearchPage(
+                photos: residentSnapshot.photos,
+                videos: residentSnapshot.videos,
+                photoGPU: residentSnapshot.photoSimilaritySearch,
+                videoGPU: residentSnapshot.videoSimilaritySearch
+            ),
+            plan: plan,
+            accumulator: &accumulator
+        )
+
+        var cursor = residentSnapshot.nextPageCursor
+        var previousCursor: SearchMediaPageCursor?
+        while let currentCursor = cursor {
+            try SearchCancellation.checkNow()
+            guard currentCursor != previousCursor else {
+                throw SearchEngineError.corruptedIndex
+            }
+            let page = try database.loadSearchMediaPage(
+                after: currentCursor,
+                limit: SearchIndexLimits.databasePageMediaItems
+            )
+            guard page.mediaCount > 0 else {
+                throw SearchEngineError.corruptedIndex
+            }
+            try accumulateSearchPage(
+                WholeLibrarySearchPage(
+                    photos: page.photos,
+                    videos: page.videos,
+                    photoGPU: nil,
+                    videoGPU: nil
+                ),
+                plan: plan,
+                accumulator: &accumulator
+            )
+            previousCursor = currentCursor
+            cursor = page.nextCursor
+        }
+
+        return try finalizeWholeLibrarySearch(accumulator, hints: hints)
+    }
+
+    private func accumulateSearchPage(
+        _ page: WholeLibrarySearchPage,
+        plan: WholeLibrarySearchPlan,
+        accumulator: inout WholeLibrarySearchAccumulator
+    ) throws {
+        let hints = plan.hints
+        let photoMask = try candidateMask(
+            for: page.photos,
+            hints: hints,
+            locationMatcher: plan.locationMatcher,
+            targetLoc: plan.targetLocation
+        )
+        let videoMask = try candidateMask(
+            for: page.videos,
+            hints: hints,
+            locationMatcher: plan.locationMatcher,
+            targetLoc: plan.targetLocation
+        )
+        accumulator.photoCandidateCount += try trueCount(in: photoMask)
+        accumulator.videoCandidateFrameCount += try trueCount(in: videoMask)
+
+        if isPureLocationQuery(hints) {
+            let response = try SearchResultRanking.locationOnlyResults(media: [
+                (index: page.photos, candidateMask: photoMask),
+                (index: page.videos, candidateMask: videoMask),
+            ])
+            for result in response.results { accumulator.retainLocation(result) }
+            return
+        }
+
+        guard let queryEmbedding = plan.queryEmbedding else { return }
+        let photoScoring = try scoreMedia(
+            page.photos,
+            candidateMask: photoMask,
+            queryEmbedding: queryEmbedding,
+            negativeEmbeddings: plan.negativeEmbeddings,
+            hints: hints,
+            targetLoc: plan.targetLocation,
+            gpuSearch: page.photoGPU
+        )
+        let videoScoring = try scoreMedia(
+            page.videos,
+            candidateMask: videoMask,
+            queryEmbedding: queryEmbedding,
+            negativeEmbeddings: plan.negativeEmbeddings,
+            hints: hints,
+            targetLoc: plan.targetLocation,
+            gpuSearch: page.videoGPU
+        )
+
+        for row in 0..<page.photos.count {
+            try SearchCancellation.check(row)
+            if photoMask[row] {
+                accumulator.retainPhoto(try SearchResultRanking.result(
+                    for: page.photos,
+                    row: row,
+                    score: photoScoring.scores[row]
+                ))
+            }
+            if (hints.dateRange != nil || hints.locationHint != nil),
+               photoScoring.rawScores[row] >= minimumScoreThreshold {
+                accumulator.retainUnfilteredFallback(try SearchResultRanking.result(
+                    for: page.photos,
+                    row: row,
+                    score: photoScoring.rawScores[row]
+                ))
+            }
+        }
+
+        var maskedVideoScores = videoScoring.scores
+        for row in 0..<maskedVideoScores.count where !videoMask[row] {
+            try SearchCancellation.check(row)
+            maskedVideoScores[row] = -.infinity
+        }
+        let bestVideoFrames = try SearchResultRanking.results(
+            for: page.videos,
+            scores: maskedVideoScores,
+            threshold: Float.leastNonzeroMagnitude
+        )
+        for result in bestVideoFrames { accumulator.retainVideo(result) }
+    }
+
+    private func finalizeWholeLibrarySearch(
+        _ accumulator: WholeLibrarySearchAccumulator,
+        hints: QueryHints
+    ) throws -> SearchResponse {
+        if isPureLocationQuery(hints) {
+            return SearchResponse(
+                results: BoundedTopK.sorted(
+                    accumulator.locationCandidates,
+                    isPreferred: SearchResultRanking.isPreferredLocation
+                ),
+                fallbackResults: [],
+                filtersApplied: nil
+            )
+        }
+
+        let filtersActive = hints.dateRange != nil || hints.locationHint != nil
+        let summary = FilterSummary(
+            dateDescription: hints.dateRange.map { formatDateRange($0) },
+            locationDescription: hints.locationHint,
+            visualQuery: hints.textQuery
+        )
+        if filtersActive,
+           accumulator.photoCandidateCount + accumulator.videoCandidateFrameCount == 0 {
+            return SearchResponse(
+                results: [],
+                fallbackResults: BoundedTopK.sorted(
+                    accumulator.unfilteredPhotoFallback,
+                    isPreferred: SearchResultRanking.isPreferred
+                ),
+                filtersApplied: summary
+            )
+        }
+
+        let sortedPhotos = BoundedTopK.sorted(
+            accumulator.photoCandidates,
+            isPreferred: SearchResultRanking.isPreferred
+        )
+        let sortedVideos = BoundedTopK.sorted(
+            accumulator.videoCandidates,
+            isPreferred: SearchResultRanking.isPreferred
+        )
+        var effectivePhotoThreshold = minimumScoreThreshold
+        if !filtersActive {
+            let photoTop = Array(sortedPhotos.prefix(SearchConfig.topK))
+            if !photoTop.contains(where: { $0.score >= minimumScoreThreshold }),
+               let topScore = photoTop.first?.score,
+               topScore >= 0.06,
+               photoTop.filter({ $0.score >= topScore * 0.8 }).count >= 3 {
+                effectivePhotoThreshold = topScore * 0.6
+            }
+        }
+
+        let main = try BoundedTopK.select(
+            from: sortedPhotos.filter { $0.score >= effectivePhotoThreshold }
+                + sortedVideos.filter { $0.score >= minimumScoreThreshold },
+            limit: Self.maximumRetainedResults,
+            isPreferred: SearchResultRanking.isPreferred,
+            cancellationCheck: SearchCancellation.check
+        )
+
+        let topResultScore = main.first?.score ?? 0
+        let clipIsConfident = topResultScore >= minimumScoreThreshold * 1.25
+        let clipMatchedTooFew = main.count < SearchConfig.sparseClipMinResults
+            && accumulator.photoCandidateCount > 0
+            && Double(main.count) / Double(accumulator.photoCandidateCount)
+                < SearchConfig.sparseClipMaxRatio
+        if filtersActive && clipMatchedTooFew && !clipIsConfident {
+            let merged = try BoundedTopK.select(
+                from: sortedPhotos + sortedVideos,
+                limit: SearchConfig.locationResultsCap,
+                isPreferred: SearchResultRanking.isPreferred,
+                cancellationCheck: SearchCancellation.check
+            )
+            if (merged.first?.score ?? 0) < SearchConfig.sparseClipMinScore {
+                return SearchResponse(results: [], fallbackResults: merged, filtersApplied: summary)
+            }
+            return SearchResponse(results: merged, fallbackResults: [], filtersApplied: summary)
+        }
+
+        if main.isEmpty && hints.hasVisualQuery {
+            let nearMiss = try BoundedTopK.select(
+                from: sortedPhotos.filter { $0.score > 0 } + sortedVideos,
+                limit: SearchConfig.topK,
+                isPreferred: SearchResultRanking.isPreferred,
+                cancellationCheck: SearchCancellation.check
+            )
+            return SearchResponse(results: [], fallbackResults: nearMiss, filtersApplied: summary)
+        }
+
+        return SearchResponse(
+            results: main,
+            fallbackResults: [],
+            filtersApplied: filtersActive ? summary : nil
+        )
+    }
+
     // MARK: - Helper Methods
 
     private func computeFallbackResults(
@@ -898,79 +1290,112 @@ final class SearchEngine: Sendable {
     // MARK: - Similar Photos
 
     func findSimilar(photoId: String, topK: Int = 50) -> [SearchResult] {
-        searchActivity.withSearchUnlessCancelled {
-            performFindSimilar(photoId: photoId, topK: topK)
+        let generation = indexSnapshot.withLock { $0.memoryPressureGeneration }
+        guard !Task.isCancelled else { return [] }
+        return indexAccessCoordinator.withSearchUnlessCancelled {
+            performFindSimilar(photoId: photoId, topK: topK, generation: generation)
         } ?? []
     }
 
-    private func performFindSimilar(photoId: String, topK: Int) -> [SearchResult] {
+    private func performFindSimilar(photoId: String, topK: Int, generation: UInt) -> [SearchResult] {
         guard !Task.isCancelled else { return [] }
         let snapshot = indexSnapshot.withLock { $0 }
-        let photos = snapshot.photos
-        let ids = photos.ids
-        let localIds = photos.localIdentifiers
-        let sourceIds = photos.sourceIds
-        let filePaths = photos.filePaths
-        let photoDates = photos.dates
-        let matrix = photos.embeddings
-        let count = photos.count
-        let photoGPU = snapshot.photoSimilaritySearch
-
-        guard let sourceIndex = ids.firstIndex(of: photoId) else { return [] }
-
-        // Extract source embedding as Float32 for GPU query
-        let offset = sourceIndex * embeddingDim
-        var sourceEmbedding = [Float](repeating: 0, count: embeddingDim)
-        for j in 0..<embeddingDim {
-            if j.isMultiple(of: SearchCancellation.checkInterval), Task.isCancelled { return [] }
-            sourceEmbedding[j] = Float(matrix[offset + j])
-        }
-
-        // GPU search with CPU fallback
-        var scores: [Float]
-        if let gpuScores = photoGPU?.search(queryEmbedding: sourceEmbedding), gpuScores.count == count {
-            guard !Task.isCancelled else { return [] }
-            scores = gpuScores
-            scores[sourceIndex] = 0 // exclude self
+        let sourceIndex = snapshot.photos.ids.firstIndex(of: photoId)
+        let sourceMedia: MediaIndex
+        let sourceRow: Int
+        if let sourceIndex {
+            sourceMedia = snapshot.photos
+            sourceRow = sourceIndex
         } else {
-            scores = [Float](repeating: 0, count: count)
-            var rowBuf = [Float](repeating: 0, count: embeddingDim)
-            for i in 0..<count {
-                if i.isMultiple(of: SearchCancellation.checkInterval), Task.isCancelled { return [] }
-                if i == sourceIndex { continue }
-                let rowOffset = i * embeddingDim
-                for j in 0..<embeddingDim { rowBuf[j] = Float(matrix[rowOffset + j]) }
-                var dot: Float = 0
-                vDSP_dotpr(sourceEmbedding, 1, rowBuf, 1, &dot, vDSP_Length(embeddingDim))
-                scores[i] = dot
+            do {
+                guard let loaded = try database.loadPhotoEmbedding(id: photoId),
+                      loaded.count == 1 else { return [] }
+                sourceMedia = loaded
+                sourceRow = 0
+            } catch {
+                logger.error("[SearchEngine] Failed to load the Find Similar source: \(error.safeDiagnosticCode)")
+                return []
             }
         }
 
-        guard !Task.isCancelled else { return [] }
-        guard let topRows = try? BoundedTopK.rows(
-            count: scores.count,
-            limit: topK,
-            includes: { scores[$0] >= minimumScoreThreshold },
-            isPreferred: { lhs, rhs in
-                if scores[lhs] != scores[rhs] { return scores[lhs] > scores[rhs] }
-                return lhs < rhs
-            },
-            cancellationCheck: SearchCancellation.check
-        ) else { return [] }
+        let offset = sourceRow * embeddingDim
+        var sourceEmbedding = [Float](repeating: 0, count: embeddingDim)
+        for j in 0..<embeddingDim {
+            if j.isMultiple(of: SearchCancellation.checkInterval), Task.isCancelled { return [] }
+            sourceEmbedding[j] = Float(sourceMedia.embeddings[offset + j])
+        }
+        var retained: [SearchResult] = []
+        do {
+            try retainSimilarResults(
+                in: snapshot.photos,
+                sourceID: photoId,
+                sourceEmbedding: sourceEmbedding,
+                gpuSearch: snapshot.photoSimilaritySearch,
+                limit: topK,
+                retained: &retained,
+                generation: generation
+            )
+            var cursor = snapshot.nextPageCursor
+            var previousCursor: SearchMediaPageCursor?
+            while let currentCursor = cursor {
+                try checkSearchGeneration(generation)
+                guard currentCursor != previousCursor else {
+                    throw SearchEngineError.corruptedIndex
+                }
+                let page = try database.loadSearchMediaPage(
+                    after: currentCursor,
+                    limit: SearchIndexLimits.databasePageMediaItems
+                )
+                guard page.mediaCount > 0 else { throw SearchEngineError.corruptedIndex }
+                try retainSimilarResults(
+                    in: page.photos,
+                    sourceID: photoId,
+                    sourceEmbedding: sourceEmbedding,
+                    gpuSearch: nil,
+                    limit: topK,
+                    retained: &retained,
+                    generation: generation
+                )
+                previousCursor = currentCursor
+                cursor = page.nextCursor
+            }
+            return BoundedTopK.sorted(retained, isPreferred: SearchResultRanking.isPreferred)
+        } catch is CancellationError {
+            return []
+        } catch {
+            logger.error("[SearchEngine] Find Similar failed: \(error.safeDiagnosticCode)")
+            return []
+        }
+    }
 
-        return topRows.map { index in
-            let score = scores[index]
-            return SearchResult(
-                id: ids[index],
-                score: score,
-                localIdentifier: localIds[index],
-                creationDate: photoDates[index],
-                isVideo: false,
-                bestFramePosition: nil,
-                sourceId: sourceIds[index],
-                filePath: filePaths[index]
+    private func retainSimilarResults(
+        in photos: MediaIndex,
+        sourceID: String,
+        sourceEmbedding: [Float],
+        gpuSearch: SimilaritySearching?,
+        limit: Int,
+        retained: inout [SearchResult],
+        generation: UInt
+    ) throws {
+        try checkSearchGeneration(generation)
+        var scores = try scoreEmbeddings(
+            queryEmbedding: sourceEmbedding,
+            matrix: photos.embeddings,
+            count: photos.count,
+            gpuSearch: gpuSearch
+        )
+        for row in 0..<photos.count {
+            try SearchCancellation.check(row)
+            if photos.ids[row] == sourceID { scores[row] = -.infinity }
+            guard scores[row] >= minimumScoreThreshold else { continue }
+            BoundedTopK.insert(
+                try SearchResultRanking.result(for: photos, row: row, score: scores[row]),
+                into: &retained,
+                limit: limit,
+                isPreferred: SearchResultRanking.isPreferred
             )
         }
+        try checkSearchGeneration(generation)
     }
 
     // MARK: - Private

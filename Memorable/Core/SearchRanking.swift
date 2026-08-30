@@ -4,6 +4,9 @@ struct SearchIndexSnapshot: Sendable {
     var photos = MediaIndex(kind: .photo)
     var videos = MediaIndex(kind: .videoFrame)
     var uniqueVideoCount = 0
+    var persistedPhotoCount = 0
+    var persistedVideoCount = 0
+    var nextPageCursor: SearchMediaPageCursor?
     var photoSimilaritySearch: SimilaritySearching?
     var videoSimilaritySearch: SimilaritySearching?
     var isMemoryPressureSuspended = false
@@ -245,7 +248,7 @@ enum SearchResultRanking {
         }
     }
 
-    private static func result(
+    static func result(
         for index: MediaIndex,
         row: Int,
         score: Float
@@ -297,7 +300,7 @@ enum SearchResultRanking {
         return lhs < rhs
     }
 
-    private static func isPreferredLocation(_ lhs: SearchResult, _ rhs: SearchResult) -> Bool {
+    static func isPreferredLocation(_ lhs: SearchResult, _ rhs: SearchResult) -> Bool {
         let lhsDate = lhs.creationDate ?? .distantPast
         let rhsDate = rhs.creationDate ?? .distantPast
         if lhsDate != rhsDate { return lhsDate > rhsDate }

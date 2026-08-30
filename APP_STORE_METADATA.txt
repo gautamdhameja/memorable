@@ -21,19 +21,19 @@ Find a photo by describing what you remember.
 "Birthday cake with candles"
 "That hike with the waterfall"
 
-Memorable uses bundled, on-device AI to search the visual content of your photos and videos. Build a private index on your iPhone, then search with natural language instead of scrolling through your library.
+Memorable uses bundled, on-device AI to search the visual content of locally available photos and videos. Build a private index on your iPhone, then search with natural language instead of scrolling through your library.
 
 How it works
 ------------
 
-Grant Photo Library access and build the local search index. Memorable indexes photos first, makes them searchable at progressive checkpoints, and then processes video frames and optional metadata enrichment.
+Grant Photo Library access and build the local search index. Memorable indexes locally available photos first, makes them searchable at progressive checkpoints, and then processes locally available video frames and optional metadata enrichment. The app does not download iCloud-only media.
 
 Type a scene, object, date, season, or place. Memorable parses the query and ranks the local index. During indexing and search, photo and video contents and search query text stay on your iPhone. A photo is provided to another app or service only after you tap Share and choose a destination.
 
 Privacy
 -------
 
-Memorable has no developer backend, account system, analytics, tracking, ads, telemetry, or crash-report uploads.
+Memorable has no developer backend, account system, analytics, tracking, ads, telemetry, or crash-report uploads. Technical logs stay on the device because the app has no log-upload path.
 
 For location search, the app sends GPS coordinates contained in indexed media metadata to Apple's CLGeocoder service to resolve place names. It does not send media contents or search query text with those requests.
 
@@ -47,15 +47,15 @@ Free features
 - Search photos and videos with natural language.
 - Use locally generated OCR and scene labels to improve ranking.
 - Browse On This Day, Smart Albums, Surprise Me, and memory slideshows.
-- Share a metadata-stripped image copy through the iOS share sheet after tapping Share.
+- Share the locally available image resource through the iOS share sheet after tapping Share. The shared file can include source metadata.
 - Index up to 500 media items for free.
 
 Pro features
 ------------
 
-- Expand the index to 8,000 photos and videos.
+- Index and search all locally available photos and videos.
 - Parse dates, seasons, places, time of day, and excluded terms.
-- Add up to 32 user-selected folder sources.
+- Add up to 32 user-selected folder sources. Previously saved folders remain visible and removable.
 - Use Find Similar and near-duplicate detection with bounded, cancellable processing.
 - Unlock Pro with one purchase. No subscription is required.
 
@@ -64,13 +64,13 @@ Requirements
 
 - iOS 17 or later
 - iPhone with an A14 chip or later
-- Approximately 750 MB of storage for bundled AI models
+- Available storage for bundled AI models and the local search index
 
 What's new in version 1.0
 -------------------------
 
 - Search photos and videos with SigLIP2.
-- Index Photo Library and up to 32 selected folder sources with Pro.
+- Index locally available Photo Library media and up to 32 newly selected folder sources with Pro.
 - Apply date-aware and location-aware local ranking.
 - Use bundled models without an additional model download.
 
@@ -87,14 +87,17 @@ Support URL: (your support page)
 
 Privacy policy URL: (host PRIVACY_POLICY.txt as a web page)
 
-App Review notes
+App review notes
 ----------------
 
 - The app requires Photo Library access to index and display media.
 - The app sets PhotoKit network access to disabled, so use locally available media during review.
 - The app bundles its Core ML models and does not download model files at runtime.
 - The app has no developer backend.
-- The app presents the iOS share sheet only after the user taps Share for a photo. It provides a size-bounded image copy without source GPS, camera, or other embedded metadata. The selected destination handles any resulting transmission.
+- The app presents the iOS share sheet only after the user taps Share for a photo. It copies the locally available image resource without changing its bytes. The file can include source GPS, camera, date, and other embedded metadata. The selected destination handles any resulting transmission.
 - Media GPS coordinates may be sent to Apple CLGeocoder for place-name resolution. During indexing, search, and geocoding, media contents and search query text remain on the device. A photo is provided to a share destination only after the user requests it.
 - StoreKit handles Pro product, entitlement, purchase, restore, refund, and transaction traffic with Apple.
+- Pro indexes all locally available media. Search keeps 8,000 media items in a resident fast window and searches remaining media in bounded 512-media database pages.
+- Rebuilding the index and confirmed Pro downgrades preserve saved folder registrations and bookmarks. A confirmed downgrade removes derived folder index rows. Saved folders are scheduled for indexing after a rebuild or confirmed Pro restoration.
+- AirPlay is available only after the user selects an external playback destination. Picture in Picture uses the local iOS system player. The developer receives no playback data through the app.
 - Grant Photo Library access, wait for a searchable checkpoint, and try queries such as `people`, `food`, `outdoor`, or `car`.

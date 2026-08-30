@@ -258,7 +258,7 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func isIndexed(localIdentifier: String) throws -> Bool { false }
     func allIndexedIdentifiers() throws -> Set<String> { [] }
     func allIndexedFilePaths() throws -> Set<String> { [] }
-    func deleteAll() throws {}
+    func resetIndexedMedia() throws {}
     func deletePhoto(localIdentifier: String) throws {}
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws {}
     func fetchRandomPhoto(sharp: Bool) throws -> SlideshowPhoto? { nil }
@@ -275,8 +275,7 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func reconcileFreeTier(_ limit: Int) throws -> FreeTierReconciliationResult {
         FreeTierReconciliationResult(
             retainedMediaCount: min(manifest.entries.count, max(0, limit)),
-            didTrimMedia: manifest.entries.count > max(0, limit),
-            removedFolderSourceIDs: []
+            didTrimMedia: manifest.entries.count > max(0, limit)
         )
     }
     func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }

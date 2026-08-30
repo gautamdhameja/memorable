@@ -60,16 +60,16 @@ When I report a bug, follow this exact sequence:
 - When you're uncertain, say "I'm not sure" rather than guessing.
 - If I'm wrong about something, tell me directly.
 
-## App Overview
+## App overview
 
-**Memorable** -- on-device AI photo & video search for iOS. Uses SigLIP2 (Google, Apache 2.0 licensed) to encode photos/videos into embeddings, stores them in SQLite, and searches via cosine similarity. Media processing and search stay on the device, and the app never sends media automatically. A photo is provided to another app or service only after the user taps Share and chooses a destination. AI models are bundled in-app. Indexed media coordinates can be reverse-geocoded with CLGeocoder; photo contents and search queries are not sent as part of geocoding.
+**Memorable** -- on-device AI photo and video search for iOS. Uses SigLIP2 (Google, Apache 2.0 licensed) to encode locally available photos, video frames, and query text into embeddings. It stores embeddings and searchable metadata in SQLite. The app has no developer-operated backend, analytics, telemetry, tracking, automatic media or query upload, or crash-log uploader. A photo is copied unchanged to another app or service only after the user taps Share and chooses a destination; the file can include source metadata. AI models are bundled in the app. Indexed media coordinates can be reverse-geocoded with CLGeocoder; photo contents and search queries are not sent with those requests.
 
 - Bundle ID: `com.blockdeep.memorable` (change for personal signing)
 - Minimum: iOS 17.0, iPhone with A14 chip
 - Model: SigLIP2-base-patch16-224, 768-dim embeddings, 256k-token Gemma vocab, SentencePiece BPE tokenizer
 - Freemium: 500 indexed media items free, Pro unlock via StoreKit 2 IAP (`com.blockdeep.memorable.pro.v2`)
 
-## Build & Run
+## Build and run
 
 Project uses XcodeGen. Always regenerate after changing `project.yml` or adding files:
 
@@ -82,7 +82,7 @@ For device testing: set signing team in Xcode → Signing & Capabilities. Change
 
 StoreKit testing: set the StoreKit Configuration file (`Memorable/Store/MemorableProducts.storekit`) in Scheme → Run → Options.
 
-## Pre-merge Safety Gate
+## Pre-merge safety gate
 
 Run the required relevance and migration-safety gates before merging:
 
@@ -139,15 +139,15 @@ Core/                          Views/
     └── sentencepiece_model.pb.swift
 ```
 
-## Critical Implementation Details
+## Critical implementation details
 
-### Tokenizer -- SentencePiece BPE with Byte Fallback
+### Tokenizer -- SentencePiece BPE with byte fallback
 The tokenizer loads a standard SentencePiece `.model` protobuf file (Gemma tokenizer, 256k vocab). It uses BPE with byte fallback -- unknown characters are encoded as UTF-8 byte tokens (`<0x00>`-`<0xFF>`), so every input is tokenizable. Text preprocessing: lowercase and collapse whitespace (punctuation is preserved as tokens, matching the model's training). No BOS token, EOS appended, padded with 0. First word has no `▁` prefix (`add_dummy_prefix=false`). Context length is 64 tokens. All vocab/score/special-token data is derived from the protobuf at init, not hardcoded.
 
-### PHImageManager Fires Callbacks Twice
+### PHImageManager fires callbacks twice
 `requestImage` may call its handler multiple times (first degraded, then final). All `withCheckedContinuation` wrappers use a `hasResumed` flag to resume only once on the non-degraded callback. Without this, continuations resume on the nil/degraded first call and all thumbnails return nil.
 
-### Simulator vs Device — Core ML Compute Units
+### Simulator vs device -- Core ML compute units
 Simulator lacks Neural Engine/GPU. Use `cpuOnly` on simulator, `.all` on device:
 ```swift
 #if targetEnvironment(simulator)
@@ -158,16 +158,16 @@ config.computeUnits = .all
 ```
 Without this, the simulator hits `MpsGraph backend validation on incompatible OS` errors and falls back slowly.
 
-### Database — No fatalError
+### Database -- no `fatalError`
 `AppDatabase.init` uses an in-memory fallback if the on-disk database fails (disk full, corrupted). Never `fatalError` in production code — the app must always launch.
 
-### Thread Safety — SearchEngine
+### SearchEngine thread safety
 `SearchEngine` stores its immutable index snapshot in `OSAllocatedUnfairLock`. `loadIndex()` constructs replacement data outside the lock and swaps it under the lock. `hybridSearch()` and `findSimilar()` copy the snapshot under the lock, then operate on immutable local values.
 
-### Video Embeddings — Array Alignment
+### Video embedding array alignment
 In `loadAllVideoEmbeddings()`, metadata (videoId, localId, date, position) must be appended AFTER the embedding size guard, not before. If appended before and the guard continues, the metadata arrays become misaligned with the embeddings array, causing wrong search results.
 
-## Search Pipeline
+## Search pipeline
 
 ```
 User query
@@ -175,41 +175,43 @@ User query
   → Extract: visual text, date range, location name, negative terms
   → Match location text locally against stored reverse-geocoded metadata
   → Direct text encoding via SigLIP2 (no prompt templates, raw query only)
-  → Dot product against all photo + video embeddings (vDSP, pointer arithmetic)
+  → Score the resident fast window, then any remaining 512-media database pages
   → Location/time-of-day/OCR/scene-label boosts (additive, tuned for SigLIP2)
   → Negative term penalty (-30% of negative similarity)
   → Score threshold >= 0.12
   → Video dedup (best frame per video only)
-  → Merge photo + video results, sort, return all matches above threshold
+  → Merge bounded photo + video results, sort, return the highest-ranked matches
 ```
 
 **Note on prompt templates:** SigLIP2 uses sigmoid loss and was trained on raw web captions. Unlike CLIP (softmax loss), "a photo of X" templates hurt retrieval quality by diluting compositional queries. The text encoder receives the raw visual query directly.
 
-## Indexing Pipeline
+## Indexing pipeline
 
 Two-pass indexing: photos first, then videos.
 
-**Pass 1 (Photos):** Fetch all media → filter photos → skip already indexed (in-memory Set lookup) → load 224×224 through the fast indexing-only PhotoKit path → encode → batch insert base embeddings and metadata (20 per transaction) → reload search index at progressive checkpoints and after the photo pass. Photos become searchable before slower enrichment finishes.
+**Pass 1 (Photos):** Fetch locally available media → filter photos → skip already indexed media → load 224×224 through the fast indexing-only PhotoKit path → encode → batch insert base embeddings and metadata (20 per transaction) → reload search at progressive checkpoints and after the photo pass. Photos become searchable before slower enrichment finishes. PhotoKit network access stays disabled, so iCloud-only media is not fetched.
 
 **Pass 2 (Videos):** For each video → extract 2-5 frames based on duration (spread 10%-90%) → encode each frame → store video record + frame embeddings → reload index. Progress shows "Indexing videos" with "Photos ready — you can search now".
 
 **Deferred enrichment:** After base indexing is idle, incomplete photo rows are enriched in bounded batches with OCR, screenshot OCR, blur scoring, and scene labels. Enrichment state is persisted per photo; folder-source enrichment reopens the saved security-scoped bookmark and validates paths before reading files.
 
-## Design System — Celestial Theme
+## Design system -- Celestial theme
 
 Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.swift`. Uses native iOS navigation (`.navigationTitle`, `.toolbar`) with system SF fonts. Custom elements: capsule search bar with glass morphism, rounded thumbnails, ultra-thin material badges.
 
-## Freemium Gating
+## Freemium gating
 
 - `ProManager.shared.isPro` gates features
 - In DEBUG builds: `isPro = true` (all features unlocked for testing)
 - In RELEASE: `isPro = false` until StoreKit purchase verified
 - Free tier: 500 indexed photos/videos, basic search only
-- Pro: up to 8,000 indexed media items, Find Similar, negative search, up to 32 folder sources, smart query parsing, and date/location boost
+- Pro: all locally available indexed media, Find Similar, negative search, up to 32 newly added folder sources, smart query parsing, and date/location boost
+- Search keeps 8,000 media items in the resident fast window and scans remaining media in bounded 512-media database pages
+- Existing installations with more than 32 folder sources keep all sources visible and removable
 - Refund handling: `verifyEntitlement()` checks `revocationDate` on every launch
 - `Transaction.updates` listener catches real-time refund events
 
-## Security Decisions
+## Security decisions
 
 - Database file protection: `.completeUnlessOpen` (encrypted at rest, writable during background indexing)
 - Folder security-scoped resources: `start/stop` paired with `defer` in `performFolderIndexing`
@@ -220,21 +222,25 @@ Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.sw
 - Search query capped at 500 characters before regex processing
 - Folder display names stripped of control characters
 - `isNetworkAccessAllowed = false` on all PHImageManager requests
+- The Share action copies one locally available image resource without changing its bytes. The copy can include source GPS, camera, date, and other metadata.
+- Rebuilds and confirmed Pro downgrades preserve folder registrations and bookmarks. A downgrade removes only derived folder index rows.
+- Technical logs stay in the local iOS logging system; the app has no log-upload path.
 
-## Performance Decisions
+## Performance decisions
 
-- Embeddings stored as Float16 (1536 bytes/photo), loaded as Float32 for search
-- Dot products use `withUnsafeBufferPointer` pointer arithmetic — no per-iteration array allocation
+- Embeddings are stored as Float16 (1536 bytes/photo) and converted to Float32 for scoring.
+- Search retains at most 8,000 media items in its in-memory fast window. It loads older media in 512-media pages and merges page results into one bounded global ranking.
+- Dot products use `withUnsafeBufferPointer` pointer arithmetic -- no per-iteration array allocation.
 - Batch DB inserts (20 per transaction) instead of per-photo transactions
 - Progressive photo index reloads happen at throttled checkpoints; very large libraries use a larger checkpoint interval to avoid excessive full-index rebuilds
-- `allIndexedIdentifiers()` returns a Set for O(1) skip-check during indexing
+- Indexed-identifier lookups use bounded database pages and sets for O(1) skip checks.
 - `reserveCapacity` on embeddings array before loading
 - Tokenizer cache with 1000-entry eviction
 - Debounced search (500ms) to avoid encoding on every keystroke
 - DuplicateFinder runs on `Task.detached` to avoid blocking main thread
 - OnThisDay filters in SQL (month/day/year) instead of loading all rows
 
-## Error Handling Rules
+## Error handling rules
 
 - Never use `try?` for operations the user should know about (deletions, saves)
 - Always log errors with `logger.error()` — the global `logger` is defined in `MemorableApp.swift`
@@ -242,7 +248,7 @@ Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.sw
 - No `fatalError` — always provide a fallback or error UI
 - `do/catch` with specific error messages, not silent swallowing
 
-## Files That Don't Exist / Were Deleted
+## Files that don't exist or were deleted
 
 - `PhotoGridView.swift` — deleted (was unused placeholder)
 - `IndexingProgressView.swift` — deleted (was unused placeholder)

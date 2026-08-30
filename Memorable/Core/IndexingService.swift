@@ -2,9 +2,9 @@ import Foundation
 import Photos
 import UIKit
 import os
+import Combine
 
 private let hitFreeLimitKey = "indexing.hitFreeLimit"
-private let reachedDeviceIndexLimitKey = "indexing.reachedDeviceIndexLimit"
 
 private enum PhotoLibraryChangeScanResult: Sendable {
     case none
@@ -140,6 +140,46 @@ enum ProFolderIndexingOperation {
     }
 }
 
+enum SavedFolderReindexPolicy {
+    static func sourcesToReindex(
+        from sources: [PhotoSource],
+        isPro: Bool
+    ) -> [PhotoSource] {
+        guard isPro else { return [] }
+        return sources.filter {
+            $0.type == PhotoSourceType.folder.rawValue && $0.photoCount == 0
+        }
+    }
+}
+
+enum OrphanCleanupSafetyPolicy {
+    static func orphanRatio(
+        candidateRemovalCount: Int,
+        photoLibraryIndexedCount: Int
+    ) -> Double {
+        Double(candidateRemovalCount) / Double(max(photoLibraryIndexedCount, 1))
+    }
+
+    static func exceedsSafetyThreshold(
+        candidateRemovalCount: Int,
+        photoLibraryIndexedCount: Int
+    ) -> Bool {
+        orphanRatio(
+            candidateRemovalCount: candidateRemovalCount,
+            photoLibraryIndexedCount: photoLibraryIndexedCount
+        ) > IndexingConfig.maxOrphanRatio
+    }
+}
+
+enum ProUnlockIndexingRecoveryPolicy {
+    static func shouldStartLibraryIndexing(
+        isMemoryPressureSuspended: Bool,
+        hasLibraryIndexingWork: Bool
+    ) -> Bool {
+        !isMemoryPressureSuspended && !hasLibraryIndexingWork
+    }
+}
+
 protocol PhotoChangeObservationRegistrar: AnyObject {
     func register(_ observer: PHPhotoLibraryChangeObserver)
     func unregister(_ observer: PHPhotoLibraryChangeObserver)
@@ -264,11 +304,6 @@ class IndexingService: ObservableObject {
             UserDefaults.standard.set(hitFreeLimit, forKey: hitFreeLimitKey)
         }
     }
-    @Published var reachedDeviceIndexLimit: Bool = UserDefaults.standard.bool(forKey: reachedDeviceIndexLimitKey) {
-        didSet {
-            UserDefaults.standard.set(reachedDeviceIndexLimit, forKey: reachedDeviceIndexLimitKey)
-        }
-    }
     @Published private(set) var isThermallyPaused = false
     // Background reverse-geocoding progress. Nil when idle or finished.
     @Published var geocodingProgress: (completed: Int, total: Int)? {
@@ -299,6 +334,8 @@ class IndexingService: ObservableObject {
     private var activeProReconciliationID: UUID?
     private var storageMutationTask: Task<Void, Error>?
     private var activeStorageMutationID: UUID?
+    private var proEntitlementObservation: AnyCancellable?
+    private var scheduledSavedFolderSourceIDs: Set<String> = []
     private var thermalSafetyState = ThermalIndexingState()
     private var thermalObserver: NotificationObservation?
     private struct ThermalResumeIntent {
@@ -323,7 +360,6 @@ class IndexingService: ObservableObject {
             },
             setProgress: { [weak self] in self?.progress = $0 },
             setHitFreeLimit: { [weak self] in self?.hitFreeLimit = $0 },
-            setReachedDeviceIndexLimit: { [weak self] in self?.reachedDeviceIndexLimit = $0 },
             reloadSearchIndex: { [weak self] in await self?.reloadSearchIndex() == true }
         )
     )
@@ -335,7 +371,6 @@ class IndexingService: ObservableObject {
         callbacks: FolderIndexingWorker.Callbacks(
             searchableCount: { [weak self] in self?.searchEngine.totalSize ?? 0 },
             setProgress: { [weak self] in self?.progress = $0 },
-            setReachedDeviceIndexLimit: { [weak self] in self?.reachedDeviceIndexLimit = $0 },
             reloadSearchIndex: { [weak self] in _ = await self?.reloadSearchIndex() }
         )
     )
@@ -354,6 +389,15 @@ class IndexingService: ObservableObject {
             }
         }
         thermalObserver = NotificationObservation(token: token)
+        proEntitlementObservation = ProManager.shared.$isPro
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] isPro in
+                guard isPro else { return }
+                Task { @MainActor [weak self] in
+                    await self?.resumeIndexingAfterProUnlock()
+                }
+            }
     }
 
     @discardableResult
@@ -418,7 +462,7 @@ class IndexingService: ObservableObject {
                         PhotoLibrary.fetchAllMedia()
                     }
                     launchLibraryCountSnapshot = allMedia.count
-                    await enqueueAndWaitForOrphanCleanup(allMedia: allMedia)
+                    await enqueueAndWaitForOrphanCleanup()
                     try Task.checkCancellation()
                 }
 
@@ -505,6 +549,7 @@ class IndexingService: ObservableObject {
 
     private func stopIndexing(preserveThermalResume: Bool) {
         jobQueue.cancelAll()
+        scheduledSavedFolderSourceIDs.removeAll()
         photoChangeCheckTask?.cancel()
         photoChangeCheckTask = nil
         librarySession = nil
@@ -529,6 +574,7 @@ class IndexingService: ObservableObject {
 
     func cancelAllWorkForMemoryPressure() {
         jobQueue.cancelAll()
+        scheduledSavedFolderSourceIDs.removeAll()
         storageMutationTask?.cancel()
         stopObservingPhotoChanges()
         proRevocationTask?.cancel()
@@ -618,7 +664,7 @@ class IndexingService: ObservableObject {
             let db = self.database
             try await IndexingStorageMutation.run(
                 waitForIdle: { await self.jobQueue.waitUntilIdle() },
-                mutation: { try db.deleteAll() },
+                mutation: { try db.resetIndexedMedia() },
                 completion: {
                     self.searchEngine.dropIndex()
                     self.isReady = false
@@ -660,18 +706,23 @@ class IndexingService: ObservableObject {
     }
 
     func reconcileFreeTier() async {
+        guard let reconciliationPermit = EntitlementReconciliationContext.permit,
+              reconciliationPermit.isValid else { return }
         proRevocationTask?.cancel()
         let reconciliationID = UUID()
         activeProReconciliationID = reconciliationID
         let task = Task { [weak self] in
             guard let self else { return }
             jobQueue.cancelAll()
+            scheduledSavedFolderSourceIDs.removeAll()
             await jobQueue.waitUntilIdle()
             let db = database
             do {
                 try await ProRevocationOperation.run(
                     trim: {
-                        try db.reconcileFreeTier(FreeTier.maxIndexedMedia)
+                        try reconciliationPermit.withValidLease {
+                            try db.reconcileFreeTier(FreeTier.maxIndexedMedia)
+                        }
                     },
                     reload: { [weak self] result in
                         guard let self, !Task.isCancelled else { return }
@@ -684,7 +735,6 @@ class IndexingService: ObservableObject {
                             previouslyHit: self.hitFreeLimit,
                             reconciliation: result
                         )
-                        self.reachedDeviceIndexLimit = false
                     }
                 )
             } catch is CancellationError {
@@ -821,11 +871,30 @@ class IndexingService: ObservableObject {
                     return .none
                 }
 
-                var orphaned = try db.allIndexedIdentifiers()
-                for index in 0..<allMedia.count {
-                    if index.isMultiple(of: 256) { try Task.checkCancellation() }
-                    orphaned.remove(allMedia.object(at: index).localIdentifier)
-                }
+                var orphaned: Set<String> = []
+                var cursor: String?
+                repeat {
+                    try Task.checkCancellation()
+                    let page = try db.loadIndexedPhotoIdentifierPage(
+                        after: cursor,
+                        limit: SearchIndexLimits.databasePageMediaItems
+                    )
+                    guard !page.isEmpty else { break }
+                    let existingAssets = PHAsset.fetchAssets(
+                        withLocalIdentifiers: page,
+                        options: nil
+                    )
+                    var existing: Set<String> = []
+                    existing.reserveCapacity(existingAssets.count)
+                    existingAssets.enumerateObjects { asset, _, _ in
+                        existing.insert(asset.localIdentifier)
+                    }
+                    orphaned.formUnion(page.filter { !existing.contains($0) })
+                    guard orphaned.count < totalIndexed / 2 else { return .none }
+                    cursor = page.count == SearchIndexLimits.databasePageMediaItems
+                        ? page.last
+                        : nil
+                } while cursor != nil
                 guard !orphaned.isEmpty, orphaned.count < totalIndexed / 2 else { return .none }
                 return .orphanedPhotos(orphaned)
             }
@@ -897,8 +966,12 @@ class IndexingService: ObservableObject {
             }
         } catch {
             logger.error("Failed to reload search index: \(error.safeDiagnosticCode)")
-            isReady = false
-            onIndexUnavailable?()
+            isReady = searchEngine.isIndexLoaded
+            if isReady {
+                onIndexReady?()
+            } else {
+                onIndexUnavailable?()
+            }
         }
         return false
     }
@@ -944,7 +1017,7 @@ class IndexingService: ObservableObject {
                 do {
                     let db = self.database
                     try await CancellableDetachedOperation.run {
-                        try db.deleteAll()
+                        try db.resetIndexedMedia()
                     }
                     try Task.checkCancellation()
                 } catch is CancellationError {
@@ -1011,6 +1084,7 @@ class IndexingService: ObservableObject {
                 }
             }
             self.enqueuePostIndexingJobs(workflowID: workflowID)
+            await self.enqueueSavedFolderReindexingIfNeeded()
             return .completed
         })
 
@@ -1045,6 +1119,64 @@ class IndexingService: ObservableObject {
             return Task.isCancelled ? .cancelled : .completed
         })
         enqueueGeocoding(workflowID: workflowID, dependencies: [.indexVideos])
+    }
+
+    private func enqueueSavedFolderReindexingIfNeeded() async {
+        guard ProManager.shared.isPro,
+              database.allowsIndexingWrites,
+              !searchEngine.isMemoryPressureSuspended,
+              !ThermalSafetyPolicy.shouldPause(for: ProcessInfo.processInfo.thermalState),
+              !Task.isCancelled else { return }
+
+        let sources: [PhotoSource]
+        do {
+            let db = database
+            sources = try await CancellableDetachedOperation.run {
+                try db.listSources()
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            logger.error("Failed to load saved folders for re-indexing: \(error.safeDiagnosticCode)")
+            return
+        }
+
+        let candidates = SavedFolderReindexPolicy.sourcesToReindex(
+            from: sources,
+            isPro: ProManager.shared.isPro
+        ).filter { !scheduledSavedFolderSourceIDs.contains($0.id) }
+
+        for source in candidates {
+            scheduledSavedFolderSourceIDs.insert(source.id)
+            let workflowID = UUID()
+            jobQueue.enqueue(IndexingJob(
+                workflowID: workflowID,
+                kind: .indexFolder,
+                priority: .userInitiated
+            ) { [weak self] in
+                guard let self else { return .cancelled }
+                defer { self.scheduledSavedFolderSourceIDs.remove(source.id) }
+                return await ProFolderIndexingOperation.run(
+                    isEntitled: { ProManager.shared.isPro }
+                ) {
+                    self.beginBackgroundTask()
+                    defer { self.endBackgroundTask() }
+                    await self.folderWorker.reindex(source: source)
+                }
+            })
+        }
+    }
+
+    private func resumeIndexingAfterProUnlock() async {
+        let hasLibraryIndexingWork = jobQueue.contains(.indexPhotos)
+            || jobQueue.contains(.indexVideos)
+        if ProUnlockIndexingRecoveryPolicy.shouldStartLibraryIndexing(
+            isMemoryPressureSuspended: searchEngine.isMemoryPressureSuspended,
+            hasLibraryIndexingWork: hasLibraryIndexingWork
+        ) {
+            startIndexing()
+        }
+        await enqueueSavedFolderReindexingIfNeeded()
     }
 
     private func enqueueEnrichment(
@@ -1085,7 +1217,7 @@ class IndexingService: ObservableObject {
         })
     }
 
-    private func enqueueAndWaitForOrphanCleanup(allMedia: PHFetchResult<PHAsset>) async {
+    private func enqueueAndWaitForOrphanCleanup() async {
         let workflowID = UUID()
         jobQueue.enqueue(IndexingJob(
             workflowID: workflowID,
@@ -1093,7 +1225,7 @@ class IndexingService: ObservableObject {
             priority: .maintenance
         ) { [weak self] in
             guard let self else { return .cancelled }
-            await self.cleanOrphanedEmbeddings(allMedia: allMedia)
+            await self.cleanOrphanedEmbeddings()
             return Task.isCancelled ? .cancelled : .completed
         })
         await jobQueue.waitUntilIdle()
@@ -1354,7 +1486,7 @@ class IndexingService: ObservableObject {
 
     // MARK: - Orphan Cleanup
 
-    private func cleanOrphanedEmbeddings(allMedia: PHFetchResult<PHAsset>? = nil) async {
+    private func cleanOrphanedEmbeddings() async {
         do {
             guard PHPhotoLibrary.authorizationStatus(for: .readWrite) != .limited else {
                 #if DEBUG
@@ -1363,48 +1495,76 @@ class IndexingService: ObservableObject {
                 return
             }
             let db = database
-            let indexedIdentifiers = try await CancellableDetachedOperation.run {
-                try db.allIndexedMediaIdentifiers()
-            }
-            try Task.checkCancellation()
+            let skipKey = "orphanCleanupConsecutiveSkips"
+            let forceCleanup = UserDefaults.standard.integer(forKey: skipKey) >= 2
             let scanTask = Task.detached(priority: .utility) {
-                var orphanedPhotos = indexedIdentifiers.photos
-                var orphanedVideos = indexedIdentifiers.videos
-                let media = allMedia ?? PhotoLibrary.fetchAllMedia()
-                for i in 0..<media.count {
-                    if i.isMultiple(of: 256) { try Task.checkCancellation() }
-                    let identifier = media[i].localIdentifier
-                    orphanedPhotos.remove(identifier)
-                    orphanedVideos.remove(identifier)
-                    if orphanedPhotos.isEmpty && orphanedVideos.isEmpty { break }
-                }
-                return (orphanedPhotos, orphanedVideos)
+                let photoLibraryIndexedCount = try db.photoLibraryIndexedMediaCounts().total
+                var orphanedPhotos: Set<String> = []
+                var orphanedVideos: Set<String> = []
+                var cursor: SearchMediaPageCursor?
+                repeat {
+                    try Task.checkCancellation()
+                    let page = try db.loadIndexedMediaIdentifierPage(
+                        after: cursor,
+                        limit: SearchIndexLimits.databasePageMediaItems
+                    )
+                    let pageIdentifiers = page.photos + page.videos
+                    guard !pageIdentifiers.isEmpty else { break }
+                    let existingAssets = PHAsset.fetchAssets(
+                        withLocalIdentifiers: pageIdentifiers,
+                        options: nil
+                    )
+                    var existing: Set<String> = []
+                    existing.reserveCapacity(existingAssets.count)
+                    existingAssets.enumerateObjects { asset, _, _ in
+                        existing.insert(asset.localIdentifier)
+                    }
+                    orphanedPhotos.formUnion(page.photos.filter { !existing.contains($0) })
+                    orphanedVideos.formUnion(page.videos.filter { !existing.contains($0) })
+                    guard forceCleanup
+                            || !OrphanCleanupSafetyPolicy.exceedsSafetyThreshold(
+                                candidateRemovalCount: orphanedPhotos.count + orphanedVideos.count,
+                                photoLibraryIndexedCount: photoLibraryIndexedCount
+                            ) else {
+                        return (Set<String>(), Set<String>(), true)
+                    }
+                    cursor = page.nextCursor
+                } while cursor != nil
+                return (orphanedPhotos, orphanedVideos, false)
             }
-            let (orphanedPhotos, orphanedVideos) = try await withTaskCancellationHandler {
+            let (orphanedPhotos, orphanedVideos, exceededSafetyThreshold) = try await withTaskCancellationHandler {
                 try await scanTask.value
             } onCancel: {
                 scanTask.cancel()
             }
             try Task.checkCancellation()
-            let indexedPhotoIds = indexedIdentifiers.photos
-            let indexedVideoIds = indexedIdentifiers.videos
+            if exceededSafetyThreshold {
+                let consecutiveSkips = UserDefaults.standard.integer(forKey: skipKey) + 1
+                UserDefaults.standard.set(consecutiveSkips, forKey: skipKey)
+                logger.warning("Orphan cleanup skipped (\(consecutiveSkips)/3): candidate removals exceed the 20% safety threshold")
+                return
+            }
 
             let totalOrphans = orphanedPhotos.count + orphanedVideos.count
             guard totalOrphans > 0 else { return }
 
             // Safety: skip if more than 20% are orphaned (likely a permissions issue, not real deletions).
             // But force cleanup after 3 consecutive skips so the index doesn't stay stale forever.
-            let totalIndexed = indexedPhotoIds.count + indexedVideoIds.count
-            let orphanRatio = Double(totalOrphans) / Double(max(totalIndexed, 1))
-            let skipKey = "orphanCleanupConsecutiveSkips"
+            let photoLibraryIndexedCount = try await CancellableDetachedOperation.run {
+                try db.photoLibraryIndexedMediaCounts().total
+            }
+            let orphanRatio = OrphanCleanupSafetyPolicy.orphanRatio(
+                candidateRemovalCount: totalOrphans,
+                photoLibraryIndexedCount: photoLibraryIndexedCount
+            )
             if orphanRatio > IndexingConfig.maxOrphanRatio {
                 let consecutiveSkips = UserDefaults.standard.integer(forKey: skipKey) + 1
                 if consecutiveSkips < 3 {
                     UserDefaults.standard.set(consecutiveSkips, forKey: skipKey)
-                    logger.warning("Orphan cleanup skipped (\(consecutiveSkips)/3): \(totalOrphans)/\(totalIndexed) (\(Int(orphanRatio * 100))%) exceeds 20% threshold")
+                    logger.warning("Orphan cleanup skipped (\(consecutiveSkips)/3): \(totalOrphans)/\(photoLibraryIndexedCount) (\(Int(orphanRatio * 100))%) exceeds 20% threshold")
                     return
                 }
-                logger.info("Forcing orphan cleanup after \(consecutiveSkips) consecutive skips: \(totalOrphans)/\(totalIndexed) orphaned")
+                logger.info("Forcing orphan cleanup after \(consecutiveSkips) consecutive skips: \(totalOrphans)/\(photoLibraryIndexedCount) orphaned")
             }
             UserDefaults.standard.set(0, forKey: skipKey)
 

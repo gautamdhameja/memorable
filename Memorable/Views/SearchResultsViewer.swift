@@ -288,6 +288,26 @@ struct SearchResultsViewer: View {
                             }
 
                             HStack {
+                                if canShareCurrentPhoto {
+                                    Button(action: { shareCurrentPhoto() }) {
+                                        if shareCoordinator.isPreparing {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                                .tint(.white)
+                                                .frame(width: 44, height: 44)
+                                        } else {
+                                            Image(systemName: "square.and.arrow.up")
+                                                .font(.title3)
+                                                .foregroundStyle(.white)
+                                                .frame(width: 44, height: 44)
+                                        }
+                                    }
+                                    .disabled(
+                                        shareCoordinator.isPreparing
+                                            || shareCoordinator.preparedItem != nil
+                                    )
+                                    .accessibilityLabel("Share photo")
+                                }
                                 Spacer()
                                 if searchEngine != nil, result.supportsFindSimilar {
                                     Button(action: handleFindSimilar) {

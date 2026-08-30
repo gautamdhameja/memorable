@@ -188,7 +188,171 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(engine.indexSize, 1)
     }
 
-    func testReloadReleasesOldSnapshotBeforeBuildingReplacement() async throws {
+    func testConcurrentSearchWaitsForBoundedReloadAndUsesReplacement() async throws {
+        let loadGate = ManualResetLoadGate()
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "photo-1",
+                    localIdentifier: "local-photo-1",
+                    date: nil,
+                    embedding: float16Vector(first: 1)
+                )
+            ],
+            photoLoadGate: loadGate,
+            gatedPhotoLoadNumber: 2
+        )
+        let scorer = BlockingSimilaritySearch()
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            photoSimilaritySearch: scorer
+        )
+        try engine.loadIndex()
+        XCTAssertEqual(engine.indexSize, 1)
+        XCTAssertEqual(
+            engine.indexMemoryState,
+            SearchIndexMemoryState(
+                reloadPhase: .idle,
+                residentMediaCount: 1,
+                ownsPhotoAccelerator: true,
+                ownsVideoAccelerator: false
+            )
+        )
+
+        database.photos = [
+            .init(
+                id: "photo-2",
+                localIdentifier: "local-photo-2",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ]
+
+        let reload = Task.detached { try engine.loadIndex() }
+        XCTAssertEqual(loadGate.started.wait(timeout: .now() + 1), .success)
+
+        XCTAssertEqual(engine.indexSize, 1)
+        XCTAssertEqual(
+            engine.indexMemoryState,
+            SearchIndexMemoryState(
+                reloadPhase: .loadingResidentData,
+                residentMediaCount: 1,
+                ownsPhotoAccelerator: false,
+                ownsVideoAccelerator: false
+            )
+        )
+
+        let queryHints = hints(text: "dog")
+        let search = Task.detached {
+            try engine.hybridSearch(hints: queryHints)
+        }
+        XCTAssertEqual(
+            scorer.searchStarted.wait(timeout: .now() + 0.05),
+            .timedOut,
+            "A search must not retain the old snapshot during replacement construction"
+        )
+
+        loadGate.open()
+        try await reload.value
+        XCTAssertEqual(scorer.searchStarted.wait(timeout: .now() + 1), .success)
+        scorer.resumeSearch.signal()
+        let response = try await search.value
+
+        XCTAssertEqual(engine.indexSize, 1)
+        XCTAssertEqual(response.results.map(\.id), ["photo-2"])
+        XCTAssertEqual(engine.indexMemoryState.reloadPhase, .idle)
+        XCTAssertTrue(engine.indexMemoryState.ownsPhotoAccelerator)
+    }
+
+    func testReloadDrainsActiveSearchBeforeRetiringAccelerator() async throws {
+        let loadGate = ManualResetLoadGate()
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "photo-1",
+                    localIdentifier: "local-photo-1",
+                    date: nil,
+                    embedding: float16Vector(first: 1)
+                )
+            ],
+            photoLoadGate: loadGate,
+            gatedPhotoLoadNumber: 2
+        )
+        let scorer = BlockingSimilaritySearch()
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            photoSimilaritySearch: scorer
+        )
+        try engine.loadIndex()
+
+        let queryHints = hints(text: "dog")
+        let search = Task.detached {
+            try engine.hybridSearch(hints: queryHints)
+        }
+        XCTAssertEqual(scorer.searchStarted.wait(timeout: .now() + 1), .success)
+
+        let reload = Task.detached { try engine.loadIndex() }
+        XCTAssertEqual(
+            loadGate.started.wait(timeout: .now() + 0.05),
+            .timedOut,
+            "Replacement allocation must wait for the active snapshot reader"
+        )
+        XCTAssertEqual(engine.indexMemoryState.reloadPhase, .idle)
+        XCTAssertTrue(engine.indexMemoryState.ownsPhotoAccelerator)
+
+        scorer.resumeSearch.signal()
+        _ = try await search.value
+        XCTAssertEqual(loadGate.started.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(engine.indexMemoryState.reloadPhase, .loadingResidentData)
+        XCTAssertFalse(engine.indexMemoryState.ownsPhotoAccelerator)
+
+        loadGate.open()
+        try await reload.value
+        XCTAssertEqual(engine.indexMemoryState.reloadPhase, .idle)
+        XCTAssertTrue(engine.indexMemoryState.ownsPhotoAccelerator)
+    }
+
+    func testFailedReloadKeepsPreviouslyServingSnapshot() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "photo-1",
+                localIdentifier: "local-photo-1",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            photoSimilaritySearch: RecordingSimilaritySearch()
+        )
+        try engine.loadIndex()
+        database.photos = [
+            .init(
+                id: "corrupt",
+                localIdentifier: "corrupt",
+                date: nil,
+                embedding: [1]
+            )
+        ]
+
+        XCTAssertThrowsError(try engine.loadIndex())
+        XCTAssertTrue(engine.isIndexLoaded)
+        XCTAssertEqual(engine.indexSize, 1)
+        XCTAssertEqual(engine.indexMemoryState.reloadPhase, .idle)
+        XCTAssertFalse(
+            engine.indexMemoryState.ownsPhotoAccelerator,
+            "A failed reload keeps the old CPU fallback without retaining the old GPU generation"
+        )
+        XCTAssertEqual(
+            try engine.hybridSearch(hints: hints(text: "dog")).results.map(\.id),
+            ["photo-1"]
+        )
+    }
+
+    func testCancelledReloadKeepsOldCPUFallbackAndReturnsToIdle() async throws {
         let loadGate = ManualResetLoadGate()
         let database = SearchFixtureDatabase(
             photos: [
@@ -204,18 +368,101 @@ final class SearchEngineTests: XCTestCase {
         )
         let engine = SearchEngine(
             textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
-            database: database
+            database: database,
+            photoSimilaritySearch: RecordingSimilaritySearch()
         )
         try engine.loadIndex()
-        XCTAssertEqual(engine.indexSize, 1)
 
+        database.photos = [
+            .init(
+                id: "photo-2",
+                localIdentifier: "local-photo-2",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ]
         let reload = Task.detached { try engine.loadIndex() }
         XCTAssertEqual(loadGate.started.wait(timeout: .now() + 1), .success)
-
-        XCTAssertEqual(engine.indexSize, 0)
+        reload.cancel()
         loadGate.open()
+
+        do {
+            try await reload.value
+            XCTFail("A canceled reload must report cancellation")
+        } catch is CancellationError {
+            // Expected.
+        }
+
+        XCTAssertEqual(
+            engine.indexMemoryState,
+            SearchIndexMemoryState(
+                reloadPhase: .idle,
+                residentMediaCount: 1,
+                ownsPhotoAccelerator: false,
+                ownsVideoAccelerator: false
+            )
+        )
+        XCTAssertEqual(
+            try engine.hybridSearch(hints: hints(text: "dog")).results.map(\.id),
+            ["photo-1"]
+        )
+    }
+
+    func testResidentDataInstallsBeforeReplacementAcceleratorBuild() async throws {
+        let buildGate = ManualResetLoadGate()
+        let scorer = GatedBuildSimilaritySearch(
+            buildGate: buildGate,
+            gatedBuildNumber: 2
+        )
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "photo-1",
+                localIdentifier: "local-photo-1",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            photoSimilaritySearch: scorer
+        )
+        try engine.loadIndex()
+
+        database.photos = [
+            .init(
+                id: "photo-2",
+                localIdentifier: "local-photo-2",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ]
+        let reload = Task.detached { try engine.loadIndex() }
+        XCTAssertEqual(buildGate.started.wait(timeout: .now() + 1), .success)
+
+        XCTAssertEqual(
+            engine.indexMemoryState,
+            SearchIndexMemoryState(
+                reloadPhase: .buildingAccelerators,
+                residentMediaCount: 1,
+                ownsPhotoAccelerator: false,
+                ownsVideoAccelerator: false
+            )
+        )
+        XCTAssertEqual(
+            scorer.indexedCount,
+            0,
+            "The previous accelerator buffer must be cleared before replacement allocation"
+        )
+
+        buildGate.open()
         try await reload.value
-        XCTAssertEqual(engine.indexSize, 1)
+        XCTAssertEqual(engine.indexMemoryState.reloadPhase, .idle)
+        XCTAssertTrue(engine.indexMemoryState.ownsPhotoAccelerator)
+        XCTAssertEqual(
+            try engine.hybridSearch(hints: hints(text: "dog")).results.map(\.id),
+            ["photo-2"]
+        )
     }
 
     func testCancelledSearchStopsAfterSimilarityScoring() async throws {
@@ -814,6 +1061,182 @@ final class SearchEngineTests: XCTestCase {
         }
     }
 
+    func testWholeLibrarySearchFindsBestResultAfterResidentPage() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "resident",
+                localIdentifier: "resident",
+                date: Date(timeIntervalSince1970: 200),
+                embedding: float16Vector(first: 0.01)
+            ),
+            .init(
+                id: "page-2-match",
+                localIdentifier: "page-2-match",
+                date: Date(timeIntervalSince1970: 100),
+                embedding: float16Vector(first: 0.9)
+            ),
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            residentMediaLimit: 1
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(hints: hints(text: "dog"))
+
+        XCTAssertEqual(engine.residentSize, 1)
+        XCTAssertEqual(engine.totalSize, 2)
+        XCTAssertEqual(response.results.first?.id, "page-2-match")
+    }
+
+    func testFindSimilarPagesWhenSourceAndMatchAreOutsideResidentWindow() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "resident",
+                localIdentifier: "resident",
+                date: Date(timeIntervalSince1970: 300),
+                embedding: float16Vector(second: 1)
+            ),
+            .init(
+                id: "source",
+                localIdentifier: "source",
+                date: Date(timeIntervalSince1970: 200),
+                embedding: float16Vector(first: 1)
+            ),
+            .init(
+                id: "page-3-match",
+                localIdentifier: "page-3-match",
+                date: Date(timeIntervalSince1970: 100),
+                embedding: float16Vector(first: 0.9)
+            ),
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder([:]),
+            database: database,
+            residentMediaLimit: 1
+        )
+
+        try engine.loadIndex()
+        let results = engine.findSimilar(photoId: "source")
+
+        XCTAssertEqual(results.map(\.id), ["page-3-match"])
+    }
+
+    func testPagedSearchGloballyOrdersAndDeduplicatesVideoFrames() throws {
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "resident-photo",
+                    localIdentifier: "resident-photo",
+                    date: Date(timeIntervalSince1970: 300),
+                    embedding: float16Vector(first: 0.8)
+                ),
+                .init(
+                    id: "older-photo",
+                    localIdentifier: "older-photo",
+                    date: Date(timeIntervalSince1970: 100),
+                    embedding: float16Vector(first: 0.85)
+                ),
+            ],
+            videos: [
+                .init(
+                    id: "video",
+                    localIdentifier: "video",
+                    date: Date(timeIntervalSince1970: 200),
+                    city: nil,
+                    framePosition: 0.2,
+                    embedding: float16Vector(first: 0.5)
+                ),
+                .init(
+                    id: "video",
+                    localIdentifier: "video",
+                    date: Date(timeIntervalSince1970: 200),
+                    city: nil,
+                    framePosition: 0.8,
+                    embedding: float16Vector(first: 0.9)
+                ),
+            ]
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            residentMediaLimit: 1
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(hints: hints(text: "dog"))
+
+        XCTAssertEqual(response.results.map(\.id), ["video", "older-photo", "resident-photo"])
+        XCTAssertEqual(response.results.filter(\.isVideo).count, 1)
+        XCTAssertEqual(response.results.first?.bestFramePosition, 0.8)
+    }
+
+    func testAdaptiveFallbackClusterIsFinalizedAcrossAllPages() throws {
+        let database = SearchFixtureDatabase(photos: (1...3).map { number in
+            FixturePhoto(
+                id: "photo-\(number)",
+                localIdentifier: "photo-\(number)",
+                date: Date(timeIntervalSince1970: TimeInterval(400 - number)),
+                embedding: float16Vector(first: 0.1)
+            )
+        })
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["abstract": floatVector(first: 1)]),
+            database: database,
+            residentMediaLimit: 1
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(hints: hints(text: "abstract"))
+
+        XCTAssertEqual(response.results.count, 3)
+        XCTAssertTrue(response.fallbackResults.isEmpty)
+    }
+
+    func testMemoryPressureCancelsSearchWhileLoadingLaterPage() async throws {
+        let pageGate = ManualResetLoadGate()
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "resident",
+                    localIdentifier: "resident",
+                    date: Date(timeIntervalSince1970: 200),
+                    embedding: float16Vector(first: 0.8)
+                ),
+                .init(
+                    id: "page-2",
+                    localIdentifier: "page-2",
+                    date: Date(timeIntervalSince1970: 100),
+                    embedding: float16Vector(first: 0.9)
+                ),
+            ],
+            photoLoadGate: pageGate,
+            gatedPhotoLoadNumber: 2
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            residentMediaLimit: 1
+        )
+        try engine.loadIndex()
+
+        let queryHints = hints(text: "dog")
+        let search = Task.detached {
+            try engine.hybridSearch(hints: queryHints)
+        }
+        XCTAssertEqual(pageGate.started.wait(timeout: .now() + 1), .success)
+        engine.suspendForMemoryPressure()
+        pageGate.open()
+
+        do {
+            _ = try await search.value
+            XCTFail("Memory pressure must cancel a paged search")
+        } catch is CancellationError {
+            // Expected.
+        }
+    }
+
     private func hints(
         text: String,
         dateRange: DateRange? = nil,
@@ -873,6 +1296,48 @@ final class RecordingSimilaritySearch: SimilaritySearching {
             $0.queries.append(queryEmbedding)
             return Array(repeating: queryEmbedding.first ?? 0, count: $0.count)
         }
+    }
+}
+
+final class GatedBuildSimilaritySearch: SimilaritySearching {
+    private struct State: Sendable {
+        var nonEmptyBuildCount = 0
+        var indexedCount = 0
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let buildGate: ManualResetLoadGate
+    private let gatedBuildNumber: Int
+
+    init(buildGate: ManualResetLoadGate, gatedBuildNumber: Int) {
+        self.buildGate = buildGate
+        self.gatedBuildNumber = gatedBuildNumber
+    }
+
+    var indexedCount: Int {
+        state.withLock { $0.indexedCount }
+    }
+
+    func buildIndex(embeddings: [Float16], count: Int) {
+        let buildNumber = state.withLock { state -> Int? in
+            guard count > 0 else {
+                state.indexedCount = 0
+                return nil
+            }
+            state.nonEmptyBuildCount += 1
+            return state.nonEmptyBuildCount
+        }
+        if buildNumber == gatedBuildNumber {
+            buildGate.wait()
+        }
+        state.withLock { $0.indexedCount = count }
+    }
+
+    func search(queryEmbedding: [Float]) -> [Float]? {
+        Array(
+            repeating: queryEmbedding.first ?? 0,
+            count: state.withLock { $0.indexedCount }
+        )
     }
 }
 
@@ -1005,8 +1470,86 @@ final class SearchFixtureDatabase: DatabaseProtocol {
         )
     }
 
+    func loadSearchMediaPage(
+        after cursor: SearchMediaPageCursor?,
+        limit: Int
+    ) throws -> SearchMediaPage {
+        struct Descriptor {
+            let mediaType: SearchMediaPageKind
+            let id: String
+            let date: Date?
+        }
+        let snapshot = state.withLock { state -> (photos: [FixturePhoto], videos: [FixtureVideo], photoLoad: Int) in
+            state.photoLoadCount += 1
+            state.videoLoadCount += 1
+            return (state.photos, state.videos, state.photoLoadCount)
+        }
+        if snapshot.photoLoad == gatedPhotoLoadNumber {
+            photoLoadGate?.wait()
+        }
+        var descriptors = snapshot.photos.map {
+            Descriptor(mediaType: .photo, id: $0.id, date: $0.date)
+        }
+        let videosByID = Dictionary(grouping: snapshot.videos, by: \.id)
+        descriptors.append(contentsOf: videosByID.values.compactMap { frames in
+            frames.first.map { Descriptor(mediaType: .video, id: $0.id, date: $0.date) }
+        })
+        descriptors.sort { lhs, rhs in
+            switch (lhs.date, rhs.date) {
+            case let (left?, right?) where left != right:
+                return left > right
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                if lhs.id != rhs.id { return lhs.id < rhs.id }
+                return lhs.mediaType.rawValue < rhs.mediaType.rawValue
+            }
+        }
+        let start: Int
+        if let cursor,
+           let index = descriptors.firstIndex(where: {
+               $0.id == cursor.id
+                   && $0.mediaType == cursor.mediaType
+                   && $0.date == cursor.creationDate
+           }) {
+            start = index + 1
+        } else {
+            start = 0
+        }
+        let boundedLimit = max(0, limit)
+        let end = min(descriptors.count, start + boundedLimit)
+        let selected = start < end ? Array(descriptors[start..<end]) : []
+        let selectedPhotoIDs = Set(selected.filter { $0.mediaType == .photo }.map(\.id))
+        let selectedVideoIDs = Set(selected.filter { $0.mediaType == .video }.map(\.id))
+        let nextCursor: SearchMediaPageCursor?
+        if end < descriptors.count, let last = selected.last {
+            nextCursor = SearchMediaPageCursor(
+                creationDate: last.date,
+                id: last.id,
+                mediaType: last.mediaType
+            )
+        } else {
+            nextCursor = nil
+        }
+        return SearchMediaPage(
+            photos: try makePhotoIndex(snapshot.photos.filter { selectedPhotoIDs.contains($0.id) }),
+            videos: try makeVideoIndex(snapshot.videos.filter { selectedVideoIDs.contains($0.id) }),
+            mediaCount: selected.count,
+            totalPhotoCount: snapshot.photos.count,
+            totalVideoCount: videosByID.count,
+            nextCursor: nextCursor
+        )
+    }
+
+    func loadPhotoEmbedding(id: String) throws -> MediaIndex? {
+        let matches = state.withLock { $0.photos.filter { $0.id == id } }
+        guard !matches.isEmpty else { return nil }
+        return try makePhotoIndex(matches)
+    }
+
     func loadAllEmbeddings() throws -> MediaIndex {
-        var index = MediaIndex(kind: .photo)
         let (photos, loadNumber) = state.withLock {
             $0.photoLoadCount += 1
             return ($0.photos, $0.photoLoadCount)
@@ -1014,26 +1557,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
         if loadNumber == gatedPhotoLoadNumber {
             photoLoadGate?.wait()
         }
-        for photo in photos {
-            try index.append(
-                MediaIndex.Row(
-                    id: photo.id,
-                    localIdentifier: photo.localIdentifier,
-                    sourceId: photo.sourceId,
-                    filePath: photo.filePath,
-                    date: photo.date,
-                    latitude: nil,
-                    longitude: nil,
-                    city: photo.city,
-                    state: nil,
-                    country: nil,
-                    locationName: nil,
-                    details: .photo(ocrText: nil, sceneLabels: photo.sceneLabels)
-                ),
-                embedding: photo.embedding
-            )
-        }
-        return index
+        return try makePhotoIndex(photos)
     }
 
     func loadEmbeddingsForDuplicateScan(limit: Int) throws -> MediaIndex {
@@ -1062,12 +1586,43 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     }
 
     func loadAllVideoEmbeddings() throws -> MediaIndex {
-        var index = MediaIndex(kind: .videoFrame)
         let videos = state.withLock {
             $0.videoLoadCount += 1
             return $0.videos
         }
-        for video in videos {
+        return try makeVideoIndex(videos)
+    }
+
+    private func makePhotoIndex(_ photos: [FixturePhoto]) throws -> MediaIndex {
+        var index = MediaIndex(kind: .photo)
+        for photo in photos {
+            try index.append(
+                MediaIndex.Row(
+                    id: photo.id,
+                    localIdentifier: photo.localIdentifier,
+                    sourceId: photo.sourceId,
+                    filePath: photo.filePath,
+                    date: photo.date,
+                    latitude: nil,
+                    longitude: nil,
+                    city: photo.city,
+                    state: nil,
+                    country: nil,
+                    locationName: nil,
+                    details: .photo(ocrText: nil, sceneLabels: photo.sceneLabels)
+                ),
+                embedding: photo.embedding
+            )
+        }
+        return index
+    }
+
+    private func makeVideoIndex(_ videos: [FixtureVideo]) throws -> MediaIndex {
+        var index = MediaIndex(kind: .videoFrame)
+        for video in videos.sorted(by: {
+            if $0.id != $1.id { return $0.id < $1.id }
+            return $0.framePosition < $1.framePosition
+        }) {
             try index.append(
                 MediaIndex.Row(
                     id: video.id,
@@ -1095,7 +1650,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func isIndexed(localIdentifier: String) throws -> Bool { false }
     func allIndexedIdentifiers() throws -> Set<String> { [] }
     func allIndexedFilePaths() throws -> Set<String> { [] }
-    func deleteAll() throws {}
+    func resetIndexedMedia() throws {}
     func deletePhoto(localIdentifier: String) throws {}
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws {}
     func fetchRandomPhoto(sharp: Bool) throws -> SlideshowPhoto? { nil }
@@ -1114,7 +1669,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func deleteOrphanedVideos(localIdentifiers: Set<String>) throws {}
     func trimToLimit(_ limit: Int) throws {}
     func reconcileFreeTier(_ limit: Int) throws -> FreeTierReconciliationResult {
-        FreeTierReconciliationResult(retainedMediaCount: 0, didTrimMedia: false, removedFolderSourceIDs: [])
+        FreeTierReconciliationResult(retainedMediaCount: 0, didTrimMedia: false)
     }
     func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }

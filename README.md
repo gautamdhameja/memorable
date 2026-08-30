@@ -1,6 +1,6 @@
 # Memorable: on-device photo search
 
-Memorable searches photos and videos on iPhone with bundled AI models. Describe a memory in natural language, and the app ranks matching media from the local search index.
+Memorable searches locally available photos and videos on iPhone with bundled AI models. Describe a memory in natural language, and the app ranks matching media from the local search index.
 
 <p align="center">
   <img src="Memorable/Assets.xcassets/AppIcon.appiconset/icon_180.png" width="90" alt="Memorable app icon" />
@@ -31,16 +31,16 @@ The free tier indexes up to 500 photos and videos and provides basic visual-text
 
 The one-time StoreKit 2 product `com.blockdeep.memorable.pro.v2` adds:
 
-- An index of up to 8,000 photos and videos.
+- Indexing and search for all locally available photos and videos.
 - Date, season, location, time-of-day, and excluded-term query parsing.
 - Find Similar and bounded near-duplicate detection.
-- Up to 32 user-selected folder sources through security-scoped bookmarks.
+- Up to 32 newly added folder sources through security-scoped bookmarks.
 
 All tiers can use locally generated OCR and scene labels to improve basic visual ranking.
 
 ## Understand the privacy boundary
 
-Memorable has no developer backend and includes no analytics, tracking, advertising, telemetry, or crash-upload service. During indexing and search, photo and video contents, generated embeddings, OCR text, and search query text stay on the device. A photo is provided to another app or service only after the user taps Share and chooses a destination.
+Memorable has no developer-operated backend and includes no analytics, tracking, advertising, telemetry, or crash-upload service. During indexing and search, photo and video contents, generated embeddings, OCR text, and search query text stay on the device. Technical logs remain on the device because the app has no log-upload path. The developer receives none of this data.
 
 The app uses these Apple-managed service boundaries:
 
@@ -51,7 +51,9 @@ The app uses these Apple-managed service boundaries:
 
 Memorable does not send photo or video contents or search query text through either boundary. The app sets `isNetworkAccessAllowed = false` for PhotoKit requests, so it does not download iCloud-only media while indexing.
 
-When a user taps Share for a photo, Memorable prepares a size-bounded image copy without the source file's GPS, camera, or other embedded metadata and provides that copy to the iOS share sheet. The user chooses the destination; Memorable does not share automatically or send the image to a developer service.
+When a user taps Share for a photo, Memorable copies the locally available image resource without changing its bytes and provides the copy to the iOS share sheet. The file can include embedded GPS, camera, date, and other metadata from the source. The user chooses the destination; Memorable does not share automatically or send the image to the developer.
+
+AirPlay is available only when the user selects an external playback destination. Picture in Picture uses the local iOS playback session. These playback features do not send data to the developer.
 
 The search database and folder bookmark files use complete-unless-open protection and are excluded from iCloud and device backups.
 
@@ -112,11 +114,14 @@ Keep high-cost work bounded and cancellable:
 - Search retains at most 500 ranked results.
 - Duplicate detection performs at most 5,000,000 comparisons and retains at most 2,000 pairs.
 - Folder enumeration retains at most 100,000 supported image URLs and checks cancellation during traversal.
-- Folder source metadata is capped at 32 unique canonical paths. Each folder image must be 32 MiB or smaller. The app bounds directory traversal, rejects special files and symbolic links, and reads an immutable, size-bounded snapshot before ImageIO parses it.
+- New folder registrations stop at 32 unique canonical paths. Existing installations with more saved folders continue to show every folder and let the user remove them. Each folder image must be 32 MiB or smaller. The app bounds directory traversal, rejects special files and symbolic links, and reads an immutable, size-bounded snapshot before ImageIO parses it.
 - Indexing uses bounded batches and one prefetched image batch.
+- Search keeps the newest 8,000 media items in a resident fast window. If the index contains more media, the app searches the remaining rows in bounded 512-media database pages.
 - PhotoKit and video loaders use cancellation-aware timeouts.
 - A memory warning cancels indexing work, drops the search index, and blocks an in-flight reload from restoring it until explicit work resumes.
 - Background-task expiration cancels the active indexing workflow.
+
+Rebuilding the index preserves saved folder registrations and bookmarks. A confirmed Pro downgrade removes derived folder index rows but preserves those registrations. After a rebuild or confirmed Pro restoration, the app automatically schedules saved folders that need indexing.
 
 Add a deterministic limit and a cancellation check before introducing any new operation whose memory or work scales with library size.
 
@@ -139,6 +144,7 @@ Core/                              Views/
 |- GPUSimilaritySearch.swift       |- DuplicateFinderView.swift
 |- QueryParser.swift               |- UpgradeView.swift
 |- PhotoLibrary.swift              `- PhotoThumbnailView.swift
+|- PhotoSharing.swift
 |- FolderScanner.swift
 |- DuplicateFinder.swift
 `- ProFeatures.swift

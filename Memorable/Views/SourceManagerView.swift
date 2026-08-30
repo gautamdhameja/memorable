@@ -7,7 +7,6 @@ struct SourceManagerView: View {
     @State private var sources: [PhotoSource] = []
     @State private var showFolderPicker = false
     @State private var showUpgrade = false
-    @State private var showIndexLimit = false
     @State private var deleteError: String?
     @ObservedObject private var proManager = ProManager.shared
 
@@ -48,6 +47,8 @@ struct SourceManagerView: View {
                     .listRowBackground(Celestial.Colors.surfaceContainerHigh)
                 } header: {
                     Text("Photo Library")
+                } footer: {
+                    Text("Memorable indexes media that is available on this iPhone. It does not download iCloud-only items.")
                 }
 
                 Section {
@@ -90,9 +91,7 @@ struct SourceManagerView: View {
                     }
 
                     Button(action: {
-                        if indexingService.reachedDeviceIndexLimit {
-                            showIndexLimit = true
-                        } else if proManager.isPro {
+                        if proManager.isPro {
                             showFolderPicker = true
                         } else {
                             showUpgrade = true
@@ -129,14 +128,6 @@ struct SourceManagerView: View {
             Button("OK") { deleteError = nil }
         } message: {
             Text(deleteError ?? "")
-        }
-        .alert("Index limit reached", isPresented: $showIndexLimit) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Memorable limits the on-device index to 8,000 photos and videos to protect device memory.")
-        }
-        .onChange(of: indexingService.reachedDeviceIndexLimit) { _, reached in
-            if reached { showIndexLimit = true }
         }
     }
 

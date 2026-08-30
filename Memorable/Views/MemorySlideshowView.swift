@@ -13,6 +13,7 @@ struct MemorySlideshowView: View {
     @State private var showControls = true
     @State private var timerTask: Task<Void, Never>?
     @State private var initialLoadTask: Task<Void, Never>?
+    @State private var memoryRecoveryTask: Task<Void, Never>?
     @State private var shownIds: Set<String> = []
     @State private var photoCount = 0
     @State private var imageLoadGeneration: UInt = 0
@@ -112,25 +113,62 @@ struct MemorySlideshowView: View {
             initialLoadTask = nil
             timerTask?.cancel()
             timerTask = nil
+            memoryRecoveryTask?.cancel()
+            memoryRecoveryTask = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
-            initialLoadTask?.cancel()
-            initialLoadTask = nil
-            timerTask?.cancel()
-            timerTask = nil
-            imageLoadGeneration &+= 1
-            MemoryPressureReleasePolicy.release(&currentImage)
-            currentCaption = nil
-            shownIds.removeAll(keepingCapacity: false)
+            handleMemoryPressure()
         }
     }
 
     private func startCycling() {
+        timerTask?.cancel()
         timerTask = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds for standalone
-                if Task.isCancelled { break }
+                do {
+                    try await Task.sleep(nanoseconds: 5_000_000_000)
+                } catch {
+                    break
+                }
                 await showNextPhoto()
+            }
+        }
+    }
+
+    private func handleMemoryPressure() {
+        initialLoadTask?.cancel()
+        initialLoadTask = nil
+        timerTask?.cancel()
+        timerTask = nil
+        memoryRecoveryTask?.cancel()
+        memoryRecoveryTask = nil
+        imageLoadGeneration &+= 1
+        currentCaption = nil
+        shownIds.removeAll(keepingCapacity: false)
+
+        switch MemoryPressureImageRecoveryPolicy.decision(
+            hasImage: currentImage != nil,
+            isActive: true,
+            preserveVisibleImage: true
+        ) {
+        case .preserve:
+            startCycling()
+        case .release:
+            MemoryPressureReleasePolicy.release(&currentImage)
+        case .releaseAndRetry:
+            MemoryPressureReleasePolicy.release(&currentImage)
+            memoryRecoveryTask = Task { @MainActor in
+                do {
+                    try await Task.sleep(
+                        nanoseconds: MemoryPressureImageRecoveryPolicy.retryDelayNanoseconds
+                    )
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await showNextPhoto()
+                guard !Task.isCancelled else { return }
+                startCycling()
             }
         }
     }

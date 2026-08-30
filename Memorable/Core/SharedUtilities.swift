@@ -106,6 +106,26 @@ enum MemoryPressureReleasePolicy {
     }
 }
 
+enum MemoryPressureImageRecoveryPolicy {
+    enum Decision: Equatable {
+        case preserve
+        case release
+        case releaseAndRetry
+    }
+
+    static let retryDelayNanoseconds: UInt64 = 1_000_000_000
+
+    static func decision(
+        hasImage: Bool,
+        isActive: Bool,
+        preserveVisibleImage: Bool
+    ) -> Decision {
+        guard isActive else { return .release }
+        if hasImage && preserveVisibleImage { return .preserve }
+        return .releaseAndRetry
+    }
+}
+
 enum ImageLoadGenerationPolicy {
     static func acceptsCompletion(
         startedGeneration: UInt,
@@ -131,9 +151,9 @@ enum VideoPlaybackRequestPolicy {
 @MainActor
 enum PrivateVideoPlaybackConfiguration {
     static func apply(to player: AVPlayer, controller: AVPlayerViewController) {
-        player.allowsExternalPlayback = false
+        player.allowsExternalPlayback = true
         player.usesExternalPlaybackWhileExternalScreenIsActive = false
-        controller.allowsPictureInPicturePlayback = false
+        controller.allowsPictureInPicturePlayback = true
     }
 
     static func tearDown(

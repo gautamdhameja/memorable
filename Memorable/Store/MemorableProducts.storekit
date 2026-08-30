@@ -9,7 +9,7 @@
       "internalID" : "com.blockdeep.memorable.pro.v2",
       "localizations" : [
         {
-          "description" : "Index up to 8,000 photos and videos. Add Find Similar, folder sources, and smart search.",
+          "description" : "Search all locally available photos and videos. Add Find Similar, folder sources, and smart search.",
           "displayName" : "Memorable Pro",
           "locale" : "en_US"
         }

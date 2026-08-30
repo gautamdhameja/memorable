@@ -12,9 +12,9 @@ Query: "sunset in San Diego last summer"
   -> Extract visual text, date range, location name, and negative terms
   -> Match location text against local reverse-geocoded metadata
   -> Encode raw visual text with the bundled SigLIP2 model
-  -> Snapshot photo and video embeddings under a lock
+  -> Snapshot the resident photo and video fast window under a lock
   -> Build date and location candidate sets
-  -> Score photo and video-frame embeddings
+  -> Score the resident window, then any remaining 512-media database pages
   -> Apply local location, time, OCR, scene-label, and video adjustments
   -> Penalize negative-term similarity
   -> Remove results below the minimum score
@@ -36,9 +36,11 @@ Pure location queries, such as `Paris`, skip visual scoring and return matching 
 
 ## Calculate scores
 
-Photo scoring calculates the dot product of normalized embeddings. Devices use the GPU path when available; the simulator uses CPU and vDSP fallbacks.
+Photo scoring calculates the dot product of normalized embeddings. Devices use the GPU path for the resident fast window when available; database pages use bounded CPU scoring. The simulator uses CPU and vDSP fallbacks.
 
 Video scoring compares the query embedding with each stored frame embedding and keeps the best frame for each video.
+
+Pro search keeps the newest 8,000 media items in the resident fast window. When the persisted index contains additional media, the engine loads 512 media descriptors at a time, applies the same filters and scoring rules to each page, and merges candidates into one bounded global ranking. The 8,000-item value limits resident memory; it does not limit Pro indexing or search coverage.
 
 The app applies these additive values:
 
@@ -70,7 +72,7 @@ If hard filters and visual ranking both fail, return an empty local result. Do n
 
 ## Keep search work bounded
 
-Search scores the local index but retains no more than 500 results in any response path. It checks cancellation during long-running support work, and memory-pressure handling suspends index reloads until explicit user or app work resumes.
+Search scores the local index but retains no more than 500 results in any response path. Whole-library search reads at most 512 media descriptors per database page and checks cancellation between pages. Memory-pressure handling cancels active search work and suspends index reloads until explicit user or app work resumes.
 
 Duplicate search uses separate safety limits: it performs at most 5,000,000 pair comparisons and retains at most 2,000 candidate pairs. Folder enumeration checks cancellation and retains at most 100,000 supported image URLs.
 

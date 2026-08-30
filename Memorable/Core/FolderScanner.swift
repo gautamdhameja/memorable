@@ -60,12 +60,19 @@ enum FolderBookmarkStore {
         )
     }
 
-    static func remove(for sourceId: String) {
+    static func remove(
+        for sourceId: String,
+        removeItem: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }
+    ) throws {
+        let url = try bookmarkURL(for: sourceId)
+        do {
+            try removeItem(url)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            // The desired state is already present.
+        }
         UserDefaults.standard.removeObject(
             forKey: AppKeys.folderBookmark(sourceId: sourceId)
         )
-        guard let url = try? bookmarkURL(for: sourceId) else { return }
-        try? FileManager.default.removeItem(at: url)
     }
 }
 

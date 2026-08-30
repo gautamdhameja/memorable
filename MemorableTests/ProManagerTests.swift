@@ -1,5 +1,6 @@
 import StoreKit
 import XCTest
+import os
 @testable import Memorable
 
 @MainActor
@@ -61,11 +62,195 @@ final class ProManagerTests: XCTestCase {
         XCTAssertEqual(reconciliationCount, 1)
     }
 
+    func testIndeterminateEntitlementPreservesProStateWithoutReconciliation() async {
+        let manager = ProManager(productLoader: { _ in [] })
+        manager.isPro = true
+        var reconciliationCount = 0
+        manager.onFreeTierReconciliationNeeded = {
+            reconciliationCount += 1
+        }
+
+        let generation = await manager.beginEntitlementVerification()
+        await manager.reconcileEntitlementVerification(
+            .indeterminate,
+            generation: generation
+        )
+
+        XCTAssertTrue(manager.isPro)
+        XCTAssertEqual(reconciliationCount, 0)
+    }
+
+    func testStaleNegativeVerificationCannotOverrideNewerEntitlement() async {
+        let manager = ProManager(productLoader: { _ in [] })
+        manager.isPro = false
+        var reconciliationCount = 0
+        manager.onFreeTierReconciliationNeeded = {
+            reconciliationCount += 1
+        }
+
+        let staleGeneration = await manager.beginEntitlementVerification()
+        await manager.reconcileVerifiedEntitlement(true)
+        await manager.reconcileEntitlementVerification(
+            .notEntitled,
+            generation: staleGeneration
+        )
+
+        XCTAssertTrue(manager.isPro)
+        XCTAssertEqual(reconciliationCount, 0)
+    }
+
+    func testNewerEntitlementCancelsInFlightFreeTierReconciliation() async {
+        let manager = ProManager(productLoader: { _ in [] })
+        manager.isPro = true
+        let reconciliationStarted = expectation(description: "Free-tier reconciliation started")
+        let reconciliationCancelled = expectation(description: "Free-tier reconciliation cancelled")
+        manager.onFreeTierReconciliationNeeded = {
+            reconciliationStarted.fulfill()
+            do {
+                try await Task.sleep(nanoseconds: 10_000_000_000)
+            } catch is CancellationError {
+                reconciliationCancelled.fulfill()
+            } catch {
+                XCTFail("Unexpected reconciliation error: \(error)")
+            }
+        }
+
+        let staleReconciliation = Task {
+            await manager.reconcileVerifiedEntitlement(false)
+        }
+        await fulfillment(of: [reconciliationStarted], timeout: 1)
+
+        await manager.reconcileVerifiedEntitlement(true)
+        await staleReconciliation.value
+        await fulfillment(of: [reconciliationCancelled], timeout: 1)
+
+        XCTAssertTrue(manager.isPro)
+    }
+
+    func testEntitlementInvalidationSuspendsWithoutBlockingMainActor() async throws {
+        let permit = EntitlementReconciliationPermit()
+        let releaseLease = DispatchSemaphore(value: 0)
+        let leaseStartedExpectation = expectation(description: "Reconciliation lease started")
+        let invalidationStarted = expectation(description: "Invalidation started")
+        let mainActorProgressed = expectation(description: "Main actor remained responsive")
+        var invalidationFinished = false
+
+        let reconciliation = Task.detached {
+            try permit.withValidLease {
+                leaseStartedExpectation.fulfill()
+                releaseLease.wait()
+            }
+        }
+        await fulfillment(of: [leaseStartedExpectation], timeout: 2)
+
+        let invalidation = Task { @MainActor in
+            invalidationStarted.fulfill()
+            await permit.invalidateAndWait()
+            invalidationFinished = true
+        }
+        await fulfillment(of: [invalidationStarted], timeout: 2)
+        Task { @MainActor in
+            mainActorProgressed.fulfill()
+        }
+        await fulfillment(of: [mainActorProgressed], timeout: 2)
+
+        XCTAssertFalse(invalidationFinished)
+        XCTAssertFalse(permit.isValid)
+        XCTAssertThrowsError(try permit.withValidLease {}) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+
+        releaseLease.signal()
+        try await reconciliation.value
+        await invalidation.value
+
+        XCTAssertTrue(invalidationFinished)
+        XCTAssertFalse(permit.isValid)
+    }
+
+    func testRestorationWaitsForStaleNegativeLeaseBeforePublishing() async throws {
+        let manager = ProManager(productLoader: { _ in [] })
+        manager.isPro = true
+        let leaseStarted = expectation(description: "Free-tier database lease started")
+        let releaseLease = DispatchSemaphore(value: 0)
+        let capturedPermit = OSAllocatedUnfairLock<EntitlementReconciliationPermit?>(
+            initialState: nil
+        )
+        manager.onFreeTierReconciliationNeeded = {
+            guard let permit = EntitlementReconciliationContext.permit else {
+                XCTFail("Expected the reconciliation permit")
+                return
+            }
+            capturedPermit.withLock { $0 = permit }
+            do {
+                try await Task.detached {
+                    try permit.withValidLease {
+                        leaseStarted.fulfill()
+                        releaseLease.wait()
+                    }
+                }.value
+            } catch is CancellationError {
+                // A newer verified entitlement cancels the outer reconciliation,
+                // but the acquired database lease is still allowed to finish.
+            } catch {
+                XCTFail("Unexpected reconciliation error: \(error)")
+            }
+        }
+
+        let staleNegative = Task {
+            await manager.reconcileVerifiedEntitlement(false)
+        }
+        await fulfillment(of: [leaseStarted], timeout: 2)
+        XCTAssertFalse(manager.isPro)
+
+        let firstRestorationStarted = expectation(description: "First restoration started")
+        let secondRestorationStarted = expectation(description: "Second restoration started")
+        var firstRestorationFinished = false
+        var secondRestorationFinished = false
+        let firstRestoration = Task {
+            firstRestorationStarted.fulfill()
+            await manager.reconcileVerifiedEntitlement(true)
+            firstRestorationFinished = true
+        }
+        let secondRestoration = Task {
+            secondRestorationStarted.fulfill()
+            await manager.reconcileVerifiedEntitlement(true)
+            secondRestorationFinished = true
+        }
+        await fulfillment(
+            of: [firstRestorationStarted, secondRestorationStarted],
+            timeout: 2
+        )
+        let invalidated = expectation(description: "Active lease invalidated")
+        Task.detached {
+            while capturedPermit.withLock({ $0?.isValid ?? true }) {
+                await Task.yield()
+            }
+            invalidated.fulfill()
+        }
+        await fulfillment(of: [invalidated], timeout: 2)
+
+        let mainActorProgressed = expectation(description: "Main actor progressed during restoration")
+        Task { @MainActor in
+            mainActorProgressed.fulfill()
+        }
+        await fulfillment(of: [mainActorProgressed], timeout: 2)
+        XCTAssertFalse(manager.isPro, "Restoration must not publish before the stale lease completes")
+        XCTAssertFalse(firstRestorationFinished)
+        XCTAssertFalse(secondRestorationFinished)
+
+        releaseLease.signal()
+        await staleNegative.value
+        await firstRestoration.value
+        await secondRestoration.value
+
+        XCTAssertTrue(manager.isPro, "The stale negative reconciliation must not win after restoration")
+    }
+
     func testBelowCapReconciliationDoesNotReportLimitReached() {
         let result = FreeTierReconciliationResult(
             retainedMediaCount: 12,
-            didTrimMedia: false,
-            removedFolderSourceIDs: []
+            didTrimMedia: false
         )
 
         XCTAssertFalse(FreeTierStatePolicy.hitIndexLimit(

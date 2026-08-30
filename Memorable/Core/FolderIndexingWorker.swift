@@ -26,7 +26,7 @@ enum FolderSourceRegistration {
         persistBookmark: (Data) throws -> Void,
         insertSource: @escaping @Sendable () throws -> Void,
         removeSource: @escaping @Sendable () throws -> Void,
-        removeBookmark: () -> Void
+        removeBookmark: () throws -> Void
     ) async throws {
         _ = sourceId
         try persistBookmark(bookmarkData)
@@ -43,16 +43,28 @@ enum FolderSourceRegistration {
             didInsertSource = true
             try Task.checkCancellation()
         } catch {
+            var shouldRemoveBookmark = !didInsertSource
             if didInsertSource {
                 do {
                     try await Task.detached(priority: .utility) {
                         try removeSource()
                     }.value
-                } catch {
-                    logger.error("Failed to roll back cancelled folder source registration: \(error.safeDiagnosticCode)")
+                    shouldRemoveBookmark = true
+                } catch FolderSourceDeletionError.bookmarkCleanupFailed {
+                    // Database rows are already gone; retry only the remaining
+                    // bookmark cleanup below.
+                    shouldRemoveBookmark = true
+                } catch let rollbackError {
+                    logger.error("Failed to roll back cancelled folder source registration: \(rollbackError.safeDiagnosticCode)")
                 }
             }
-            removeBookmark()
+            if shouldRemoveBookmark {
+                do {
+                    try removeBookmark()
+                } catch let cleanupError {
+                    logger.error("Failed to clean up a folder bookmark after registration failure: \(cleanupError.safeDiagnosticCode)")
+                }
+            }
             throw error
         }
     }
@@ -86,7 +98,6 @@ final class FolderIndexingWorker {
     struct Callbacks {
         let searchableCount: () -> Int
         let setProgress: (IndexingProgress) -> Void
-        let setReachedDeviceIndexLimit: (Bool) -> Void
         let reloadSearchIndex: () async -> Void
     }
 
@@ -108,6 +119,23 @@ final class FolderIndexingWorker {
     }
 
     func index(url: URL, name: String) async {
+        await index(url: url, name: name, existingSource: nil)
+    }
+
+    func reindex(source: PhotoSource) async {
+        guard source.type == PhotoSourceType.folder.rawValue,
+              let url = FolderScanner.resolveBookmark(forSourceId: source.id) else {
+            logger.error("Could not resolve a saved folder bookmark for re-indexing")
+            return
+        }
+        await index(url: url, name: source.name, existingSource: source)
+    }
+
+    private func index(
+        url: URL,
+        name: String,
+        existingSource: PhotoSource?
+    ) async {
         let displayName = FolderDisplayNamePolicy.sanitized(name)
         let hasAccess = url.startAccessingSecurityScopedResource()
         guard hasAccess else {
@@ -117,72 +145,55 @@ final class FolderIndexingWorker {
         defer { url.stopAccessingSecurityScopedResource() }
 
         let db = database
-        let initialIndexedMediaCount: Int
-        do {
-            let counts = try await Task.detached(priority: .utility) {
-                try db.indexedMediaCounts()
-            }.value
-            initialIndexedMediaCount = counts.total
-        } catch {
-            logger.error("Failed to determine the current index size: \(error.safeDiagnosticCode)")
-            return
-        }
-        let remainingCapacity = max(0, ProTier.maxIndexedMedia - initialIndexedMediaCount)
-        guard remainingCapacity > 0 else {
-            callbacks.setReachedDeviceIndexLimit(true)
-            return
-        }
-        callbacks.setReachedDeviceIndexLimit(false)
-
         let imageURLs = await FolderScanOperation.run {
-            FolderScanner.scanFolder(at: url, maximumImageCount: remainingCapacity)
+            FolderScanner.scanFolder(at: url)
         }
         guard !Task.isCancelled, !imageURLs.isEmpty else { return }
 
-        let sourceId = UUID().uuidString
-        let bookmarkData: Data
-        do {
-            bookmarkData = try url.bookmarkData(
-                options: .minimalBookmark,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
-        } catch {
-            logger.error("Failed to save folder bookmark: \(error.safeDiagnosticCode)")
-            return
-        }
+        let sourceId = existingSource?.id ?? UUID().uuidString
+        if existingSource == nil {
+            let bookmarkData: Data
+            do {
+                bookmarkData = try url.bookmarkData(
+                    options: .minimalBookmark,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+            } catch {
+                logger.error("Failed to save folder bookmark: \(error.safeDiagnosticCode)")
+                return
+            }
 
-        let source = PhotoSource(
-            id: sourceId,
-            type: PhotoSourceType.folder.rawValue,
-            path: PhotoSourcePolicy.canonicalPath(url),
-            name: displayName,
-            addedAt: Date(),
-            lastIndexedAt: nil,
-            photoCount: 0
-        )
-        do {
-            try await FolderSourceRegistration.register(
-                bookmarkData: bookmarkData,
-                sourceId: sourceId,
-                persistBookmark: { data in
-                    try FolderBookmarkStore.set(data, for: sourceId)
-                },
-                insertSource: { try db.insertSource(source) },
-                removeSource: { try db.deleteSource(sourceId) },
-                removeBookmark: {
-                    FolderBookmarkStore.remove(for: sourceId)
-                }
+            let source = PhotoSource(
+                id: sourceId,
+                type: PhotoSourceType.folder.rawValue,
+                path: PhotoSourcePolicy.canonicalPath(url),
+                name: displayName,
+                addedAt: Date(),
+                lastIndexedAt: nil,
+                photoCount: 0
             )
-        } catch {
-            logger.error("Failed to create source: \(error.safeDiagnosticCode)")
-            return
+            do {
+                try await FolderSourceRegistration.register(
+                    bookmarkData: bookmarkData,
+                    sourceId: sourceId,
+                    persistBookmark: { data in
+                        try FolderBookmarkStore.set(data, for: sourceId)
+                    },
+                    insertSource: { try db.insertSource(source) },
+                    removeSource: { try db.deleteSource(sourceId) },
+                    removeBookmark: {
+                        try FolderBookmarkStore.remove(for: sourceId)
+                    }
+                )
+            } catch {
+                logger.error("Failed to create source: \(error.safeDiagnosticCode)")
+                return
+            }
         }
 
         func rollbackIncompleteSource() async {
-            defer {
-                FolderBookmarkStore.remove(for: sourceId)
-            }
+            guard existingSource == nil else { return }
             let rollbackTask = Task.detached(priority: .utility) {
                 try db.deleteSource(sourceId)
             }
@@ -219,30 +230,37 @@ final class FolderIndexingWorker {
         )
         callbacks.setProgress(currentProgress)
 
-        let alreadyIndexed: Set<String>
-        do {
-            let db = database
-            alreadyIndexed = try await Task.detached(priority: .utility) {
-                try db.allIndexedFilePaths()
-            }.value
-        } catch {
-            logger.error("Failed to load indexed folder paths: \(error.safeDiagnosticCode)")
-            alreadyIndexed = []
-        }
         var indexed = 0
         var persisted = 0
-        var indexedMediaCount = initialIndexedMediaCount
+        var alreadyIndexed = 0
         var batch: [IndexedPhoto] = []
 
-        for imageURL in imageURLs {
+        var existingPaths: Set<String> = []
+        for (imageIndex, imageURL) in imageURLs.enumerated() {
             if Task.isCancelled { break }
-            if alreadyIndexed.contains(imageURL.path) {
+            if imageIndex.isMultiple(of: SearchIndexLimits.databasePageMediaItems) {
+                let end = min(
+                    imageURLs.count,
+                    imageIndex + SearchIndexLimits.databasePageMediaItems
+                )
+                let paths = imageURLs[imageIndex..<end].map(\.path)
+                do {
+                    let db = database
+                    existingPaths = try await Task.detached(priority: .utility) {
+                        try db.existingFilePaths(in: paths)
+                    }.value
+                } catch {
+                    logger.error("Failed to check indexed folder paths: \(error.safeDiagnosticCode)")
+                    return
+                }
+            }
+            if existingPaths.contains(imageURL.path) {
+                alreadyIndexed += 1
                 indexed += 1
                 currentProgress.completed = indexed
                 callbacks.setProgress(currentProgress)
                 continue
             }
-            guard indexedMediaCount < ProTier.maxIndexedMedia else { break }
 
             let loadedImage = await FolderImageLoadOperation.run {
                 FolderScanner.loadImage(from: imageURL, within: url)
@@ -286,8 +304,6 @@ final class FolderIndexingWorker {
                     sourceId: sourceId,
                     filePath: imageURL.path
                 ))
-                indexedMediaCount += 1
-
                 if batch.count >= batchSize {
                     let photosToInsert = batch
                     try await persist(photosToInsert)
@@ -338,14 +354,15 @@ final class FolderIndexingWorker {
             await rollbackIncompleteSource()
             return
         }
-        guard persisted > 0 else {
+        let totalPersistedForSource = persisted + alreadyIndexed
+        guard totalPersistedForSource > 0 else {
             await rollbackIncompleteSource()
             return
         }
         do {
             let db = database
             try await Task.detached(priority: .utility) {
-                try db.updateSourceStats(sourceId, photoCount: persisted)
+                try db.updateSourceStats(sourceId, photoCount: totalPersistedForSource)
             }.value
         } catch {
             logger.error("Failed to update source stats: \(error.safeDiagnosticCode)")

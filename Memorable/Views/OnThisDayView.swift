@@ -143,6 +143,7 @@ struct OnThisDayView: View {
 private struct MemoryHeroImage: View {
     let photo: IndexedPhotoReference?
     @State private var image: UIImage?
+    @State private var loadedPhotoID: String?
     @State private var imageLoadGeneration: UInt = 0
     @State private var imageLoadTask: Task<Void, Never>?
 
@@ -158,35 +159,99 @@ private struct MemoryHeroImage: View {
         }
         .clipped()
         .task(id: photo?.id) {
-            guard let photo else { return }
-            imageLoadTask?.cancel()
-            let task = Task { @MainActor in
-                imageLoadGeneration &+= 1
-                let generation = imageLoadGeneration
-                let loaded = await PhotoLibrary.loadImage(
-                    for: photo.searchResult,
-                    targetSize: CGSize(width: 1200, height: 1200)
-                )
-                guard ImageLoadGenerationPolicy.acceptsCompletion(
-                    startedGeneration: generation,
-                    currentGeneration: imageLoadGeneration,
-                    isCancelled: Task.isCancelled
-                ) else { return }
-                image = loaded
+            guard let photo else {
+                image = nil
+                loadedPhotoID = nil
+                return
             }
-            imageLoadTask = task
+            let task = startImageLoad(for: photo)
             await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            handleMemoryPressure()
+        }
+        .onDisappear {
             imageLoadTask?.cancel()
             imageLoadTask = nil
             imageLoadGeneration &+= 1
+        }
+    }
+
+    private func startImageLoad(
+        for photo: IndexedPhotoReference,
+        delayNanoseconds: UInt64 = 0
+    ) -> Task<Void, Never> {
+        imageLoadTask?.cancel()
+        let task = Task { @MainActor in
+            if delayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    return
+                }
+            }
+            imageLoadGeneration &+= 1
+            let generation = imageLoadGeneration
+            let loaded = await PhotoLibrary.loadImage(
+                for: photo.searchResult,
+                targetSize: CGSize(width: 1200, height: 1200)
+            )
+            guard ImageLoadGenerationPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: imageLoadGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            image = loaded
+            loadedPhotoID = photo.id
+        }
+        imageLoadTask = task
+        return task
+    }
+
+    private func handleMemoryPressure() {
+        imageLoadTask?.cancel()
+        imageLoadTask = nil
+        imageLoadGeneration &+= 1
+        switch MemoryPressureImageRecoveryPolicy.decision(
+            hasImage: image != nil && loadedPhotoID == photo?.id,
+            isActive: photo != nil,
+            preserveVisibleImage: true
+        ) {
+        case .preserve:
+            return
+        case .release:
             MemoryPressureReleasePolicy.release(&image)
+            loadedPhotoID = nil
+        case .releaseAndRetry:
+            MemoryPressureReleasePolicy.release(&image)
+            loadedPhotoID = nil
+            guard let photo else { return }
+            _ = startImageLoad(
+                for: photo,
+                delayNanoseconds: MemoryPressureImageRecoveryPolicy.retryDelayNanoseconds
+            )
         }
     }
 }
 
 // MARK: - Memory Thumbnail
+
+private enum MemoryThumbnailRecoveryCoordinator {
+    private static let permits = CancellablePermitPool(limit: 2)
+
+    static func load(
+        _ operation: @escaping @Sendable () async -> UIImage?
+    ) async -> UIImage? {
+        guard await permits.acquire() else { return nil }
+        if Task.isCancelled {
+            await permits.release()
+            return nil
+        }
+        let image = await operation()
+        await permits.release()
+        return Task.isCancelled ? nil : image
+    }
+}
 
 struct MemoryThumbnail: View {
     let photo: IndexedPhotoReference
@@ -233,35 +298,71 @@ struct MemoryThumbnail: View {
                 allResults: groupPhotos.map(\.searchResult)
             )
         }
-        .task {
-            imageLoadTask?.cancel()
-            let task = Task { @MainActor in
-                imageLoadGeneration &+= 1
-                let generation = imageLoadGeneration
-                let loaded = await PhotoLibrary.loadImage(
-                    for: photo.searchResult,
-                    targetSize: CGSize(width: 400, height: 400)
-                )
-                guard ImageLoadGenerationPolicy.acceptsCompletion(
-                    startedGeneration: generation,
-                    currentGeneration: imageLoadGeneration,
-                    isCancelled: Task.isCancelled
-                ) else { return }
-                thumbnail = loaded
-                creationDate = photo.creationDate
-            }
-            imageLoadTask = task
+        .task(id: photo.id) {
+            let task = startImageLoad()
             await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            handleMemoryPressure()
+        }
+        .onDisappear {
             imageLoadTask?.cancel()
             imageLoadTask = nil
             imageLoadGeneration &+= 1
-            MemoryPressureReleasePolicy.release(&thumbnail)
         }
     }
 
     private func handleTap() {
         selectedResult = photo.searchResult
+    }
+
+    private func startImageLoad(
+        delayNanoseconds: UInt64 = 0,
+        coordinatesRecovery: Bool = false
+    ) -> Task<Void, Never> {
+        imageLoadTask?.cancel()
+        let task = Task { @MainActor in
+            if delayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    return
+                }
+            }
+            imageLoadGeneration &+= 1
+            let generation = imageLoadGeneration
+            let result = photo.searchResult
+            let load: @Sendable () async -> UIImage? = {
+                await PhotoLibrary.loadImage(
+                    for: result,
+                    targetSize: CGSize(width: 400, height: 400)
+                )
+            }
+            let loaded = if coordinatesRecovery {
+                await MemoryThumbnailRecoveryCoordinator.load(load)
+            } else {
+                await load()
+            }
+            guard ImageLoadGenerationPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: imageLoadGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            thumbnail = loaded
+            creationDate = photo.creationDate
+        }
+        imageLoadTask = task
+        return task
+    }
+
+    private func handleMemoryPressure() {
+        imageLoadTask?.cancel()
+        imageLoadTask = nil
+        imageLoadGeneration &+= 1
+        MemoryPressureReleasePolicy.release(&thumbnail)
+        _ = startImageLoad(
+            delayNanoseconds: MemoryPressureImageRecoveryPolicy.retryDelayNanoseconds,
+            coordinatesRecovery: true
+        )
     }
 }

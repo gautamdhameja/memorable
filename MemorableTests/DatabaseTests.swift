@@ -1,5 +1,6 @@
 import XCTest
 import GRDB
+import os
 @testable import Memorable
 
 final class DatabaseTests: XCTestCase {
@@ -316,6 +317,310 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(videoIndex.embeddings.count, EmbeddingConfig.dimensions)
     }
 
+    func testSearchMediaPagesCoverMixedMediaWithoutOverlapOrSplitVideos() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var newestPhoto = makePhoto(localIdentifier: "photo-new")
+        newestPhoto.creationDate = Date(timeIntervalSince1970: 400)
+        var oldestPhoto = makePhoto(localIdentifier: "photo-old")
+        oldestPhoto.creationDate = Date(timeIntervalSince1970: 100)
+        try database.insertPhotos([newestPhoto, oldestPhoto], completingRequiredRebuild: false)
+
+        var video = makeVideo(localIdentifier: "video-middle")
+        video.creationDate = Date(timeIntervalSince1970: 300)
+        try database.insertVideo(
+            video,
+            [
+                makeFrame(videoId: video.id, position: 0.1),
+                makeFrame(videoId: video.id, position: 0.5),
+                makeFrame(videoId: video.id, position: 0.9),
+            ],
+            completingRequiredRebuild: false
+        )
+
+        var cursor: SearchMediaPageCursor?
+        var mediaIDs: [String] = []
+        var videoFrameCounts: [Int] = []
+        var pageNumber = 0
+        repeat {
+            let page = try database.loadSearchMediaPage(after: cursor, limit: 1)
+            if pageNumber == 0 {
+                XCTAssertEqual(page.totalPhotoCount, 2)
+                XCTAssertEqual(page.totalVideoCount, 1)
+            } else {
+                XCTAssertEqual(page.totalPhotoCount, 0)
+                XCTAssertEqual(page.totalVideoCount, 0)
+            }
+            mediaIDs.append(contentsOf: page.photos.ids)
+            if page.videos.count > 0 {
+                mediaIDs.append(contentsOf: Set(page.videos.ids))
+                videoFrameCounts.append(page.videos.count)
+            }
+            cursor = page.nextCursor
+            pageNumber += 1
+        } while cursor != nil
+
+        XCTAssertEqual(Set(mediaIDs), [newestPhoto.id, video.id, oldestPhoto.id])
+        XCTAssertEqual(mediaIDs.count, 3)
+        XCTAssertEqual(videoFrameCounts, [3])
+    }
+
+    func testSearchMediaPagingPreservesGlobalTieAndNilDateOrder() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var tiedPhoto = makePhoto(localIdentifier: "tied-photo")
+        tiedPhoto.id = "shared-id"
+        tiedPhoto.creationDate = Date(timeIntervalSince1970: 200)
+        var nilDatePhoto = makePhoto(localIdentifier: "nil-photo")
+        nilDatePhoto.id = "a-nil-photo"
+        nilDatePhoto.creationDate = nil
+        var excludedFolderPhoto = makePhoto(
+            localIdentifier: "folder-photo",
+            sourceId: "folder-source",
+            filePath: "/folder/photo.jpg"
+        )
+        excludedFolderPhoto.id = "newest-folder"
+        excludedFolderPhoto.creationDate = Date(timeIntervalSince1970: 300)
+        try database.insertPhotos(
+            [tiedPhoto, nilDatePhoto, excludedFolderPhoto],
+            completingRequiredRebuild: false
+        )
+
+        var tiedVideo = makeVideo(localIdentifier: "tied-video")
+        tiedVideo.id = "shared-id"
+        tiedVideo.creationDate = Date(timeIntervalSince1970: 200)
+        try database.insertVideo(
+            tiedVideo,
+            [makeFrame(videoId: tiedVideo.id, position: 0.5)],
+            completingRequiredRebuild: false
+        )
+        var nilDateVideo = makeVideo(localIdentifier: "nil-video")
+        nilDateVideo.id = "z-nil-video"
+        nilDateVideo.creationDate = nil
+        try database.insertVideo(
+            nilDateVideo,
+            [makeFrame(videoId: nilDateVideo.id, position: 0.5)],
+            completingRequiredRebuild: false
+        )
+
+        var searchCursor: SearchMediaPageCursor?
+        var searchOrder: [(SearchMediaPageKind, String)] = []
+        repeat {
+            let page = try database.loadSearchMediaPage(after: searchCursor, limit: 1)
+            if let photoID = page.photos.ids.first {
+                searchOrder.append((.photo, photoID))
+            }
+            if let videoID = page.videos.ids.first {
+                searchOrder.append((.video, videoID))
+            }
+            searchCursor = page.nextCursor
+        } while searchCursor != nil
+
+        XCTAssertEqual(searchOrder.map(\.0), [.photo, .photo, .video, .photo, .video])
+        XCTAssertEqual(
+            searchOrder.map(\.1),
+            ["newest-folder", "shared-id", "shared-id", "a-nil-photo", "z-nil-video"]
+        )
+
+        var identifierCursor: SearchMediaPageCursor?
+        var identifiers: [String] = []
+        repeat {
+            let page = try database.loadIndexedMediaIdentifierPage(
+                after: identifierCursor,
+                limit: 1
+            )
+            identifiers.append(contentsOf: page.photos)
+            identifiers.append(contentsOf: page.videos)
+            identifierCursor = page.nextCursor
+        } while identifierCursor != nil
+        XCTAssertEqual(identifiers, ["tied-photo", "tied-video", "nil-photo", "nil-video"])
+    }
+
+    func testSearchPagingQueriesUseOrderingIndexesWithoutUnionMaterialization() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let cursor = SearchMediaPageCursor(
+            creationDate: Date(timeIntervalSince1970: 200),
+            id: "cursor-id",
+            mediaType: .photo
+        )
+        let photoQuery = AppDatabase.mediaPageDescriptorQuery(
+            mediaType: .photo,
+            includesLocalIdentifier: true,
+            sourceID: PhotoSourceType.photokit.rawValue,
+            after: cursor,
+            limit: 10
+        )
+        let sourceVideoQuery = AppDatabase.mediaPageDescriptorQuery(
+            mediaType: .video,
+            includesLocalIdentifier: true,
+            sourceID: PhotoSourceType.photokit.rawValue,
+            after: cursor,
+            limit: 10
+        )
+        let wholeLibraryVideoQuery = AppDatabase.mediaPageDescriptorQuery(
+            mediaType: .video,
+            includesLocalIdentifier: false,
+            sourceID: nil,
+            after: cursor,
+            limit: 10
+        )
+
+        let plans = try database.dbQueue.read { db in
+            try [photoQuery, sourceVideoQuery, wholeLibraryVideoQuery].map { query in
+                try Row.fetchAll(
+                    db,
+                    sql: "EXPLAIN QUERY PLAN \(query.sql)",
+                    arguments: query.arguments
+                ).map { $0["detail"] as String }.joined(separator: " ")
+            }
+        }
+
+        XCTAssertTrue(plans[0].contains("idx_photos_source_search_order"), plans[0])
+        XCTAssertTrue(plans[1].contains("idx_videos_source_search_order"), plans[1])
+        XCTAssertTrue(plans[2].contains("idx_videos_search_order"), plans[2])
+        XCTAssertFalse(plans.joined().contains("UNION"))
+        XCTAssertFalse(plans.joined().contains("USE TEMP B-TREE"), plans.joined())
+    }
+
+    func testFolderPathBatchLookupUsesFilePathIndex() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let plan = try database.dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    EXPLAIN QUERY PLAN
+                    SELECT filePath FROM indexed_photos
+                    WHERE filePath IN (?, ?)
+                """,
+                arguments: ["/folder/a.jpg", "/folder/b.jpg"]
+            ).map { $0["detail"] as String }.joined(separator: " ")
+        }
+
+        XCTAssertTrue(plan.contains("idx_photos_file_path"), plan)
+    }
+
+    func testInsertVideoRejectsFrameCountsOutsideSafeRange() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let video = makeVideo(localIdentifier: "invalid-frame-count-video")
+
+        XCTAssertThrowsError(
+            try database.insertVideo(video, [], completingRequiredRebuild: false)
+        ) { error in
+            XCTAssertEqual(error as? SearchEngineError, .corruptedIndex)
+        }
+        XCTAssertThrowsError(
+            try database.insertVideo(
+                video,
+                (0...SearchIndexLimits.maximumVideoFramesPerMedia).map {
+                    makeFrame(videoId: video.id, position: Double($0) / 10)
+                },
+                completingRequiredRebuild: false
+            )
+        ) { error in
+            XCTAssertEqual(error as? SearchEngineError, .corruptedIndex)
+        }
+        XCTAssertThrowsError(
+            try database.insertVideo(
+                video,
+                [makeFrame(videoId: "another-video", position: 0.5)],
+                completingRequiredRebuild: false
+            )
+        ) { error in
+            XCTAssertEqual(error as? SearchEngineError, .corruptedIndex)
+        }
+        XCTAssertEqual(try database.videoIndexedCount(), 0)
+    }
+
+    func testSearchPageRejectsPersistedVideoWithoutFrames() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.dbQueue.write { db in
+            try makeVideo(localIdentifier: "corrupt-empty-video").insert(db)
+        }
+
+        XCTAssertThrowsError(try database.loadSearchMediaPage(after: nil, limit: 1)) { error in
+            XCTAssertEqual(error as? SearchEngineError, .corruptedIndex)
+        }
+    }
+
+    func testSearchPageRejectsPersistedVideoWithExcessFrames() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var video = makeVideo(localIdentifier: "corrupt-excess-video")
+        video.frameCount = SearchIndexLimits.maximumVideoFramesPerMedia + 1
+        try database.dbQueue.write { db in
+            try video.insert(db)
+            for index in 0...SearchIndexLimits.maximumVideoFramesPerMedia {
+                try makeFrame(
+                    videoId: video.id,
+                    position: Double(index) / 10
+                ).insert(db)
+            }
+        }
+
+        XCTAssertThrowsError(try database.loadSearchMediaPage(after: nil, limit: 1)) { error in
+            XCTAssertEqual(error as? SearchEngineError, .corruptedIndex)
+        }
+    }
+
+    func testBatchExistenceFindsIdentifiersOlderThanResidentWindow() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let queue = try database.dbQueue.rawQueue()
+        try queue.write { db in
+            try db.execute(
+                sql: """
+                    WITH RECURSIVE sequence(value) AS (
+                        SELECT 0
+                        UNION ALL
+                        SELECT value + 1 FROM sequence WHERE value < ?
+                    )
+                    INSERT INTO indexed_photos (
+                        id, localIdentifier, creationDate, pixelWidth, pixelHeight,
+                        embedding, indexedAt, sourceId
+                    )
+                    SELECT printf('photo-%05d', value), printf('local-%05d', value),
+                           ?, 1, 1, zeroblob(?), ?, ?
+                    FROM sequence
+                """,
+                arguments: [
+                    SearchIndexLimits.residentMediaItems,
+                    Date(timeIntervalSince1970: 100),
+                    EmbeddingConfig.bytesPerEmbedding,
+                    Date(timeIntervalSince1970: 100),
+                    PhotoSourceType.photokit.rawValue,
+                ]
+            )
+        }
+
+        let existing = try database.existingPhotoIdentifiers(in: [
+            "local-00000",
+            "local-08000",
+            "missing",
+        ])
+
+        XCTAssertEqual(existing, ["local-00000", "local-08000"])
+    }
+
     func testBoundedEmbeddingLoadsUseDeterministicNewestFirstOrdering() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },
@@ -448,15 +753,52 @@ final class DatabaseTests: XCTestCase {
             sourceId: "folder-source",
             filePath: "/folder/photo.jpg"
         ))
+        let photoKitVideo = makeVideo(localIdentifier: "photokit-video")
+        try database.insertVideo(
+            photoKitVideo,
+            [makeFrame(videoId: photoKitVideo.id, position: 0.5)],
+            completingRequiredRebuild: false
+        )
+        let folderVideo = makeVideo(
+            localIdentifier: "folder-video",
+            sourceId: "folder-source"
+        )
+        try database.insertVideo(
+            folderVideo,
+            [makeFrame(videoId: folderVideo.id, position: 0.5)],
+            completingRequiredRebuild: false
+        )
 
         let photoIDs = try database.allIndexedIdentifiers()
         let mediaIDs = try database.allIndexedMediaIdentifiers()
         let counts = try database.photoLibraryIndexedMediaCounts()
+        var pageCursor: SearchMediaPageCursor?
+        var pagedPhotoIDs: [String] = []
+        var pagedVideoIDs: [String] = []
+        repeat {
+            let page = try database.loadIndexedMediaIdentifierPage(
+                after: pageCursor,
+                limit: 1
+            )
+            pagedPhotoIDs.append(contentsOf: page.photos)
+            pagedVideoIDs.append(contentsOf: page.videos)
+            pageCursor = page.nextCursor
+        } while pageCursor != nil
+        let wholeLibraryPage = try database.loadSearchMediaPage(after: nil, limit: 10)
 
         XCTAssertEqual(photoIDs, ["photokit-photo"])
         XCTAssertEqual(mediaIDs.photos, ["photokit-photo"])
+        XCTAssertEqual(mediaIDs.videos, ["photokit-video"])
+        XCTAssertEqual(Set(pagedPhotoIDs), ["photokit-photo"])
+        XCTAssertEqual(Set(pagedVideoIDs), ["photokit-video"])
         XCTAssertEqual(counts.photos, 1)
+        XCTAssertEqual(counts.videos, 1)
         XCTAssertEqual(try database.indexedMediaCounts().photos, 2)
+        XCTAssertEqual(try database.indexedMediaCounts().videos, 2)
+        XCTAssertEqual(
+            Set(wholeLibraryPage.videos.localIdentifiers),
+            ["photokit-video", "folder-video"]
+        )
     }
 
     func testPhotoEnrichmentUpdateMarksRowCompleteEvenWithoutOcr() throws {
@@ -604,6 +946,80 @@ final class DatabaseTests: XCTestCase {
         try database.deleteSource(sourceId)
 
         XCTAssertNil(UserDefaults.standard.data(forKey: AppKeys.folderBookmark(sourceId: sourceId)))
+        XCTAssertTrue(try database.listSources().isEmpty)
+    }
+
+    func testDeleteSourceKeepsRowsWhenBookmarkCleanupFails() throws {
+        enum ForcedFailure: Error { case removeDenied }
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let sourceID = "folder-source-cleanup-failure"
+        try database.insertSource(PhotoSource(
+            id: sourceID,
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/folder-cleanup-failure",
+            name: "Folder",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 0
+        ))
+        try database.insertPhoto(makePhoto(
+            localIdentifier: "folder-photo-cleanup-failure",
+            sourceId: sourceID,
+            filePath: "/tmp/folder-cleanup-failure/photo.jpg"
+        ))
+
+        XCTAssertThrowsError(try database.deleteSource(sourceID) { _ in
+            throw ForcedFailure.removeDenied
+        }) {
+            XCTAssertEqual($0 as? FolderSourceDeletionError, .bookmarkCleanupFailed)
+        }
+        XCTAssertEqual(try database.listSources().map(\.id), [sourceID])
+        XCTAssertTrue(try database.isIndexed(localIdentifier: "folder-photo-cleanup-failure"))
+    }
+
+    func testDeleteSourcePropagatesDatabaseFailureAfterRemovingBookmark() throws {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("delete-source-\(UUID().uuidString).sqlite")
+        defer {
+            for suffix in ["", "-shm", "-wal"] {
+                try? FileManager.default.removeItem(
+                    atPath: databaseURL.path + suffix
+                )
+            }
+        }
+        let queue = try DatabaseQueue(path: databaseURL.path)
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let sourceID = "folder-source-database-failure"
+        try database.insertSource(PhotoSource(
+            id: sourceID,
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/folder-database-failure",
+            name: "Folder",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 0
+        ))
+        try queue.close()
+        var didRemoveBookmark = false
+
+        XCTAssertThrowsError(try database.deleteSource(sourceID) { _ in
+            didRemoveBookmark = true
+        }) { error in
+            XCTAssertTrue(error is DatabaseError)
+        }
+        XCTAssertTrue(didRemoveBookmark)
+
+        let verificationQueue = try DatabaseQueue(path: databaseURL.path)
+        let persistedSourceIDs = try verificationQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT id FROM photo_sources")
+        }
+        XCTAssertEqual(persistedSourceIDs, [sourceID])
     }
 
     func testDatabaseInitializationEagerlyMigratesLegacyFolderBookmarks() throws {
@@ -613,7 +1029,7 @@ final class DatabaseTests: XCTestCase {
         let bookmark = Data([9, 8, 7])
         let legacyKey = AppKeys.folderBookmark(sourceId: sourceID)
         UserDefaults.standard.set(bookmark, forKey: legacyKey)
-        defer { FolderBookmarkStore.remove(for: sourceID) }
+        defer { try? FolderBookmarkStore.remove(for: sourceID) }
         try queue.write { db in
             try PhotoSource(
                 id: sourceID,
@@ -632,13 +1048,15 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(FolderBookmarkStore.data(for: sourceID), bookmark)
     }
 
-    func testLegacyBookmarkMigrationPropagatesPersistenceFailure() throws {
+    func testLegacyBookmarkMigrationContinuesAfterPerSourcePersistenceFailure() throws {
         enum ForcedFailure: Error { case writeDenied }
         let queue = try DatabaseQueue()
         try AppDatabase.migrator.migrate(queue)
+        let failingSourceID = "failing-migration-source"
+        let succeedingSourceID = "succeeding-migration-source"
         try queue.write { db in
             try PhotoSource(
-                id: UUID().uuidString,
+                id: failingSourceID,
                 type: PhotoSourceType.folder.rawValue,
                 path: "/tmp/failing-migration",
                 name: "Failing migration",
@@ -646,18 +1064,61 @@ final class DatabaseTests: XCTestCase {
                 lastIndexedAt: nil,
                 photoCount: 0
             ).insert(db)
+            try PhotoSource(
+                id: succeedingSourceID,
+                type: PhotoSourceType.folder.rawValue,
+                path: "/tmp/succeeding-migration",
+                name: "Succeeding migration",
+                addedAt: Date(),
+                lastIndexedAt: nil,
+                photoCount: 0
+            ).insert(db)
         }
+        var migratedSourceIDs: [String] = []
 
-        XCTAssertThrowsError(
-            try AppDatabase.migrateLegacyFolderBookmarks(in: queue) { _ in
+        let failedSourceIDs = AppDatabase.migrateLegacyFolderBookmarks(in: queue) { sourceID in
+            if sourceID == failingSourceID {
                 throw ForcedFailure.writeDenied
             }
-        ) { error in
-            XCTAssertTrue(error is ForcedFailure)
+            migratedSourceIDs.append(sourceID)
         }
+
+        XCTAssertEqual(failedSourceIDs, [failingSourceID])
+        XCTAssertEqual(migratedSourceIDs, [succeedingSourceID])
     }
 
-    func testFreeTierReconciliationRemovesFolderMediaSourcesAndBookmarks() throws {
+    func testBookmarkMigrationFailureDoesNotDemotePersistentDatabase() throws {
+        enum ForcedFailure: Error { case writeDenied }
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue)
+        let sourceID = "persistent-source-with-failed-bookmark-migration"
+        let legacyKey = AppKeys.folderBookmark(sourceId: sourceID)
+        UserDefaults.standard.set(Data([1, 2, 3]), forKey: legacyKey)
+        defer { UserDefaults.standard.removeObject(forKey: legacyKey) }
+        try queue.write { db in
+            try PhotoSource(
+                id: sourceID,
+                type: PhotoSourceType.folder.rawValue,
+                path: "/tmp/persistent-source",
+                name: "Persistent source",
+                addedAt: Date(),
+                lastIndexedAt: nil,
+                photoCount: 0
+            ).insert(db)
+        }
+
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { _ in },
+            migrateLegacyBookmark: { _ in throw ForcedFailure.writeDenied }
+        )
+
+        XCTAssertTrue(database.allowsIndexingWrites)
+        XCTAssertEqual(try database.listSources().map(\.id), [sourceID])
+        XCTAssertEqual(UserDefaults.standard.data(forKey: legacyKey), Data([1, 2, 3]))
+    }
+
+    func testFreeTierReconciliationRemovesOnlyDerivedFolderMedia() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },
             migrate: { try AppDatabase.migrator.migrate($0) }
@@ -687,10 +1148,55 @@ final class DatabaseTests: XCTestCase {
 
         XCTAssertEqual(result.retainedMediaCount, 1)
         XCTAssertFalse(result.didTrimMedia)
-        XCTAssertEqual(result.removedFolderSourceIDs, [sourceID])
-        XCTAssertTrue(try database.listSources().isEmpty)
+        XCTAssertEqual(try database.listSources().map(\.id), [sourceID])
         XCTAssertEqual(try database.loadAllEmbeddings().sourceIds, [PhotoSourceType.photokit.rawValue])
-        XCTAssertNil(UserDefaults.standard.data(forKey: AppKeys.folderBookmark(sourceId: sourceID)))
+        XCTAssertEqual(
+            UserDefaults.standard.data(forKey: AppKeys.folderBookmark(sourceId: sourceID)),
+            Data([4, 5, 6])
+        )
+        let preservedSource = try XCTUnwrap(database.listSources().first)
+        XCTAssertEqual(preservedSource.photoCount, 0)
+        XCTAssertNil(preservedSource.lastIndexedAt)
+    }
+
+    func testInvalidatedFreeTierReconciliationRollsBackAllMutations() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let sourceID = "folder-source-stale-reconciliation"
+        try database.insertSource(PhotoSource(
+            id: sourceID,
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/stale-reconciliation-folder",
+            name: "Stale reconciliation folder",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 1
+        ))
+        try database.insertPhoto(makePhoto(
+            localIdentifier: "folder-photo-stale-reconciliation",
+            sourceId: sourceID,
+            filePath: "/tmp/stale-reconciliation-folder/photo.jpg"
+        ))
+        let validityChecks = OSAllocatedUnfairLock(initialState: 0)
+
+        XCTAssertThrowsError(try database.reconcileFreeTier(
+            FreeTier.maxIndexedMedia,
+            whilePermitted: {
+                validityChecks.withLock {
+                    $0 += 1
+                    return $0 == 1
+                }
+            }
+        )) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+
+        XCTAssertTrue(try database.isIndexed(
+            localIdentifier: "folder-photo-stale-reconciliation"
+        ))
+        XCTAssertEqual(try database.listSources().map(\.id), [sourceID])
     }
 
     func testFolderSourceRegistrationRejectsDuplicatesAndCapsCardinality() throws {
@@ -724,7 +1230,41 @@ final class DatabaseTests: XCTestCase {
         }
     }
 
-    func testDeleteAllRemovesFolderSourcesAndBookmarks() throws {
+    func testListSourcesReturnsGrandfatheredFoldersBeyondCurrentInsertionLimit() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let legacyCount = PhotoSourcePolicy.maximumFolderSources + 3
+        try database.dbQueue.write { db in
+            for index in 0..<legacyCount {
+                try PhotoSource(
+                    id: "legacy-source-\(index)",
+                    type: PhotoSourceType.folder.rawValue,
+                    path: "/tmp/legacy-folder-\(index)",
+                    name: "Legacy folder \(index)",
+                    addedAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                    lastIndexedAt: nil,
+                    photoCount: 0
+                ).insert(db)
+            }
+        }
+
+        XCTAssertEqual(try database.listSources().count, legacyCount)
+        XCTAssertThrowsError(try database.insertSource(PhotoSource(
+            id: "new-source-over-limit",
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/new-source-over-limit",
+            name: "New folder",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 0
+        ))) {
+            XCTAssertEqual($0 as? PhotoSourceRegistrationError, .sourceLimitReached)
+        }
+    }
+
+    func testIndexResetPreservesFolderSourcesAndBookmarks() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },
             migrate: { try AppDatabase.migrator.migrate($0) }
@@ -739,15 +1279,28 @@ final class DatabaseTests: XCTestCase {
             lastIndexedAt: nil,
             photoCount: 0
         ))
+        try database.insertPhoto(makePhoto(
+            localIdentifier: "folder-photo-before-reset",
+            sourceId: sourceID,
+            filePath: "/tmp/rebuild-folder/photo.jpg"
+        ))
+        try database.updateSourceStats(sourceID, photoCount: 1)
         UserDefaults.standard.set(
             Data([7, 8, 9]),
             forKey: AppKeys.folderBookmark(sourceId: sourceID)
         )
 
-        try database.deleteAll()
+        try database.resetIndexedMedia()
 
-        XCTAssertTrue(try database.listSources().isEmpty)
-        XCTAssertNil(UserDefaults.standard.data(forKey: AppKeys.folderBookmark(sourceId: sourceID)))
+        XCTAssertEqual(try database.listSources().map(\.id), [sourceID])
+        XCTAssertEqual(
+            UserDefaults.standard.data(forKey: AppKeys.folderBookmark(sourceId: sourceID)),
+            Data([7, 8, 9])
+        )
+        XCTAssertEqual(try database.indexedCount(), 0)
+        let preservedSource = try XCTUnwrap(database.listSources().first)
+        XCTAssertEqual(preservedSource.photoCount, 0)
+        XCTAssertNil(preservedSource.lastIndexedAt)
     }
 
     func testFolderLocalIdentifierUsesSourceAndRelativePath() {
@@ -845,7 +1398,7 @@ final class DatabaseTests: XCTestCase {
 
             XCTAssertTrue(try database.indexRebuildRequired())
 
-            try database.deleteAll()
+            try database.resetIndexedMedia()
 
             XCTAssertEqual(try database.indexedCount(), 0)
             XCTAssertTrue(try database.indexRebuildRequired())
@@ -1018,8 +1571,11 @@ private func makePhoto(
     )
 }
 
-private func makeVideo(localIdentifier: String) -> IndexedVideo {
-    IndexedVideo(
+private func makeVideo(
+    localIdentifier: String,
+    sourceId: String = PhotoSourceType.photokit.rawValue
+) -> IndexedVideo {
+    var video = IndexedVideo(
         id: UUID().uuidString,
         localIdentifier: localIdentifier,
         creationDate: Date(timeIntervalSince1970: 100),
@@ -1031,6 +1587,8 @@ private func makeVideo(localIdentifier: String) -> IndexedVideo {
         frameCount: 1,
         indexedAt: Date(timeIntervalSince1970: 200)
     )
+    video.sourceId = sourceId
+    return video
 }
 
 private func makeFrame(videoId: String, position: Double) -> IndexedVideoFrame {

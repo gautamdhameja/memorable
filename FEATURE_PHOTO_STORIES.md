@@ -6,7 +6,7 @@
 
 ## Overview
 
-Automatically group photos into "stories" or "events" based on time and location proximity. No AI needed — pure metadata analysis on creation dates and GPS coordinates already stored in the database. The app organizes the user's life into browsable events without any manual effort.
+Group indexed photos into stories based on time and location proximity. The clustering uses creation dates and GPS coordinates already stored in the local database; it does not require a generative model.
 
 **Example output:**
 - "Your trip to Barcelona" — June 14-17, 2023 — 47 photos
@@ -35,7 +35,7 @@ A new story starts when EITHER:
 ### Use a single-pass O(n) algorithm
 
 ```
-1. Load all indexed photos sorted by creationDate ASC
+1. Read indexed photos in creation-date order using bounded database pages.
 2. Initialize first photo as start of first story
 3. For each subsequent photo:
    a. Compare time gap with previous photo
@@ -286,10 +286,10 @@ Memories tab:
 ```
 
 ### Option B: Add a separate tab
-Adds a 5th tab — feels crowded.
+Adds a fifth tab and increases the number of primary navigation destinations.
 
 ### Option C: Add the feature to More
-Too hidden for such a visual feature.
+Places the feature outside the main memories workflow.
 
 **Recommended: Option A** — stories as a horizontal scrollable section in the Memories tab, between the slideshow button and On This Day.
 
@@ -301,11 +301,11 @@ Too hidden for such a visual feature.
 
 ## Bound performance costs
 
-- **O(n)** single-pass algorithm — sorts photos by date, then linear scan
-- For 2,900 photos: < 100ms to cluster
-- For 50,000 photos: < 1 second
-- Reverse geocoding for titles: batch via CLGeocoder, cache results
-- Story clustering runs on `Task.detached(priority: .utility)` after indexing
+- Read photos in creation-date order and cluster them in one pass.
+- Use bounded database pages instead of retaining the complete library.
+- Define performance targets after profiling representative small and large libraries on the minimum supported device.
+- Cache reverse-geocoded title inputs and results locally.
+- Run story clustering in cancellable utility-priority work after indexing.
 
 ## Reverse-geocode story titles
 
@@ -320,14 +320,18 @@ func reverseGeocode(latitude: Double, longitude: Double) async -> String? {
             // Prefer: city > locality > area > country
             return place.locality ?? place.subAdministrativeArea ?? place.administrativeArea ?? place.country
         }
-    } catch { }
+    } catch is CancellationError {
+        return nil
+    } catch {
+        logger.error("Story title geocoding failed: \(error.safeDiagnosticCode)")
+    }
     return nil
 }
 ```
 
 Log geocoding failures and propagate task cancellation in the production implementation. `CLGeocoder` sends the media coordinates to Apple to return a place name. Do not send photo contents, search query text, embeddings, or local identifiers with that request.
 
-**Rate limiting**: CLGeocoder has rate limits. Process stories in batches of 5-10 with 1-second delays between batches.
+`CLGeocoder` can throttle requests. Serialize and deduplicate requests, cache successful results, propagate cancellation, and retry only after a reported transient failure. Send coordinates only; do not attach photo contents, search query text, embeddings, or local identifiers.
 
 ## Implementation tasks
 
@@ -343,8 +347,6 @@ Log geocoding failures and propagate task cancellation in the production impleme
 | 8 | Low | Integration into Memories tab |
 | 9 | Low | Trigger clustering after indexing |
 | 10 | Low | Build, test, verify |
-
-**Estimated total effort:** 3-4 hours
 
 ## Dependencies
 

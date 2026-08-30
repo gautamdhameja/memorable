@@ -1,4 +1,5 @@
 import XCTest
+import GRDB
 import os
 @testable import Memorable
 
@@ -285,6 +286,83 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertTrue(FolderIndexingWorker.shouldPersistFolderWrite(isCancelled: false))
     }
 
+    func testSavedFolderReindexPolicySelectsOnlyPreservedEmptySourcesForPro() {
+        let empty = PhotoSource(
+            id: "empty-folder",
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/empty-folder",
+            name: "Empty folder",
+            addedAt: Date(),
+            lastIndexedAt: nil,
+            photoCount: 0
+        )
+        let populated = PhotoSource(
+            id: "populated-folder",
+            type: PhotoSourceType.folder.rawValue,
+            path: "/tmp/populated-folder",
+            name: "Populated folder",
+            addedAt: Date(),
+            lastIndexedAt: Date(),
+            photoCount: 4
+        )
+
+        XCTAssertEqual(
+            SavedFolderReindexPolicy.sourcesToReindex(
+                from: [empty, populated],
+                isPro: true
+            ).map(\.id),
+            [empty.id]
+        )
+        XCTAssertTrue(SavedFolderReindexPolicy.sourcesToReindex(
+            from: [empty, populated],
+            isPro: false
+        ).isEmpty)
+    }
+
+    func testFolderVolumeCannotAuthorizePhotoLibraryOrphanDeletion() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.insertPhoto(makeOrphanPolicyPhoto(localIdentifier: "photokit-photo"))
+        for index in 0..<9 {
+            try database.insertPhoto(makeOrphanPolicyPhoto(
+                localIdentifier: "folder-photo-\(index)",
+                sourceId: "folder-source",
+                filePath: "/folder/photo-\(index).jpg"
+            ))
+        }
+
+        let allIndexedCount = try database.indexedMediaCounts().total
+        let photoLibraryIndexedCount = try database.photoLibraryIndexedMediaCounts().total
+
+        XCTAssertEqual(allIndexedCount, 10)
+        XCTAssertEqual(photoLibraryIndexedCount, 1)
+        XCTAssertTrue(OrphanCleanupSafetyPolicy.exceedsSafetyThreshold(
+            candidateRemovalCount: 1,
+            photoLibraryIndexedCount: photoLibraryIndexedCount
+        ))
+        XCTAssertFalse(OrphanCleanupSafetyPolicy.exceedsSafetyThreshold(
+            candidateRemovalCount: 1,
+            photoLibraryIndexedCount: allIndexedCount
+        ), "This demonstrates why folder-backed rows must not be used as the denominator")
+    }
+
+    func testProUnlockRecoveryStartsLibraryIndexingOnlyWhenSafeAndNotAlreadyQueued() {
+        XCTAssertTrue(ProUnlockIndexingRecoveryPolicy.shouldStartLibraryIndexing(
+            isMemoryPressureSuspended: false,
+            hasLibraryIndexingWork: false
+        ))
+        XCTAssertFalse(ProUnlockIndexingRecoveryPolicy.shouldStartLibraryIndexing(
+            isMemoryPressureSuspended: true,
+            hasLibraryIndexingWork: false
+        ))
+        XCTAssertFalse(ProUnlockIndexingRecoveryPolicy.shouldStartLibraryIndexing(
+            isMemoryPressureSuspended: false,
+            hasLibraryIndexingWork: true
+        ))
+    }
+
     func testPersistedVideoConsumesFreeTierCapacityWithoutCompletingRebuild() {
         let outcome = VideoIndexingOutcome.persisted(completedRequiredRebuild: false)
 
@@ -424,10 +502,10 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertFalse(FreeTier.canIndexMore(indexedMediaCount: 0 + 500, isPro: false))
     }
 
-    func testProUsersUseDeviceSafetyLimit() {
+    func testProUsersCanIndexBeyondResidentSearchWindow() {
         XCTAssertTrue(FreeTier.canIndexMore(indexedMediaCount: FreeTier.maxIndexedMedia, isPro: true))
-        XCTAssertTrue(FreeTier.canIndexMore(indexedMediaCount: ProTier.maxIndexedMedia - 1, isPro: true))
-        XCTAssertFalse(FreeTier.canIndexMore(indexedMediaCount: ProTier.maxIndexedMedia, isPro: true))
+        XCTAssertTrue(FreeTier.canIndexMore(indexedMediaCount: 8_000, isPro: true))
+        XCTAssertTrue(FreeTier.canIndexMore(indexedMediaCount: 80_000, isPro: true))
     }
 
     func testFreeUsersCanIndexBelowLimit() {
@@ -550,6 +628,28 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertNil(progress.itemsPerSecond)
         XCTAssertNil(progress.estimatedSecondsRemaining)
     }
+}
+
+private func makeOrphanPolicyPhoto(
+    localIdentifier: String,
+    sourceId: String = PhotoSourceType.photokit.rawValue,
+    filePath: String? = nil
+) -> IndexedPhoto {
+    var embedding = [Float](repeating: 0, count: EmbeddingConfig.dimensions)
+    embedding[0] = 1
+    return IndexedPhoto(
+        id: UUID().uuidString,
+        localIdentifier: localIdentifier,
+        creationDate: Date(timeIntervalSince1970: 100),
+        latitude: nil,
+        longitude: nil,
+        pixelWidth: 100,
+        pixelHeight: 100,
+        embedding: embedding.toFloat16Data(),
+        indexedAt: Date(timeIntervalSince1970: 200),
+        sourceId: sourceId,
+        filePath: filePath
+    )
 }
 
 private final class ThreadObservation: @unchecked Sendable {

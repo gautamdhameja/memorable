@@ -1,15 +1,81 @@
 import Foundation
 import StoreKit
+import os
+
+final class EntitlementReconciliationPermit: @unchecked Sendable {
+    private struct State {
+        var isValid = true
+        var activeLeaseCount = 0
+        var invalidationWaiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    var isValid: Bool {
+        state.withLock { $0.isValid }
+    }
+
+    func invalidate() {
+        state.withLock { $0.isValid = false }
+    }
+
+    /// Invalidates immediately, then suspends until every lease that had
+    /// already started has completed. No thread is blocked while waiting.
+    func invalidateAndWait() async {
+        await withCheckedContinuation { continuation in
+            let shouldResume = state.withLock { state in
+                state.isValid = false
+                guard state.activeLeaseCount > 0 else { return true }
+                state.invalidationWaiters.append(continuation)
+                return false
+            }
+            if shouldResume {
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Runs one reconciliation as an ordered lease. The state lock is held only
+    /// while acquiring and releasing the lease, never while the operation runs.
+    /// Invalidation either prevents acquisition or asynchronously waits until
+    /// the operation has committed.
+    func withValidLease<T: Sendable>(
+        _ operation: @Sendable () throws -> T
+    ) throws -> T {
+        let acquired = state.withLock { state in
+            guard state.isValid else { return false }
+            state.activeLeaseCount += 1
+            return true
+        }
+        guard acquired else { throw CancellationError() }
+        defer { releaseLease() }
+        return try operation()
+    }
+
+    private func releaseLease() {
+        let waiters: [CheckedContinuation<Void, Never>] = state.withLock { state in
+            assert(state.activeLeaseCount > 0)
+            guard state.activeLeaseCount > 0 else { return [] }
+            state.activeLeaseCount -= 1
+            guard state.activeLeaseCount == 0 else { return [] }
+            defer { state.invalidationWaiters.removeAll(keepingCapacity: false) }
+            return state.invalidationWaiters
+        }
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+
+enum EntitlementReconciliationContext {
+    @TaskLocal static var permit: EntitlementReconciliationPermit?
+}
 
 enum FreeTier {
     static let maxIndexedMedia = 500
 
-    static func indexLimit(isPro: Bool) -> Int {
-        isPro ? ProTier.maxIndexedMedia : maxIndexedMedia
-    }
-
     static func canIndexMore(indexedMediaCount: Int, isPro: Bool) -> Bool {
-        indexedMediaCount < indexLimit(isPro: isPro)
+        isPro || indexedMediaCount < maxIndexedMedia
     }
 }
 
@@ -24,10 +90,10 @@ enum FreeTierStatePolicy {
     }
 }
 
-/// Keeps the resident semantic index within a predictable memory envelope on
-/// supported devices. Videos can contribute up to five frame embeddings each.
-enum ProTier {
-    static let maxIndexedMedia = SearchIndexLimits.maximumMediaItems
+enum EntitlementVerificationResult {
+    case entitled
+    case notEntitled
+    case indeterminate
 }
 
 @MainActor
@@ -57,6 +123,10 @@ class ProManager: ObservableObject {
     @Published var isLoadingProduct: Bool = false
 
     private var transactionListener: Task<Void, Never>?
+    private var freeTierReconciliationTask: Task<Void, Never>?
+    private var activeFreeTierReconciliationID: UUID?
+    private var activeFreeTierReconciliationPermit: EntitlementReconciliationPermit?
+    private var entitlementGeneration: UInt64 = 0
     private let productLoader: ProductLoader
     private let retryDelay: RetryDelay
 
@@ -125,7 +195,7 @@ class ProManager: ObservableObject {
             case .success(let verification):
                 let transaction = try checkVerified(verification)
                 await transaction.finish()
-                unlock()
+                await publishVerifiedEntitlement()
             case .userCancelled:
                 break
             case .pending:
@@ -162,7 +232,7 @@ class ProManager: ObservableObject {
                 continue
             }
             if Self.isEntitlementProduct(transaction.productID) {
-                unlock()
+                await publishVerifiedEntitlement()
                 found = true
                 break
             }
@@ -183,38 +253,118 @@ class ProManager: ObservableObject {
     func verifyEntitlement() async {
         startListeningForTransactionsIfNeeded()
         #if !DEBUG
-        var entitled = false
+        let generation = await beginEntitlementVerification()
+        var verificationResult = EntitlementVerificationResult.notEntitled
         for await result in Transaction.currentEntitlements {
             guard case .verified(let transaction) = result else {
                 logger.error("Ignored an unverified current entitlement")
+                verificationResult = .indeterminate
                 continue
             }
             if Self.isEntitlementProduct(transaction.productID),
                transaction.revocationDate == nil {
-                entitled = true
+                verificationResult = .entitled
                 break
             }
         }
 
-        await reconcileVerifiedEntitlement(entitled)
+        await reconcileEntitlementVerification(
+            verificationResult,
+            generation: generation
+        )
         #endif
     }
 
     /// Applies a verified entitlement result. This is internal so lifecycle
     /// behavior can be tested without contacting StoreKit.
     func reconcileVerifiedEntitlement(_ entitled: Bool) async {
+        let generation = await beginEntitlementVerification()
+        await reconcileEntitlementVerification(
+            entitled ? .entitled : .notEntitled,
+            generation: generation
+        )
+    }
+
+    /// Starts a new StoreKit observation. Any older observation or destructive
+    /// reconciliation is stale as soon as a newer check begins.
+    @discardableResult
+    func beginEntitlementVerification() async -> UInt64 {
+        entitlementGeneration &+= 1
+        let generation = entitlementGeneration
+        await invalidateFreeTierReconciliation()
+        return generation
+    }
+
+    private func invalidateFreeTierReconciliation() async {
+        let reconciliationID = activeFreeTierReconciliationID
+        let permit = activeFreeTierReconciliationPermit
+        let task = freeTierReconciliationTask
+        permit?.invalidate()
+        task?.cancel()
+        await permit?.invalidateAndWait()
+
+        guard activeFreeTierReconciliationID == reconciliationID,
+              activeFreeTierReconciliationPermit === permit else { return }
+        freeTierReconciliationTask = nil
+        activeFreeTierReconciliationID = nil
+        activeFreeTierReconciliationPermit = nil
+    }
+
+    /// Applies only the result of the most recent StoreKit observation.
+    /// Indeterminate observations preserve local entitlement state because an
+    /// unverifiable receipt is not evidence that the purchase is absent.
+    func reconcileEntitlementVerification(
+        _ result: EntitlementVerificationResult,
+        generation: UInt64
+    ) async {
+        guard generation == entitlementGeneration else { return }
+
+        switch result {
+        case .entitled:
+            isPro = true
+            return
+        case .indeterminate:
+            logger.error("StoreKit entitlement status is indeterminate; preserving local Pro state")
+            return
+        case .notEntitled:
+            break
+        }
+
         let wasPro = isPro
-        isPro = entitled
-        guard !entitled else { return }
+        isPro = false
         if wasPro {
             logger.error("Pro entitlement revoked (refund or family sharing removed)")
         }
-        await onFreeTierReconciliationNeeded?()
+
+        guard let reconciliation = onFreeTierReconciliationNeeded else { return }
+        let reconciliationID = UUID()
+        let permit = EntitlementReconciliationPermit()
+        let task = Task { @MainActor [weak self] in
+            guard let self,
+                  !Task.isCancelled,
+                  generation == self.entitlementGeneration,
+                  permit.isValid else { return }
+            await EntitlementReconciliationContext.$permit.withValue(permit) {
+                await reconciliation()
+            }
+        }
+        freeTierReconciliationTask = task
+        activeFreeTierReconciliationID = reconciliationID
+        activeFreeTierReconciliationPermit = permit
+        await task.value
+        if activeFreeTierReconciliationID == reconciliationID {
+            permit.invalidate()
+            freeTierReconciliationTask = nil
+            activeFreeTierReconciliationID = nil
+            activeFreeTierReconciliationPermit = nil
+        }
     }
 
     // MARK: - Private
 
-    private func unlock() {
+    private func publishVerifiedEntitlement() async {
+        let generation = await beginEntitlementVerification()
+        guard generation == entitlementGeneration else { return }
         isPro = true
     }
 
@@ -242,7 +392,7 @@ class ProManager: ObservableObject {
                         if transaction.revocationDate != nil {
                             await self.verifyEntitlement()
                         } else {
-                            await MainActor.run { self.unlock() }
+                            await self.reconcileVerifiedEntitlement(true)
                         }
                         await transaction.finish()
                     }

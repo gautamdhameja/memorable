@@ -88,7 +88,7 @@ struct OnboardingView: View {
                 .tracking(-0.8)
                 .foregroundStyle(Celestial.Colors.onSurface)
 
-            Text("No account, tracking, or photo uploads.")
+            Text("No developer account, tracking, or automatic photo uploads.")
                 .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .padding(.top, 16)
@@ -140,13 +140,13 @@ struct OnboardingView: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 80)
 
-            Text("Make your library\nsearchable")
+            Text("Make local media\nsearchable")
                 .font(.title.bold())
                 .tracking(-0.7)
                 .foregroundStyle(Celestial.Colors.onSurface)
                 .padding(.top, 62)
 
-            Text("A one-time scan runs on this iPhone. Photos become searchable as it goes.")
+            Text("Indexing runs on this iPhone. Locally available photos become searchable as it goes.")
                 .font(.body)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .lineSpacing(5)

@@ -29,6 +29,7 @@
 		26DD07CAC6E522FF5A505649 /* FolderScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 039B56827290E98DEC248FC3 /* FolderScanner.swift */; };
 		2EC40AB3857D2AF1D04738AD /* PhotoCaptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABF97148122688A41ADB2428 /* PhotoCaptionService.swift */; };
 		3285447C35626E3D3DA28CBE /* SmartAlbumStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EA40A803B04576C000F43D4 /* SmartAlbumStore.swift */; };
+		34DAA8B372AE20571DC98689 /* PhotoSharingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A655336F292C41E1FA5320F0 /* PhotoSharingTests.swift */; };
 		36278F4DA9B31416404CB2F9 /* MemorySlideshowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F9C84188552809F14E06ABD /* MemorySlideshowView.swift */; };
 		363C5A15D8A5B448C75D764B /* AppConstantsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26975E6845CAD9CA68304AE6 /* AppConstantsTests.swift */; };
 		38017F5A5E9A0991967505B0 /* ImageEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 765756E0EA06408766468C75 /* ImageEncoder.swift */; };
@@ -74,6 +75,7 @@
 		9E96A47CED56404EAB7AFE09 /* PhotoKitRequestControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08BF58F764B7089375B6F384 /* PhotoKitRequestControllerTests.swift */; };
 		A55BCAC4D2CD99A54E00390C /* SigLIP2_TextEncoder.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = EAF524595410C97CE28C71E7 /* SigLIP2_TextEncoder.mlmodelc */; };
 		A6B2BE05FDC52518C4AD6834 /* PhotoChangeObserverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33DF84A32C5CE0CA80B53D65 /* PhotoChangeObserverTests.swift */; };
+		A996E45CEDC3D37BED3BC334 /* PhotoSharing.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A962B6865E4EED9C38B47B /* PhotoSharing.swift */; };
 		ABDF836A9D128ABC876DA5C3 /* TokenizerConcurrencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FF345205A28D09DFD6DADD8 /* TokenizerConcurrencyTests.swift */; };
 		B3DD5D938480683017746202 /* RelevanceFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = B66ECDFEE0088308B81D3BF9 /* RelevanceFixture.swift */; };
 		B464A5FC64B14E882EF1B88C /* SceneClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 148270E6FBC86A1022242BB0 /* SceneClassifier.swift */; };
@@ -199,6 +201,7 @@
 		98500F67D8ABD41BD03055BE /* SearchResultsViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchResultsViewer.swift; sourceTree = "<group>"; };
 		9CB7F76C1E2F736E8C4DB7E8 /* TemporalParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporalParserTests.swift; sourceTree = "<group>"; };
 		A0F3C3422B002EE5318BCD0F /* ContinuationGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuationGuard.swift; sourceTree = "<group>"; };
+		A655336F292C41E1FA5320F0 /* PhotoSharingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoSharingTests.swift; sourceTree = "<group>"; };
 		AA39B01712B16C8354099753 /* SearchEvaluationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchEvaluationTests.swift; sourceTree = "<group>"; };
 		ABF97148122688A41ADB2428 /* PhotoCaptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoCaptionService.swift; sourceTree = "<group>"; };
 		AE71B213091826148D42C24D /* DataModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataModelTests.swift; sourceTree = "<group>"; };
@@ -228,6 +231,7 @@
 		ED9AB4235487F03F53BFE2DD /* ReverseGeocoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReverseGeocoder.swift; sourceTree = "<group>"; };
 		F2F341ED61D9D2ECB85DE96F /* ProManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProManagerTests.swift; sourceTree = "<group>"; };
 		F48C4516BAB2562F4AE463AA /* BlurDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurDetector.swift; sourceTree = "<group>"; };
+		F4A962B6865E4EED9C38B47B /* PhotoSharing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoSharing.swift; sourceTree = "<group>"; };
 		F5661D0CBF6070096FC39055 /* FolderSourceRegistrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderSourceRegistrationTests.swift; sourceTree = "<group>"; };
 		F591D36647675763A6EC50E1 /* EncoderConcurrencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncoderConcurrencyTests.swift; sourceTree = "<group>"; };
 		F6F58CEA2D0FD84B6E8265A7 /* AppReadiness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppReadiness.swift; sourceTree = "<group>"; };
@@ -354,6 +358,7 @@
 				B05CA6421433378B6D179E85 /* PhotoCaptionServiceTests.swift */,
 				33DF84A32C5CE0CA80B53D65 /* PhotoChangeObserverTests.swift */,
 				08BF58F764B7089375B6F384 /* PhotoKitRequestControllerTests.swift */,
+				A655336F292C41E1FA5320F0 /* PhotoSharingTests.swift */,
 				E1CC6995AC3977F8BC42B686 /* ProFolderIndexingOperationTests.swift */,
 				65FE22985B85938794104C86 /* ProjectConfigurationTests.swift */,
 				F2F341ED61D9D2ECB85DE96F /* ProManagerTests.swift */,
@@ -398,6 +403,7 @@
 				ABF97148122688A41ADB2428 /* PhotoCaptionService.swift */,
 				CA911DEE314BF3B886667D60 /* PhotoLibrary.swift */,
 				4D63910A7DC39E66C3F98360 /* PhotoLibraryIndexingWorker.swift */,
+				F4A962B6865E4EED9C38B47B /* PhotoSharing.swift */,
 				8F4BD1B4A36FBFF9C7A6B633 /* ProFeatures.swift */,
 				BE5E59D52076EF56E77CB153 /* QueryParser.swift */,
 				FE75EBE8FDC8AAB142853688 /* ResultGrouper.swift */,
@@ -672,6 +678,7 @@
 				BF3D3072EB83D453262C675D /* PhotoCaptionServiceTests.swift in Sources */,
 				A6B2BE05FDC52518C4AD6834 /* PhotoChangeObserverTests.swift in Sources */,
 				9E96A47CED56404EAB7AFE09 /* PhotoKitRequestControllerTests.swift in Sources */,
+				34DAA8B372AE20571DC98689 /* PhotoSharingTests.swift in Sources */,
 				B5BA8BA3C4B17866DFC38035 /* ProFolderIndexingOperationTests.swift in Sources */,
 				084A8ADF5152A65203F539CF /* ProManagerTests.swift in Sources */,
 				7F9F9DACA2E56822FD62FFFA /* ProjectConfigurationTests.swift in Sources */,
@@ -728,6 +735,7 @@
 				2EC40AB3857D2AF1D04738AD /* PhotoCaptionService.swift in Sources */,
 				CB074F8F2446E5C4658BA078 /* PhotoLibrary.swift in Sources */,
 				5010A21210746AD9263442B5 /* PhotoLibraryIndexingWorker.swift in Sources */,
+				A996E45CEDC3D37BED3BC334 /* PhotoSharing.swift in Sources */,
 				3D7925A721C8213C9C4B635A /* PhotoThumbnailView.swift in Sources */,
 				4E40249F1F29F80C57BFC385 /* ProFeatures.swift in Sources */,
 				06EB008B627FCB1D34B09451 /* QueryParser.swift in Sources */,

@@ -77,11 +77,12 @@ struct ZoomableAsyncImage: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            handleMemoryPressure()
+        }
+        .onDisappear {
             imageLoadTask?.cancel()
             imageLoadTask = nil
             imageLoadGeneration &+= 1
-            MemoryPressureReleasePolicy.release(&image)
-            resetZoom()
         }
     }
 
@@ -160,6 +161,38 @@ struct ZoomableAsyncImage: View {
             isCancelled: Task.isCancelled
         ) {
             image = loaded
+        }
+    }
+
+    private func handleMemoryPressure() {
+        imageLoadTask?.cancel()
+        imageLoadTask = nil
+        imageLoadGeneration &+= 1
+        resetZoom()
+
+        switch MemoryPressureImageRecoveryPolicy.decision(
+            hasImage: image != nil,
+            isActive: isActive,
+            preserveVisibleImage: true
+        ) {
+        case .preserve:
+            return
+        case .release:
+            MemoryPressureReleasePolicy.release(&image)
+        case .releaseAndRetry:
+            MemoryPressureReleasePolicy.release(&image)
+            let task = Task { @MainActor in
+                do {
+                    try await Task.sleep(
+                        nanoseconds: MemoryPressureImageRecoveryPolicy.retryDelayNanoseconds
+                    )
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled, isActive else { return }
+                await loadImage()
+            }
+            imageLoadTask = task
         }
     }
 

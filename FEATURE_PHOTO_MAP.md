@@ -6,17 +6,17 @@
 
 ## Overview
 
-A map-based photo browser where users can see their photos plotted on Apple Maps by GPS location. Tapping a cluster/pin shows photos from that area. Zooming in reveals individual photos.
+Display indexed photos with GPS coordinates on Apple Maps. Tapping a cluster or pin shows photos from that area. Zooming changes the cluster detail.
 
 ## User experience
 
-1. User opens Memories tab → taps "Photo Map" button
-2. Full-screen Apple Maps view appears
-3. Photo clusters shown as pins with thumbnail + count
-4. Zooming in splits clusters into individual photos
-5. Tapping a pin opens a masonry grid of photos from that area
-6. Tapping an empty area searches for nearby photos
-7. Photos without GPS are not shown on the map
+1. Open **Memories**, then tap **Photo map**.
+2. View a full-screen Apple Maps interface.
+3. View bounded photo clusters as pins with a thumbnail and count.
+4. Zoom to change cluster granularity.
+5. Tap a pin to open a grid of photos from that area.
+6. Tap an empty area to search for nearby photos.
+7. Photos without GPS coordinates do not appear on the map.
 
 ## Architecture
 
@@ -27,13 +27,12 @@ Button in Memories tab (same style as "Relive Your Memories" slideshow button). 
 ### Follow the data flow
 
 ```
-1. Load all indexed photos with lat/lon from DB
-   (~20% of photos have GPS data)
+1. Load indexed photo coordinates from the database in bounded pages.
 
 2. Cluster nearby photos into map pins
-   - Group photos within ~500m radius
+   - Group photos using a documented distance and zoom-level policy
    - Pin shows count + thumbnail of best photo
-   - Zooming in reveals individual photos
+   - Zooming changes the cluster granularity
 
 3. User taps a pin → shows photo grid for that area
    - Same masonry layout as search results
@@ -93,10 +92,10 @@ func loadAllPhotoLocations() throws -> [(localIdentifier: String, latitude: Doub
 
 ### Cluster map annotations
 
-**Option 1: MapKit's built-in MKClusterAnnotation**
+**Option 1: MapKit's built-in `MKClusterAnnotation`**
 - Handles zoom-level clustering automatically
 - Apple manages the clustering algorithm
-- Best UX but requires UIKit bridge (MKMapView via UIViewRepresentable)
+- Requires a UIKit bridge (`MKMapView` through `UIViewRepresentable`)
 
 **Option 2: Grid-based clustering**
 - Divide visible map region into grid cells
@@ -104,20 +103,20 @@ func loadAllPhotoLocations() throws -> [(localIdentifier: String, latitude: Doub
 - Recompute on region change
 - Simpler, pure SwiftUI with Map view
 
-**Recommended:** Option 1 for production quality. Option 2 as MVP.
+Use option 1 for the initial production implementation. Use option 2 only if the UIKit bridge cannot meet the project constraints.
 
 ### Bound performance costs
 
-- Load all lat/lon pairs once on view appear (lightweight — two Doubles per photo)
-- Annotations created lazily as the map region changes
-- Thumbnails loaded on demand when pins become visible
-- For 2,900 photos with ~500 having GPS: ~500 annotations max, well within MapKit limits
-- For large libraries (50K+ photos with GPS), add an on-device spatial index and a deterministic annotation cap.
+- Load coordinate rows in bounded database pages.
+- Create annotations as the visible map region changes.
+- Apply a deterministic cap before retaining annotations in memory.
+- Load thumbnails only when pins become visible.
+- Add an on-device spatial index if profiling shows that page-based clustering does not meet the target on large libraries.
 
 ### Handle photos without GPS
 
 - Not shown on the map (map is a GPS-only feature)
-- Show info banner: "247 of 2,900 photos have location data"
+- Show a dynamic banner such as "247 of 2,900 indexed photos have location data."
 - Future: allow user to manually assign locations to photos
 
 ### Add UI components
@@ -131,7 +130,7 @@ func loadAllPhotoLocations() throws -> [(localIdentifier: String, latitude: Doub
 
 | Task | Effort | Description |
 |------|--------|-------------|
-| 1 | Low | Add DB method to load all photos with GPS coordinates |
+| 1 | Low | Add a paged database method to load photos with GPS coordinates |
 | 2 | Medium | Create PhotoMapView with MapKit + annotations |
 | 3 | Medium | Implement clustering (grid-based MVP or MKClusterAnnotation) |
 | 4 | Low | Create cluster detail view (reuse masonry grid + full-screen viewer) |
@@ -139,8 +138,6 @@ func loadAllPhotoLocations() throws -> [(localIdentifier: String, latitude: Doub
 | 6 | Low | Add info banner for GPS coverage stats |
 | 7 | Medium | Lazy thumbnail loading for visible annotations |
 | 8 | Low | Build, test, verify |
-
-**Estimated total effort:** 2-3 hours
 
 ### Dependencies
 

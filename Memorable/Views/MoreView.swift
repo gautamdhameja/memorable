@@ -141,7 +141,7 @@ struct MoreView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This clears the current index, removes added folder sources, and rebuilds Apple Photos from scratch. Search is unavailable during indexing.")
+                Text("This clears derived search data and rebuilds locally available Apple Photos. Saved folders stay registered and are indexed again when Pro is active. Search is unavailable during indexing.")
             }
             .alert(
                 "Couldn't re-index",
@@ -247,7 +247,7 @@ struct MoreView: View {
                         Text("Memorable Pro")
                             .font(.body.weight(.medium))
                             .foregroundStyle(Celestial.Colors.amber)
-                        Text("Your 8,000-item index is active")
+                        Text("All locally available media can be searched")
                             .font(.caption)
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     }
@@ -263,7 +263,7 @@ struct MoreView: View {
                             Text("Memorable Pro")
                                 .font(.body.weight(.medium))
                                 .foregroundStyle(Celestial.Colors.amber)
-                            Text("Index up to 8,000 items. One-time purchase.")
+                            Text("Search all locally available media. One-time purchase.")
                                 .font(.caption)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }

@@ -28,12 +28,16 @@ enum SearchEngineError: Error, Equatable {
 }
 
 enum SearchIndexLimits {
-    /// Product indexing is capped at this many media items. The database limits
-    /// below independently protect launches with an oversized legacy database.
-    static let maximumMediaItems = 8_000
-    static let maximumPhotoRows = maximumMediaItems
+    /// Maximum number of media items retained in the in-memory fast path. This
+    /// is a resident-memory limit, not a Pro product or persistence limit.
+    static let residentMediaItems = 8_000
+    /// Media descriptors fetched per whole-library database scan. Frames for a
+    /// selected video are loaded together, so a page never splits one video.
+    static let databasePageMediaItems = 512
+    static let maximumMediaItems = residentMediaItems
+    static let maximumPhotoRows = residentMediaItems
     static let maximumVideoFramesPerMedia = 5
-    static let maximumVideoFrameRows = maximumMediaItems * maximumVideoFramesPerMedia
+    static let maximumVideoFrameRows = residentMediaItems * maximumVideoFramesPerMedia
     static let maximumTotalRows = maximumVideoFrameRows
 }
 
@@ -315,6 +319,39 @@ struct IndexedMediaIdentifiers {
     let videos: Set<String>
 }
 
+struct IndexedMediaIdentifierPage: Sendable {
+    let photos: [String]
+    let videos: [String]
+    let nextCursor: SearchMediaPageCursor?
+}
+
+struct SearchMediaPageCursor: Equatable, Sendable {
+    let creationDate: Date?
+    let id: String
+    let mediaType: SearchMediaPageKind
+}
+
+enum SearchMediaPageKind: String, Equatable, Sendable {
+    case photo
+    case video
+}
+
+struct MediaPageDescriptorQuery {
+    let sql: String
+    let arguments: StatementArguments
+}
+
+struct SearchMediaPage: Sendable {
+    let photos: MediaIndex
+    let videos: MediaIndex
+    let mediaCount: Int
+    let totalPhotoCount: Int
+    let totalVideoCount: Int
+    let nextCursor: SearchMediaPageCursor?
+
+    var totalMediaCount: Int { totalPhotoCount + totalVideoCount }
+}
+
 struct GeocodingCounts {
     let totalWithGPS: Int
     let remaining: Int
@@ -367,8 +404,11 @@ protocol DatabaseProtocol: Sendable {
         completingRequiredRebuild: Bool
     ) throws -> Bool
     func isIndexed(localIdentifier: String) throws -> Bool
+    func existingPhotoIdentifiers(in localIdentifiers: [String]) throws -> Set<String>
     func allIndexedIdentifiers() throws -> Set<String>
+    func loadIndexedPhotoIdentifierPage(after: String?, limit: Int) throws -> [String]
     func allIndexedFilePaths() throws -> Set<String>
+    func existingFilePaths(in filePaths: [String]) throws -> Set<String>
     func indexedCount() throws -> Int
     func hasIndexedPhotos() throws -> Bool
     func indexedMediaCounts() throws -> IndexedMediaCounts
@@ -376,11 +416,17 @@ protocol DatabaseProtocol: Sendable {
     /// Returns at most `SearchIndexLimits.maximumMediaItems` newest identifiers
     /// across photos and videos, including for oversized legacy stores.
     func allIndexedMediaIdentifiers() throws -> IndexedMediaIdentifiers
+    func loadIndexedMediaIdentifierPage(
+        after cursor: SearchMediaPageCursor?,
+        limit: Int
+    ) throws -> IndexedMediaIdentifierPage
     /// Loads the deterministic, newest searchable photo window, bounded by
     /// `SearchIndexLimits.maximumPhotoRows` even for oversized legacy stores.
     func loadAllEmbeddings() throws -> MediaIndex
+    func loadSearchMediaPage(after cursor: SearchMediaPageCursor?, limit: Int) throws -> SearchMediaPage
+    func loadPhotoEmbedding(id: String) throws -> MediaIndex?
     func loadEmbeddingsForDuplicateScan(limit: Int) throws -> MediaIndex
-    func deleteAll() throws
+    func resetIndexedMedia() throws
     func deletePhoto(localIdentifier: String) throws
     func deleteOrphanedPhotos(localIdentifiers: Set<String>) throws
     func fetchRandomPhoto(sharp: Bool) throws -> SlideshowPhoto?
@@ -400,6 +446,7 @@ protocol DatabaseProtocol: Sendable {
         completingRequiredRebuild: Bool
     ) throws -> Bool
     func isVideoIndexed(localIdentifier: String) throws -> Bool
+    func existingVideoIdentifiers(in localIdentifiers: [String]) throws -> Set<String>
     func videoIndexedCount() throws -> Int
     func allIndexedVideoIdentifiers() throws -> Set<String>
     /// Loads the deterministic, newest searchable video-frame window, bounded
@@ -408,6 +455,10 @@ protocol DatabaseProtocol: Sendable {
     func deleteOrphanedVideos(localIdentifiers: Set<String>) throws
     func trimToLimit(_ limit: Int) throws
     func reconcileFreeTier(_ limit: Int) throws -> FreeTierReconciliationResult
+    func reconcileFreeTier(
+        _ limit: Int,
+        whilePermitted: @escaping @Sendable () -> Bool
+    ) throws -> FreeTierReconciliationResult
 
     // Location backfill
     func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
@@ -440,10 +491,123 @@ protocol DatabaseProtocol: Sendable {
 struct FreeTierReconciliationResult: Equatable, Sendable {
     let retainedMediaCount: Int
     let didTrimMedia: Bool
-    let removedFolderSourceIDs: [String]
+}
+
+enum FolderSourceDeletionError: LocalizedError, Equatable {
+    case bookmarkCleanupFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .bookmarkCleanupFailed:
+            return "The folder could not be removed because its saved access could not be cleaned up."
+        }
+    }
 }
 
 extension DatabaseProtocol {
+    func loadIndexedMediaIdentifierPage(
+        after cursor: SearchMediaPageCursor?,
+        limit: Int
+    ) throws -> IndexedMediaIdentifierPage {
+        let page = try loadSearchMediaPage(after: cursor, limit: limit)
+        return IndexedMediaIdentifierPage(
+            photos: page.photos.localIdentifiers,
+            videos: Array(Set(page.videos.localIdentifiers)),
+            nextCursor: page.nextCursor
+        )
+    }
+
+    func existingPhotoIdentifiers(in localIdentifiers: [String]) throws -> Set<String> {
+        var result: Set<String> = []
+        for identifier in localIdentifiers where try isIndexed(localIdentifier: identifier) {
+            result.insert(identifier)
+        }
+        return result
+    }
+
+    func existingVideoIdentifiers(in localIdentifiers: [String]) throws -> Set<String> {
+        var result: Set<String> = []
+        for identifier in localIdentifiers where try isVideoIndexed(localIdentifier: identifier) {
+            result.insert(identifier)
+        }
+        return result
+    }
+
+    func existingFilePaths(in filePaths: [String]) throws -> Set<String> {
+        let existing = try allIndexedFilePaths()
+        return Set(filePaths).intersection(existing)
+    }
+
+    func loadIndexedPhotoIdentifierPage(after: String?, limit: Int) throws -> [String] {
+        let identifiers = try allIndexedIdentifiers().sorted()
+        let start = after.flatMap { cursor in
+            identifiers.firstIndex(where: { $0 > cursor })
+        } ?? (after == nil ? identifiers.startIndex : identifiers.endIndex)
+        return Array(identifiers[start...].prefix(max(0, limit)))
+    }
+
+    func loadSearchMediaPage(after cursor: SearchMediaPageCursor?, limit: Int) throws -> SearchMediaPage {
+        guard cursor == nil, limit > 0 else {
+            return SearchMediaPage(
+                photos: MediaIndex(kind: .photo),
+                videos: MediaIndex(kind: .videoFrame),
+                mediaCount: 0,
+                totalPhotoCount: try indexedCount(),
+                totalVideoCount: try videoIndexedCount(),
+                nextCursor: nil
+            )
+        }
+        let photos = try loadAllEmbeddings()
+        let videos = try loadAllVideoEmbeddings()
+        let counts = try indexedMediaCounts()
+        return SearchMediaPage(
+            photos: photos,
+            videos: videos,
+            mediaCount: photos.count + videos.uniqueIDCount,
+            totalPhotoCount: counts.photos,
+            totalVideoCount: counts.videos,
+            nextCursor: nil
+        )
+    }
+
+    func loadPhotoEmbedding(id: String) throws -> MediaIndex? {
+        let index = try loadAllEmbeddings()
+        guard let row = index.ids.firstIndex(of: id) else { return nil }
+        var result = MediaIndex(kind: .photo)
+        let start = row * EmbeddingConfig.dimensions
+        let embedding = Array(index.embeddings[start..<(start + EmbeddingConfig.dimensions)])
+        try result.append(
+            MediaIndex.Row(
+                id: index.ids[row],
+                localIdentifier: index.localIdentifiers[row],
+                sourceId: index.sourceIds[row],
+                filePath: index.filePaths[row],
+                date: index.dates[row],
+                latitude: index.latitudes[row],
+                longitude: index.longitudes[row],
+                city: index.locationCities[row],
+                state: index.locationStates[row],
+                country: index.locationCountries[row],
+                locationName: index.locationNames[row],
+                details: .photo(ocrText: index.ocrTexts[row], sceneLabels: index.sceneLabels[row])
+            ),
+            embedding: embedding
+        )
+        return result
+    }
+
+    /// Compatibility default for test doubles. `AppDatabase` performs both
+    /// validity checks inside one transaction so invalidation rolls back.
+    func reconcileFreeTier(
+        _ limit: Int,
+        whilePermitted: @escaping @Sendable () -> Bool
+    ) throws -> FreeTierReconciliationResult {
+        guard whilePermitted() else { throw CancellationError() }
+        let result = try reconcileFreeTier(limit)
+        guard whilePermitted() else { throw CancellationError() }
+        return result
+    }
+
     var allowsIndexingWrites: Bool { true }
 
     func hasIndexedPhotos() throws -> Bool {
@@ -487,17 +651,23 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         let result = Self.openMigratedDatabase(
             openQueue: Self.openOnDiskDatabase,
             migrate: { try Self.migrator.migrate($0) },
-            fallbackMigrate: { try Self.migrator.migrate($0) }
+            fallbackMigrate: { try Self.migrator.migrate($0) },
+            migrateLegacyBookmark: FolderBookmarkStore.migrateLegacyDataIfNeeded
         )
         dbQueue = RecoverableDatabaseQueue(result.queue)
         storageMode = result.mode
     }
 
-    init(openQueue: () throws -> DatabaseQueue, migrate: (DatabaseQueue) throws -> Void) {
+    init(
+        openQueue: () throws -> DatabaseQueue,
+        migrate: (DatabaseQueue) throws -> Void,
+        migrateLegacyBookmark: (String) throws -> Void = FolderBookmarkStore.migrateLegacyDataIfNeeded
+    ) {
         let result = Self.openMigratedDatabase(
             openQueue: openQueue,
             migrate: migrate,
-            fallbackMigrate: migrate
+            fallbackMigrate: migrate,
+            migrateLegacyBookmark: migrateLegacyBookmark
         )
         dbQueue = RecoverableDatabaseQueue(result.queue)
         storageMode = result.mode
@@ -511,7 +681,8 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         let result = Self.openMigratedDatabase(
             openQueue: openQueue,
             migrate: migrate,
-            fallbackMigrate: fallbackMigrate
+            fallbackMigrate: fallbackMigrate,
+            migrateLegacyBookmark: FolderBookmarkStore.migrateLegacyDataIfNeeded
         )
         if let error = result.error { throw error }
         dbQueue = RecoverableDatabaseQueue(result.queue)
@@ -521,7 +692,8 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     private static func openMigratedDatabase(
         openQueue: () throws -> DatabaseQueue,
         migrate: (DatabaseQueue) throws -> Void,
-        fallbackMigrate: (DatabaseQueue) throws -> Void
+        fallbackMigrate: (DatabaseQueue) throws -> Void,
+        migrateLegacyBookmark: (String) throws -> Void
     ) -> OpenResult {
         Self.isInMemoryFallback = false
         do {
@@ -534,7 +706,7 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                 in: queue,
                 orientationMigrationWasAlreadyApplied: orientationMigrationWasAlreadyApplied
             )
-            try migrateLegacyFolderBookmarks(in: queue)
+            _ = migrateLegacyFolderBookmarks(in: queue, migrate: migrateLegacyBookmark)
             #if DEBUG
             logger.info("[Database] Migrations completed successfully")
             #endif
@@ -586,18 +758,32 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     static func migrateLegacyFolderBookmarks(
         in queue: DatabaseQueue,
         migrate: (String) throws -> Void = FolderBookmarkStore.migrateLegacyDataIfNeeded
-    ) throws {
-        let sourceIDs = try queue.read { db -> [String] in
-            guard try db.tableExists("photo_sources") else { return [] }
-            return try String.fetchAll(
-                db,
-                sql: "SELECT id FROM photo_sources WHERE type = ?",
-                arguments: [PhotoSourceType.folder.rawValue]
-            )
+    ) -> [String] {
+        let sourceIDs: [String]
+        do {
+            sourceIDs = try queue.read { db -> [String] in
+                guard try db.tableExists("photo_sources") else { return [] }
+                return try String.fetchAll(
+                    db,
+                    sql: "SELECT id FROM photo_sources WHERE type = ? ORDER BY id ASC",
+                    arguments: [PhotoSourceType.folder.rawValue]
+                )
+            }
+        } catch {
+            logger.error("Failed to inspect legacy folder bookmarks: \(error.safeDiagnosticCode)")
+            return []
         }
+
+        var failedSourceIDs: [String] = []
         for sourceID in sourceIDs {
-            try migrate(sourceID)
+            do {
+                try migrate(sourceID)
+            } catch {
+                failedSourceIDs.append(sourceID)
+                logger.error("Failed to migrate a legacy folder bookmark: \(error.safeDiagnosticCode)")
+            }
         }
+        return failedSourceIDs
     }
 
     private static func protectSQLiteFiles(for dbURL: URL) throws {
@@ -861,6 +1047,24 @@ final class AppDatabase: DatabaseProtocol, Sendable {
             )
         }
 
+        migrator.registerMigration("v9-search-pagination-indexes") { db in
+            try db.execute(
+                sql: """
+                    CREATE INDEX idx_photos_search_order
+                    ON indexed_photos(creationDate DESC, id ASC);
+                    CREATE INDEX idx_photos_source_search_order
+                    ON indexed_photos(sourceId, creationDate DESC, id ASC);
+                    CREATE INDEX idx_videos_search_order
+                    ON indexed_videos(creationDate DESC, id ASC);
+                    CREATE INDEX idx_videos_source_search_order
+                    ON indexed_videos(sourceId, creationDate DESC, id ASC);
+                    CREATE INDEX idx_photos_file_path
+                    ON indexed_photos(filePath)
+                    WHERE filePath IS NOT NULL
+                """
+            )
+        }
+
         return migrator
     }
 
@@ -942,6 +1146,14 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         }
     }
 
+    func existingPhotoIdentifiers(in localIdentifiers: [String]) throws -> Set<String> {
+        try existingStrings(
+            localIdentifiers,
+            table: "indexed_photos",
+            column: "localIdentifier"
+        )
+    }
+
     func allIndexedIdentifiers() throws -> Set<String> {
         try dbQueue.read { db in
             try Self.loadIdentifierSet(
@@ -954,6 +1166,35 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                 """,
                 arguments: [PhotoSourceType.photokit.rawValue],
                 limit: SearchIndexLimits.maximumPhotoRows
+            )
+        }
+    }
+
+    func loadIndexedPhotoIdentifierPage(after: String?, limit: Int) throws -> [String] {
+        let boundedLimit = max(0, min(limit, SearchIndexLimits.databasePageMediaItems))
+        guard boundedLimit > 0 else { return [] }
+        return try dbQueue.read { db in
+            if let after {
+                return try String.fetchAll(
+                    db,
+                    sql: """
+                        SELECT localIdentifier FROM indexed_photos
+                        WHERE sourceId = ? AND localIdentifier > ?
+                        ORDER BY localIdentifier ASC
+                        LIMIT ?
+                    """,
+                    arguments: [PhotoSourceType.photokit.rawValue, after, boundedLimit]
+                )
+            }
+            return try String.fetchAll(
+                db,
+                sql: """
+                    SELECT localIdentifier FROM indexed_photos
+                    WHERE sourceId = ?
+                    ORDER BY localIdentifier ASC
+                    LIMIT ?
+                """,
+                arguments: [PhotoSourceType.photokit.rawValue, boundedLimit]
             )
         }
     }
@@ -971,6 +1212,32 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                 limit: SearchIndexLimits.maximumPhotoRows
             )
         }
+    }
+
+    func existingFilePaths(in filePaths: [String]) throws -> Set<String> {
+        try existingStrings(filePaths, table: "indexed_photos", column: "filePath")
+    }
+
+    private func existingStrings(
+        _ values: [String],
+        table: String,
+        column: String
+    ) throws -> Set<String> {
+        guard !values.isEmpty else { return [] }
+        var matches: Set<String> = []
+        try dbQueue.read { db in
+            for chunk in values.chunked(into: 900) {
+                try Task.checkCancellation()
+                let placeholders = chunk.map { _ in "?" }.joined(separator: ",")
+                let rows = try String.fetchAll(
+                    db,
+                    sql: "SELECT \(column) FROM \(table) WHERE \(column) IN (\(placeholders))",
+                    arguments: StatementArguments(chunk)
+                )
+                matches.formUnion(rows)
+            }
+        }
+        return matches
     }
 
     func indexedCount() throws -> Int {
@@ -1005,13 +1272,65 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                     sql: "SELECT COUNT(*) FROM indexed_photos WHERE sourceId = ?",
                     arguments: [PhotoSourceType.photokit.rawValue]
                 ) ?? 0,
-                videos: try IndexedVideo.fetchCount(db)
+                videos: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM indexed_videos WHERE sourceId = ?",
+                    arguments: [PhotoSourceType.photokit.rawValue]
+                ) ?? 0
             )
         }
     }
 
     func allIndexedMediaIdentifiers() throws -> IndexedMediaIdentifiers {
         try loadIndexedMediaIdentifiers(limit: SearchIndexLimits.maximumMediaItems)
+    }
+
+    func loadIndexedMediaIdentifierPage(
+        after cursor: SearchMediaPageCursor?,
+        limit: Int
+    ) throws -> IndexedMediaIdentifierPage {
+        let boundedLimit = max(0, min(limit, SearchIndexLimits.databasePageMediaItems))
+        guard boundedLimit > 0 else {
+            return IndexedMediaIdentifierPage(photos: [], videos: [], nextCursor: nil)
+        }
+        return try dbQueue.read { db in
+            let fetchLimit = boundedLimit + 1
+            let photoDescriptors = try Self.loadMediaPageDescriptors(
+                in: db,
+                mediaType: .photo,
+                includesLocalIdentifier: true,
+                sourceID: PhotoSourceType.photokit.rawValue,
+                after: cursor,
+                limit: fetchLimit
+            )
+            let videoDescriptors = try Self.loadMediaPageDescriptors(
+                in: db,
+                mediaType: .video,
+                includesLocalIdentifier: true,
+                sourceID: PhotoSourceType.photokit.rawValue,
+                after: cursor,
+                limit: fetchLimit
+            )
+            let descriptors = try Self.mergeMediaPageDescriptors(
+                photoDescriptors,
+                videoDescriptors,
+                limit: fetchLimit
+            )
+            let hasMore = descriptors.count > boundedLimit
+            let selected = Array(descriptors.prefix(boundedLimit))
+            let nextCursor = hasMore ? selected.last.map {
+                SearchMediaPageCursor(
+                    creationDate: $0.creationDate,
+                    id: $0.id,
+                    mediaType: $0.mediaType
+                )
+            } : nil
+            return IndexedMediaIdentifierPage(
+                photos: selected.filter { $0.mediaType == .photo }.compactMap(\.localIdentifier),
+                videos: selected.filter { $0.mediaType == .video }.compactMap(\.localIdentifier),
+                nextCursor: nextCursor
+            )
+        }
     }
 
     func loadIndexedMediaIdentifiers(limit: Int) throws -> IndexedMediaIdentifiers {
@@ -1032,11 +1351,16 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                         UNION ALL
                         SELECT 'video' AS mediaType, localIdentifier, creationDate, id
                         FROM indexed_videos
+                        WHERE sourceId = ?
                     )
                     ORDER BY creationDate DESC, id ASC, mediaType ASC
                     LIMIT ?
                 """,
-                arguments: [PhotoSourceType.photokit.rawValue, boundedLimit]
+                arguments: [
+                    PhotoSourceType.photokit.rawValue,
+                    PhotoSourceType.photokit.rawValue,
+                    boundedLimit,
+                ]
             )
             var rowNumber = 0
             while let row = try cursor.next() {
@@ -1076,6 +1400,323 @@ final class AppDatabase: DatabaseProtocol, Sendable {
 
     func loadAllEmbeddings() throws -> MediaIndex {
         try loadPhotoEmbeddings(limit: SearchIndexLimits.maximumPhotoRows)
+    }
+
+    func loadSearchMediaPage(
+        after cursor: SearchMediaPageCursor?,
+        limit: Int
+    ) throws -> SearchMediaPage {
+        let boundedLimit = max(0, min(limit, SearchIndexLimits.residentMediaItems))
+        guard boundedLimit > 0 else {
+            return SearchMediaPage(
+                photos: MediaIndex(kind: .photo),
+                videos: MediaIndex(kind: .videoFrame),
+                mediaCount: 0,
+                totalPhotoCount: cursor == nil ? try indexedCount() : 0,
+                totalVideoCount: cursor == nil ? try videoIndexedCount() : 0,
+                nextCursor: nil
+            )
+        }
+
+        return try dbQueue.read { db in
+            // Persisted totals initialize the resident snapshot. Continuation
+            // pages do not consume them, so avoid two full COUNT queries on
+            // every bounded page scan.
+            let totalPhotoCount = cursor == nil ? try IndexedPhoto.fetchCount(db) : 0
+            let totalVideoCount = cursor == nil ? try IndexedVideo.fetchCount(db) : 0
+
+            let fetchLimit = boundedLimit + 1
+            let photoDescriptors = try Self.loadMediaPageDescriptors(
+                in: db,
+                mediaType: .photo,
+                includesLocalIdentifier: false,
+                sourceID: nil,
+                after: cursor,
+                limit: fetchLimit
+            )
+            let videoDescriptors = try Self.loadMediaPageDescriptors(
+                in: db,
+                mediaType: .video,
+                includesLocalIdentifier: false,
+                sourceID: nil,
+                after: cursor,
+                limit: fetchLimit
+            )
+            let descriptors = try Self.mergeMediaPageDescriptors(
+                photoDescriptors,
+                videoDescriptors,
+                limit: fetchLimit
+            )
+
+            let hasMore = descriptors.count > boundedLimit
+            let selected = Array(descriptors.prefix(boundedLimit))
+            let photoIDs = selected.filter { $0.mediaType == .photo }.map(\.id)
+            let videoIDs = selected.filter { $0.mediaType == .video }.map(\.id)
+            let photos = try Self.loadPhotoRows(in: db, ids: photoIDs)
+            let videos = try Self.loadVideoRows(in: db, ids: videoIDs)
+            let nextCursor = hasMore ? selected.last.map {
+                SearchMediaPageCursor(
+                    creationDate: $0.creationDate,
+                    id: $0.id,
+                    mediaType: $0.mediaType
+                )
+            } : nil
+            return SearchMediaPage(
+                photos: photos,
+                videos: videos,
+                mediaCount: selected.count,
+                totalPhotoCount: totalPhotoCount,
+                totalVideoCount: totalVideoCount,
+                nextCursor: nextCursor
+            )
+        }
+    }
+
+    static func mediaPageDescriptorQuery(
+        mediaType: SearchMediaPageKind,
+        includesLocalIdentifier: Bool,
+        sourceID: String?,
+        after cursor: SearchMediaPageCursor?,
+        limit: Int
+    ) -> MediaPageDescriptorQuery {
+        let table: String
+        switch mediaType {
+        case .photo:
+            table = "indexed_photos"
+        case .video:
+            table = "indexed_videos"
+        }
+        let columns = includesLocalIdentifier
+            ? "id, localIdentifier, creationDate"
+            : "id, creationDate"
+        var sql = "SELECT \(columns) FROM \(table)"
+        var predicates: [String] = []
+        var arguments = StatementArguments()
+        if let sourceID {
+            predicates.append("sourceId = ?")
+            arguments += [sourceID]
+        }
+        if let cursor {
+            let idOperator = mediaType.rawValue > cursor.mediaType.rawValue ? ">=" : ">"
+            if let creationDate = cursor.creationDate {
+                predicates.append(
+                    "(creationDate < ? OR creationDate IS NULL OR (creationDate = ? AND id \(idOperator) ?))"
+                )
+                arguments += [creationDate, creationDate, cursor.id]
+            } else {
+                predicates.append("creationDate IS NULL AND id \(idOperator) ?")
+                arguments += [cursor.id]
+            }
+        }
+        if !predicates.isEmpty {
+            sql += " WHERE " + predicates.joined(separator: " AND ")
+        }
+        sql += " ORDER BY creationDate DESC, id ASC LIMIT ?"
+        arguments += [limit]
+        return MediaPageDescriptorQuery(sql: sql, arguments: arguments)
+    }
+
+    private struct MediaPageDescriptor {
+        let mediaType: SearchMediaPageKind
+        let id: String
+        let localIdentifier: String?
+        let creationDate: Date?
+    }
+
+    private static func loadMediaPageDescriptors(
+        in db: Database,
+        mediaType: SearchMediaPageKind,
+        includesLocalIdentifier: Bool,
+        sourceID: String?,
+        after cursor: SearchMediaPageCursor?,
+        limit: Int
+    ) throws -> [MediaPageDescriptor] {
+        let query = mediaPageDescriptorQuery(
+            mediaType: mediaType,
+            includesLocalIdentifier: includesLocalIdentifier,
+            sourceID: sourceID,
+            after: cursor,
+            limit: limit
+        )
+        var descriptors: [MediaPageDescriptor] = []
+        descriptors.reserveCapacity(limit)
+        let rows = try Row.fetchCursor(db, sql: query.sql, arguments: query.arguments)
+        while let row = try rows.next() {
+            try SearchCancellation.check(descriptors.count)
+            descriptors.append(MediaPageDescriptor(
+                mediaType: mediaType,
+                id: row["id"],
+                localIdentifier: includesLocalIdentifier ? row["localIdentifier"] : nil,
+                creationDate: row["creationDate"]
+            ))
+        }
+        return descriptors
+    }
+
+    private static func mergeMediaPageDescriptors(
+        _ photos: [MediaPageDescriptor],
+        _ videos: [MediaPageDescriptor],
+        limit: Int
+    ) throws -> [MediaPageDescriptor] {
+        var result: [MediaPageDescriptor] = []
+        result.reserveCapacity(limit)
+        var photoIndex = 0
+        var videoIndex = 0
+        while result.count < limit,
+              photoIndex < photos.count || videoIndex < videos.count {
+            try SearchCancellation.check(result.count)
+            if photoIndex >= photos.count {
+                result.append(videos[videoIndex])
+                videoIndex += 1
+            } else if videoIndex >= videos.count
+                        || mediaPageDescriptorPrecedes(photos[photoIndex], videos[videoIndex]) {
+                result.append(photos[photoIndex])
+                photoIndex += 1
+            } else {
+                result.append(videos[videoIndex])
+                videoIndex += 1
+            }
+        }
+        return result
+    }
+
+    private static func mediaPageDescriptorPrecedes(
+        _ lhs: MediaPageDescriptor,
+        _ rhs: MediaPageDescriptor
+    ) -> Bool {
+        switch (lhs.creationDate, rhs.creationDate) {
+        case let (lhsDate?, rhsDate?) where lhsDate != rhsDate:
+            return lhsDate > rhsDate
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        default:
+            if lhs.id != rhs.id { return lhs.id < rhs.id }
+            return lhs.mediaType.rawValue < rhs.mediaType.rawValue
+        }
+    }
+
+    func loadPhotoEmbedding(id: String) throws -> MediaIndex? {
+        try dbQueue.read { db in
+            let index = try Self.loadPhotoRows(in: db, ids: [id])
+            return index.count == 0 ? nil : index
+        }
+    }
+
+    private static func loadPhotoRows(in db: Database, ids: [String]) throws -> MediaIndex {
+        guard !ids.isEmpty else { return MediaIndex(kind: .photo) }
+        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
+        var arguments = StatementArguments([EmbeddingConfig.bytesPerEmbedding])
+        arguments += StatementArguments(ids)
+        var index = MediaIndex(kind: .photo)
+        index.reserveCapacity(ids.count)
+        let cursor = try Row.fetchCursor(
+            db,
+            sql: """
+                SELECT id, localIdentifier, sourceId, filePath, creationDate,
+                       latitude, longitude,
+                       substr(locationCity, 1, 256) AS locationCity,
+                       substr(locationState, 1, 256) AS locationState,
+                       substr(locationCountry, 1, 256) AS locationCountry,
+                       substr(locationName, 1, 256) AS locationName,
+                       substr(ocrText, 1, 4096) AS ocrText,
+                       substr(sceneLabels, 1, 1024) AS sceneLabels,
+                       CASE WHEN length(embedding) = ? THEN embedding END AS embedding
+                FROM indexed_photos
+                WHERE id IN (\(placeholders))
+                ORDER BY creationDate DESC, id ASC
+            """,
+            arguments: arguments
+        )
+        var rowNumber = 0
+        while let row = try cursor.next() {
+            try SearchCancellation.check(rowNumber)
+            guard let data: Data = row["embedding"],
+                  let embedding = data.validatedFloat16Embedding() else {
+                throw SearchEngineError.corruptedIndex
+            }
+            try index.append(
+                MediaIndex.Row(
+                    id: row["id"], localIdentifier: row["localIdentifier"],
+                    sourceId: row["sourceId"], filePath: row["filePath"],
+                    date: row["creationDate"], latitude: row["latitude"],
+                    longitude: row["longitude"], city: row["locationCity"],
+                    state: row["locationState"], country: row["locationCountry"],
+                    locationName: row["locationName"],
+                    details: .photo(ocrText: row["ocrText"], sceneLabels: row["sceneLabels"])
+                ),
+                embedding: embedding
+            )
+            rowNumber += 1
+        }
+        return index
+    }
+
+    private static func loadVideoRows(in db: Database, ids: [String]) throws -> MediaIndex {
+        guard !ids.isEmpty else { return MediaIndex(kind: .videoFrame) }
+        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
+        let invalidVideoID = try String.fetchOne(
+            db,
+            sql: """
+                SELECT v.id
+                FROM indexed_videos v
+                LEFT JOIN indexed_video_frames f ON f.videoId = v.id
+                WHERE v.id IN (\(placeholders))
+                GROUP BY v.id
+                HAVING COUNT(f.id) < 1 OR COUNT(f.id) > ?
+                LIMIT 1
+            """,
+            arguments: StatementArguments(ids)
+                + [SearchIndexLimits.maximumVideoFramesPerMedia]
+        )
+        guard invalidVideoID == nil else {
+            throw SearchEngineError.corruptedIndex
+        }
+        var arguments = StatementArguments([EmbeddingConfig.bytesPerEmbedding])
+        arguments += StatementArguments(ids)
+        var index = MediaIndex(kind: .videoFrame)
+        index.reserveCapacity(ids.count * SearchIndexLimits.maximumVideoFramesPerMedia)
+        let cursor = try Row.fetchCursor(
+            db,
+            sql: """
+                SELECT v.id, v.localIdentifier, v.sourceId, v.creationDate,
+                       v.latitude, v.longitude,
+                       substr(v.locationCity, 1, 256) AS locationCity,
+                       substr(v.locationState, 1, 256) AS locationState,
+                       substr(v.locationCountry, 1, 256) AS locationCountry,
+                       substr(v.locationName, 1, 256) AS locationName,
+                       f.framePosition,
+                       CASE WHEN length(f.embedding) = ? THEN f.embedding END AS embedding
+                FROM indexed_video_frames f
+                JOIN indexed_videos v ON f.videoId = v.id
+                WHERE v.id IN (\(placeholders))
+                ORDER BY v.creationDate DESC, v.id ASC, f.framePosition ASC, f.id ASC
+            """,
+            arguments: arguments
+        )
+        var rowNumber = 0
+        while let row = try cursor.next() {
+            try SearchCancellation.check(rowNumber)
+            guard let data: Data = row["embedding"],
+                  let embedding = data.validatedFloat16Embedding() else {
+                throw SearchEngineError.corruptedIndex
+            }
+            try index.append(
+                MediaIndex.Row(
+                    id: row["id"], localIdentifier: row["localIdentifier"],
+                    sourceId: row["sourceId"], filePath: nil,
+                    date: row["creationDate"], latitude: row["latitude"],
+                    longitude: row["longitude"], city: row["locationCity"],
+                    state: row["locationState"], country: row["locationCountry"],
+                    locationName: row["locationName"],
+                    details: .videoFrame(position: row["framePosition"])
+                ),
+                embedding: embedding
+            )
+            rowNumber += 1
+        }
+        return index
     }
 
     func loadPhotoEmbeddings(
@@ -1245,17 +1886,16 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         }
     }
 
-    func deleteAll() throws {
-        let removedSourceIDs = try dbQueue.write { db in
-            let sourceIDs = try String.fetchAll(db, sql: "SELECT id FROM photo_sources")
+    /// Removes derived media index data while preserving user-selected folder
+    /// sources and their security-scoped bookmarks for the subsequent rebuild.
+    func resetIndexedMedia() throws {
+        try dbQueue.write { db in
             _ = try IndexedPhoto.deleteAll(db)
             _ = try db.execute(sql: "DELETE FROM indexed_video_frames")
             _ = try IndexedVideo.deleteAll(db)
-            _ = try PhotoSource.deleteAll(db)
-            return sourceIDs
-        }
-        for sourceID in removedSourceIDs {
-            FolderBookmarkStore.remove(for: sourceID)
+            try db.execute(
+                sql: "UPDATE photo_sources SET photoCount = 0, lastIndexedAt = NULL"
+            )
         }
     }
 
@@ -1395,17 +2035,30 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         try dbQueue.read { db in
             try PhotoSource.filter(Column("type") == PhotoSourceType.folder.rawValue)
                 .order(Column("addedAt").desc)
-                .limit(PhotoSourcePolicy.maximumFolderSources)
                 .fetchAll(db)
         }
     }
 
     func deleteSource(_ id: String) throws {
+        try deleteSource(id) { sourceID in
+            try FolderBookmarkStore.remove(for: sourceID)
+        }
+    }
+
+    func deleteSource(
+        _ id: String,
+        removeBookmark: (String) throws -> Void
+    ) throws {
+        do {
+            try removeBookmark(id)
+        } catch {
+            logger.error("Failed to clean up a folder bookmark before deletion: \(error.safeDiagnosticCode)")
+            throw FolderSourceDeletionError.bookmarkCleanupFailed
+        }
         try dbQueue.write { db in
             _ = try IndexedPhoto.filter(Column("sourceId") == id).deleteAll(db)
             _ = try PhotoSource.filter(Column("id") == id).deleteAll(db)
         }
-        FolderBookmarkStore.remove(for: id)
     }
 
     func updateSourceStats(_ id: String, photoCount: Int) throws {
@@ -1423,6 +2076,14 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         try dbQueue.read { db in
             try IndexedVideo.filter(Column("localIdentifier") == localIdentifier).fetchCount(db) > 0
         }
+    }
+
+    func existingVideoIdentifiers(in localIdentifiers: [String]) throws -> Set<String> {
+        try existingStrings(
+            localIdentifiers,
+            table: "indexed_videos",
+            column: "localIdentifier"
+        )
     }
 
     func videoIndexedCount() throws -> Int {
@@ -1581,9 +2242,10 @@ final class AppDatabase: DatabaseProtocol, Sendable {
         _ frames: [IndexedVideoFrame],
         completingRequiredRebuild: Bool
     ) throws -> Bool {
-        guard !frames.isEmpty else { return false }
-        guard frames.allSatisfy({
-            $0.framePosition.isFinite
+        guard (1...SearchIndexLimits.maximumVideoFramesPerMedia).contains(frames.count),
+              frames.allSatisfy({
+            $0.videoId == video.id
+                && $0.framePosition.isFinite
                 && (0...1).contains($0.framePosition)
                 && $0.embedding.validatedFloat16Embedding() != nil
         }) else {
@@ -1598,6 +2260,7 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                 )
             }
             var video = video
+            video.frameCount = frames.count
             if !LocationCoordinatePolicy.isValidOrAbsent(
                 latitude: video.latitude,
                 longitude: video.longitude
@@ -1637,15 +2300,19 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     }
 
     func reconcileFreeTier(_ limit: Int) throws -> FreeTierReconciliationResult {
-        let result = try dbQueue.write { db in
-            let folderSourceIDs = try String.fetchAll(
-                db,
-                sql: "SELECT id FROM photo_sources WHERE type = ? OR id != ?",
-                arguments: [PhotoSourceType.folder.rawValue, PhotoSourceType.photokit.rawValue]
-            )
+        try reconcileFreeTier(limit, whilePermitted: { true })
+    }
 
+    func reconcileFreeTier(
+        _ limit: Int,
+        whilePermitted: @escaping @Sendable () -> Bool
+    ) throws -> FreeTierReconciliationResult {
+        try dbQueue.write { db in
+            guard whilePermitted() else { throw CancellationError() }
             // Folder access is a Pro feature. Remove every non-PhotoKit row,
-            // including rows whose source record is missing or malformed.
+            // including rows whose source record is missing or malformed. Keep
+            // source registrations and bookmarks so a later Pro entitlement
+            // can resume without requiring the user to select folders again.
             try db.execute(
                 sql: "DELETE FROM indexed_photos WHERE sourceId != ?",
                 arguments: [PhotoSourceType.photokit.rawValue]
@@ -1659,23 +2326,18 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                 arguments: [PhotoSourceType.photokit.rawValue]
             )
             try db.execute(
-                sql: "DELETE FROM photo_sources WHERE type = ? OR id != ?",
+                sql: "UPDATE photo_sources SET photoCount = 0, lastIndexedAt = NULL WHERE type = ? OR id != ?",
                 arguments: [PhotoSourceType.folder.rawValue, PhotoSourceType.photokit.rawValue]
             )
 
             let didTrim = try Self.trimMedia(in: db, to: limit)
             let retainedCount = try IndexedPhoto.fetchCount(db) + IndexedVideo.fetchCount(db)
+            guard whilePermitted() else { throw CancellationError() }
             return FreeTierReconciliationResult(
                 retainedMediaCount: retainedCount,
-                didTrimMedia: didTrim,
-                removedFolderSourceIDs: folderSourceIDs
+                didTrimMedia: didTrim
             )
         }
-
-        for sourceID in result.removedFolderSourceIDs {
-            FolderBookmarkStore.remove(for: sourceID)
-        }
-        return result
     }
 
     private static func trimMedia(in db: Database, to limit: Int) throws -> Bool {

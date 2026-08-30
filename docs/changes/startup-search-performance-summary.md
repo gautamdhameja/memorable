@@ -2,7 +2,7 @@
 
 Date: 2026-06-06
 
-This document summarizes the functional and behavioral changes from the current implementation work. It is written for product and engineering review, so it focuses on how the app behaves before and after the change rather than walking through the code.
+This document summarizes the functional and behavioral changes in the current implementation. It describes observable behavior and the boundaries that maintain it.
 
 ## Summary
 
@@ -10,7 +10,7 @@ Before this work, Memorable treated launch as a single large initialization step
 
 After this work, launch is staged. The app brings up the visible shell first, then warms semantic search in the background. If the user searches before background warmup finishes, that work is promoted to user-initiated priority. The goal is faster perceived startup without making actual search slower when the user needs it.
 
-The implementation also tightens privacy and correctness in search. Location query text is no longer sent to `CLGeocoder`; location filtering now relies on locally stored reverse-geocoded metadata and trusted coordinates already attached to indexed media. Index loading and reloads are moved off the main actor, reducing UI blocking risk.
+The implementation also defines the privacy and memory boundaries for search. Location query text is not sent to `CLGeocoder`; location filtering uses locally stored reverse-geocoded metadata and trusted coordinates already attached to indexed media. Search keeps an 8,000-media resident fast window and searches remaining persisted media in bounded 512-media pages. Index reloads prepare a replacement snapshot before the exclusive swap.
 
 ## Compare high-level behavior
 
@@ -23,6 +23,9 @@ The implementation also tightens privacy and correctness in search. Location que
 | Auto-resume indexing | Incomplete indexing checks could happen immediately during launch. | Auto-resume is deferred after launch and only runs if there is already an existing index. |
 | Location search privacy | Query-derived location text could be forward-geocoded. | Query location text is matched locally against stored metadata; no query text is sent to geocoding. |
 | Memory warning handling | Search index was dropped directly. | Background enrichment is canceled, the index is dropped, and readiness state is marked unavailable. |
+| Pro search coverage | The 8,000-media safety bound could be interpreted as a product limit. | Pro indexes all locally available media; 8,000 limits the resident fast window, and remaining media is searched in 512-media pages. |
+| User sharing | Privacy hardening could transform an explicitly shared photo. | Share copies the locally available resource unchanged after the user taps Share; the file can include source metadata. |
+| Folder continuity | Rebuilds and downgrades could remove saved folder access. | Folder registrations and bookmarks remain saved; derived folder rows are rebuilt when Pro is active. |
 | User feedback | The UI mainly showed generic loading or indexing state. | The UI distinguishes warming search, prioritizing search, waiting for index, failure, and retry states. |
 
 ## Startup flow
@@ -52,7 +55,7 @@ Startup now has separate readiness phases:
 6. Load the existing index in detached work.
 7. Mark semantic search ready when both model and index are ready.
 
-This makes the app feel faster because the first visible screen is no longer blocked by the complete semantic search stack.
+The first visible screen no longer waits for the complete semantic search stack.
 
 ## Semantic search warmup
 
@@ -72,7 +75,7 @@ A new semantic runtime tracks search setup with clear phases:
 
 Warmup starts as post-paint background work. If the user searches while warmup is still running, the runtime promotes that work to user-initiated priority. The UI then says "Prioritizing search..." instead of continuing to look like passive background setup.
 
-This keeps startup light while still protecting the first real search interaction.
+This keeps semantic setup out of the shell-readiness path while preserving priority for an explicit search.
 
 ## Search UI behavior
 
@@ -125,10 +128,12 @@ Index behavior is more staged:
 - New photo indexing uses an indexing-only fast image loading path for 224x224 embedding inputs.
 - The first photo pass inserts base embeddings and metadata before OCR, blur scoring, and scene labels.
 - Searchable checkpoints reload the index at throttled milestones so a partial library can be searched while indexing continues; very large libraries use a larger checkpoint interval to avoid too many full index reloads.
+- Reloads build a replacement snapshot before the exclusive swap, so the committed snapshot remains available while database loading and GPU preparation run.
+- The newest 8,000 media items form the resident fast window. Pro searches older persisted media in bounded 512-media pages and merges page candidates into one global result ranking.
 - OCR, screenshot OCR, blur scoring, and scene labels run in a resumable enrichment pass backed by per-photo database state.
 - Deferred enrichment waits behind incomplete-index auto-resume, reopens folder security-scoped bookmarks before reading folder files, and aborts the current enrichment pass on persistent database update failures instead of looping on the same row.
 
-This reduces launch-time work, makes first-time indexing produce searchable coverage sooner, and avoids surprising brand-new users with automatic indexing.
+This moves work out of the launch path, exposes searchable coverage at checkpoints, and does not start indexing for a new user without an explicit action.
 
 ## Free-tier counting
 
@@ -152,7 +157,7 @@ Video filtering logic for date and location appeared in multiple places. That ma
 
 Video hard-filter logic is centralized. Date and location checks now use the same helper for video candidate counting, normal video ranking, and fallback grouping behavior.
 
-This should make video search behavior more consistent across normal results and fallback states.
+Normal results and fallback states now use the same video filtering rules.
 
 ## Negative search terms
 
@@ -204,7 +209,13 @@ The refund callback trimmed the index to the free-tier limit, but launch timing 
 
 After wiring the refund callback, the app explicitly re-verifies entitlement. If Pro has been revoked, the index is trimmed to the free-tier media limit and the search index reloads.
 
-This makes refund handling more reliable.
+Entitlement reconciliation treats StoreKit observations as entitled, not entitled, or indeterminate. An indeterminate result preserves local state. A conclusive downgrade removes derived folder index rows and applies the free-media limit, but it preserves saved folder registrations and bookmarks. A confirmed Pro restoration schedules saved folders that need indexing.
+
+## User-initiated sharing and playback
+
+Memorable does not upload media automatically. When the user taps Share for a photo, the app copies the locally available PhotoKit or folder resource without changing its bytes and presents the iOS share sheet. The shared file can include embedded GPS, camera, date, and other source metadata. The destination selected by the user controls any transmission, and the developer receives none of the shared content through Memorable.
+
+AirPlay remains available when the user selects an external playback destination. Picture in Picture uses the local iOS system player. The app does not start either path as an automatic data transfer.
 
 ## Model resource handling
 
@@ -244,39 +255,41 @@ The project documentation was updated to reflect the new behavior:
 
 - Search scoring docs now describe local-only location matching.
 - Product docs now better describe photos and videos as indexed media.
+- Privacy and store copy distinguish automatic app traffic from explicit sharing, AirPlay, Picture in Picture, CLGeocoder, and StoreKit.
+- Pro copy describes all locally available media instead of treating the 8,000-item resident window as a product cap.
+- Rebuild and downgrade copy states that folder registrations and bookmarks are preserved.
 - Build metadata docs now reflect iPhone-only targeting on iOS 17+ and the `com.blockdeep.memorable.pro.v2` StoreKit product.
 - The startup/search plan and brainstorm documents remain under `docs/plans` and `docs/brainstorms`.
 
-## Verification status
+## Verification
 
-The following checks passed locally:
+The following checks passed locally on August 30, 2026:
 
-- Swift parser check on the touched app and test files.
-- `git diff --check`.
-- Targeted stale-symbol search for removed or renamed code paths.
-- Package resolution during destination listing resolved `GRDB 7.10.0` and `SwiftProtobuf 1.36.1`.
-- `xcodebuild -project Memorable.xcodeproj -scheme Memorable -destination 'platform=iOS Simulator,id=22A925A6-2D1C-4C4B-9EB7-C3F2E7A112AA' -quiet build`.
-- `xcodebuild -project Memorable.xcodeproj -scheme Memorable -destination 'platform=iOS Simulator,id=22A925A6-2D1C-4C4B-9EB7-C3F2E7A112AA' -quiet test`.
-
-One simulator test attempt hit a transient CoreSimulator `Busy` launch preflight error. The immediate serial retry passed.
+- Focused `ProjectConfigurationTests` and `StoreKitConfigTests` on the iPhone 17 Pro simulator.
+- Release build for the generic iOS Simulator destination.
+- `python3 scripts/premerge.py`, including bundled-model verification, migration safety, and the pinned 50-query relevance gate.
+- `git diff --check` and a stale-copy search across the current documentation and user-facing strings.
 
 ## Expected user impact
 
 The intended user-facing impact is:
 
-- Faster perceived app startup.
-- Less chance that launch stalls on model or index work.
+- The app shell appears before model and index warmup completes.
+- Model and index work no longer blocks the initial shell-readiness path.
 - Search still becomes high priority when the user actually tries to search.
 - Clearer UI states while search is warming or unavailable.
 - More reliable search behavior when typing quickly.
 - More accurate media language for photos and videos.
-- More private location search behavior.
+- Search query text remains local during location filtering; indexed media coordinates can still be sent to Apple CLGeocoder.
+- Pro searches all locally available indexed media with bounded resident memory.
+- Explicit sharing preserves the selected local resource and its embedded metadata.
+- Rebuilds and entitlement changes preserve saved folder registrations.
 - More consistent video filtering and fallback behavior.
 - Safer memory-warning recovery.
 - More reliable refund/free-tier enforcement.
 
 ## Main tradeoffs
 
-This implementation intentionally shifts some work from launch time to shortly after launch or to the first search interaction. That improves startup responsiveness, but it means the first search after a cold launch may briefly show "Getting search ready..." if background warmup has not finished yet.
+This implementation shifts some work from launch time to shortly after launch or to the first search interaction. The first search after a cold launch can briefly show "Getting search ready..." if background warmup has not finished.
 
 The mitigation is priority promotion: a user-initiated search does not wait behind passive background work. The app treats that search as the important task and prioritizes semantic readiness.

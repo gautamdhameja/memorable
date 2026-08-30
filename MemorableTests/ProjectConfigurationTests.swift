@@ -64,7 +64,7 @@ final class ProjectConfigurationTests: XCTestCase {
     func testPhotoSharingRequiresAnExplicitUserAction() throws {
         let sources = try allAppSourceText()
         let viewer = try contents(of: "Memorable/Views/SearchResultsViewer.swift")
-        let photoLibrary = try contents(of: "Memorable/Core/PhotoLibrary.swift")
+        let photoSharing = try contents(of: "Memorable/Core/PhotoSharing.swift")
         let privacyPolicy = try contents(of: "PRIVACY_POLICY.txt")
 
         XCTAssertTrue(viewer.contains("Button(action: { shareCurrentPhoto() })"))
@@ -74,7 +74,12 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(viewer.contains("PhotoLibrary.prepareShareItem(for: result)"))
         XCTAssertTrue(viewer.contains(".sheet(item: $shareCoordinator.preparedItem)"))
         XCTAssertTrue(viewer.contains("shareCoordinator.requestShare(for: result)"))
-        XCTAssertTrue(photoLibrary.contains("cancelRequest: { manager.cancelDataRequest($0) }"))
+        XCTAssertTrue(photoSharing.contains("cancelRequest: { manager.cancelDataRequest($0) }"))
+        XCTAssertGreaterThanOrEqual(
+            viewer.components(separatedBy: "Button(action: { shareCurrentPhoto() })").count - 1,
+            2
+        )
+        XCTAssertFalse(photoSharing.contains("renderMetadataStrippedShareItem"))
         XCTAssertFalse(sources.contains(".quickLookPreview"))
         XCTAssertFalse(sources.contains("UIPasteboard"))
         XCTAssertTrue(privacyPolicy.contains("only after you tap Share"))
@@ -120,6 +125,33 @@ final class ProjectConfigurationTests: XCTestCase {
         let upgradeView = try contents(of: "Memorable/Views/UpgradeView.swift")
 
         XCTAssertTrue(upgradeView.contains("await proManager.loadProduct()"))
+    }
+
+    func testMemoryWarningHandlersRouteThroughRecoverableMediaState() throws {
+        for path in [
+            "Memorable/Views/MemorySlideshowView.swift",
+            "Memorable/Views/OnThisDayView.swift",
+            "Memorable/Views/ZoomableAsyncImage.swift"
+        ] {
+            let source = try contents(of: path)
+            XCTAssertTrue(
+                source.contains("handleMemoryPressure()"),
+                "\(path) must explicitly preserve or reload active media after memory pressure"
+            )
+        }
+    }
+
+    func testPreservedFoldersResumeAfterRebuildAndProRestore() throws {
+        let service = try contents(of: "Memorable/Core/IndexingService.swift")
+        let worker = try contents(of: "Memorable/Core/FolderIndexingWorker.swift")
+
+        XCTAssertTrue(service.contains("ProManager.shared.$isPro"))
+        XCTAssertGreaterThanOrEqual(
+            service.components(separatedBy: "enqueueSavedFolderReindexingIfNeeded()").count - 1,
+            2,
+            "Saved folders must resume both after library rebuilds and after Pro restoration"
+        )
+        XCTAssertTrue(worker.contains("func reindex(source: PhotoSource) async"))
     }
 
     private func contents(of relativePath: String) throws -> String {

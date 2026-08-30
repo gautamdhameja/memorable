@@ -7,7 +7,7 @@
 
 ## Overview
 
-Combine calendar events with photos to create rich "event memories." When enabled, the app reads the user's calendar, matches events to photos taken during those events, and uses the on-device Foundation Models to generate warm narrative summaries.
+When the user enables this feature, Memorable reads calendar events, matches them to photos from the same time range, and can use Apple's on-device Foundation Models to generate short summaries.
 
 **Example output:**
 > *"Team Offsite at Rishikesh" — June 15-17, 2024*
@@ -16,18 +16,18 @@ Combine calendar events with photos to create rich "event memories." When enable
 
 ## Let users opt in
 
-1. User opens **More tab → Settings section**
-2. Toggle: **"Calendar Memories"** — off by default
-3. On first enable: system calendar permission prompt appears
-4. If granted: events are loaded and matched to photos
-5. If denied: toggle reverts to off, explanation shown
-6. User can disable at any time — calendar data is cleared from memory (never stored in DB)
+1. Open **More > Settings**.
+2. Turn on **Calendar memories**. The setting is off by default.
+3. Respond to the system calendar permission prompt.
+4. If access is granted, Memorable loads events and matches them to photos.
+5. If access is denied, Memorable turns the setting off and explains why.
+6. Turn the feature off to clear calendar data from memory. The initial implementation does not store events in the database.
 
 ### Require explicit access
-- Calendar access is sensitive — users should consciously choose to share it
-- Not all users want their work meetings mixed with photo memories
-- Aligns with our privacy-first positioning
-- Reduces permission fatigue on first launch (only photo access is requested initially)
+- Request calendar access only after the user enables the feature.
+- Keep the feature off by default.
+- Explain how Memorable uses calendar events before showing the system prompt.
+- Do not request calendar access during first launch.
 
 ## Architecture
 
@@ -62,7 +62,7 @@ class CalendarService {
 **Info.plist key required:**
 ```xml
 <key>NSCalendarsFullAccessUsageDescription</key>
-<string>Memorable can match your calendar events with photos to create event memories. Calendar data is processed on your device and never uploaded.</string>
+<string>Allow Memorable to match calendar events with photos on this device. Memorable does not send calendar data to the developer.</string>
 ```
 
 ### Match photos to events
@@ -99,12 +99,12 @@ Not all calendar events make good memories. Filter:
 
 | Rule | Reason |
 |------|--------|
-| Skip events with < 3 photos | Not enough for a meaningful memory |
-| Skip events < 30 minutes | Quick calls aren't photo-worthy events |
-| Skip recurring events | Daily standups aren't memories |
-| Skip cancelled events | Didn't happen |
-| Skip all-day events without photos | Usually just reminders |
-| Keep all-day events WITH photos | Likely actual events (birthdays, trips) |
+| Skip events with fewer than 3 photos | Require enough media for the event card and detail view. |
+| Skip events shorter than 30 minutes | Reduce matches from brief calendar entries. |
+| Skip recurring events | Reduce repeated work and routine entries. |
+| Skip canceled events | Exclude events that did not occur. |
+| Skip all-day events without photos | Exclude entries that have no matching media. |
+| Keep all-day events with photos | Include birthdays, trips, and other documented events. |
 
 ### Generate narratives with Foundation Models
 
@@ -155,7 +155,7 @@ Reuse the existing `PhotoCaptionService` to categorize matched photos:
 // e.g., ["people", "nature", "food", "sunset"]
 ```
 
-This gives the Foundation Model context about what's IN the photos without sending any images.
+This provides visual-category context to the on-device model without providing image files to it.
 
 ## Data model
 
@@ -236,7 +236,7 @@ Section("Features") {
         }
     
     if calendarEnabled {
-        Text("Your calendar events are matched with photos to create event memories. All processing happens on your device.")
+            Text("Memorable matches calendar events with photos and generates summaries on this device.")
             .font(.footnote)
             .foregroundStyle(.secondary)
     }
@@ -270,8 +270,6 @@ Section("Features") {
 | 10 | Low | Integration into Memories tab |
 | 11 | Low | Settings toggle with calendar permission flow |
 | 12 | Low | Build, test, verify |
-
-**Estimated total effort:** 4-5 hours
 
 ## Dependencies
 

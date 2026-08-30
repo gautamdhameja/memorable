@@ -3,7 +3,7 @@ Last updated: August 30, 2026
 
 Overview
 
-Memorable processes photo and video contents and search query text on your iPhone. The developer does not operate a backend for the app and does not receive your photos, videos, queries, index, or usage activity.
+Memorable processes locally available photo and video contents and search query text on your iPhone. The developer does not operate a backend for the app and does not receive your photos, videos, queries, index, or usage activity.
 
 Data the developer does not collect
 
@@ -16,6 +16,8 @@ Memorable does not include developer-operated data collection. In particular, th
 - No third-party data-collection SDK
 - No external crash-report upload
 
+The app can write technical diagnostics to the local iOS logging system. The app does not upload those logs, and the developer does not receive them through Memorable.
+
 On-device processing
 
 Memorable uses bundled Core ML models to analyze media and encode search text on your device. It stores generated embeddings, OCR text, scene labels, dates, dimensions, searchable place names, search history, and app settings locally.
@@ -24,7 +26,7 @@ During indexing and search, photo and video contents and search query text are n
 
 Apple service traffic
 
-Memorable uses two Apple-managed services that may use network access:
+During indexing and commerce, Memorable uses two Apple-managed services that may use network access:
 
 1. Apple CLGeocoder: If indexed media contains GPS metadata, Memorable sends its latitude and longitude coordinates to Apple's CLGeocoder service. Apple returns place names such as city, state, and country. Memorable stores those place names locally. It does not send the photo or video contents or your search query text with the request.
 
@@ -36,11 +38,17 @@ Memorable requests Photo Library access to index and display media locally. You 
 
 User-initiated sharing
 
-Memorable displays the iOS share sheet only after you tap Share for a photo. The app prepares a size-bounded image copy without the source file's GPS, camera, or other embedded metadata, then provides that copy to the Apple share sheet so you can choose a destination. The destination you select may transmit or store the image according to its own behavior and privacy policy. Memorable does not choose a destination, start sharing automatically, or receive information about the destination through a developer backend. PhotoKit network access remains disabled while Memorable prepares the image.
+Memorable displays the iOS share sheet only after you tap Share for a photo. The app copies the locally available image resource without changing its bytes, then provides the copy to the Apple share sheet so you can choose a destination. The file can include the source image's embedded GPS, camera, date, and other metadata. The destination you select may transmit or store the image according to its own behavior and privacy policy. Memorable does not choose a destination, start sharing automatically, or receive the image or destination information through a developer backend. PhotoKit network access remains disabled while Memorable prepares the image.
+
+User-controlled playback
+
+Memorable allows AirPlay when you choose an external playback destination in the system player. Apple and the selected playback destination handle that connection. Picture in Picture continues playback through the local iOS system player. Memorable does not start external playback automatically or send playback data to the developer.
 
 Folder access
 
-If you use Pro to add a folder source, Memorable reads supported images only from the folder you select. It stores a security-scoped bookmark so it can reopen that folder. Bookmark files are protected and excluded from device backup. The app rejects special files, symbolic links, and paths outside the selected folder. It also bounds directory traversal and reads an immutable snapshot of each accepted file before image parsing. Memorable supports up to 32 folder sources. Removing Pro access or rebuilding the complete index removes folder-source records and their saved bookmarks.
+If you use Pro to add a folder source, Memorable reads supported images only from the folder you select. It stores a security-scoped bookmark so it can reopen that folder. Bookmark files are protected and excluded from device backup. The app rejects special files, symbolic links, and paths outside the selected folder. It also bounds directory traversal and reads an immutable snapshot of each accepted file before image parsing.
+
+Memorable accepts up to 32 new folder registrations. If an earlier version already saved more folders, Memorable keeps all of them visible so you can remove them. Rebuilding the index preserves folder registrations and bookmarks, then schedules those folders for indexing when Pro is active. A confirmed loss of Pro access removes derived folder index rows but preserves the registrations and bookmarks so they can be indexed again after Pro is restored.
 
 Local storage and deletion
 
