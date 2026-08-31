@@ -4,6 +4,17 @@ enum SurpriseQueryCache {
     struct State: Codable, Equatable {
         var validatedQueries: [String]
         var lastValidatedCount: Int
+        var contentRevision: SearchIndexContentRevision?
+
+        init(
+            validatedQueries: [String],
+            lastValidatedCount: Int,
+            contentRevision: SearchIndexContentRevision? = nil
+        ) {
+            self.validatedQueries = validatedQueries
+            self.lastValidatedCount = lastValidatedCount
+            self.contentRevision = contentRevision
+        }
     }
 
     static func fileURL() throws -> URL {
@@ -107,6 +118,7 @@ class SurpriseQueries {
         let candidates: [String]
         let persistedCount: Int
         let revalidatesCachedSubset: Bool
+        let reusesUnchangedCache: Bool
     }
 
     static let candidates = [
@@ -157,8 +169,18 @@ class SurpriseQueries {
     /// threshold that refreshes the complete candidate pool.
     static func validationPlan(
         cachedState: SurpriseQueryCache.State,
-        currentSize: Int
+        currentSize: Int,
+        currentRevision: SearchIndexContentRevision? = nil
     ) -> ValidationPlan {
+        if let currentRevision,
+           cachedState.contentRevision == currentRevision {
+            return ValidationPlan(
+                candidates: [],
+                persistedCount: cachedState.lastValidatedCount,
+                revalidatesCachedSubset: false,
+                reusesUnchangedCache: true
+            )
+        }
         let lastSize = cachedState.lastValidatedCount
         let growth = Double(currentSize - lastSize) / Double(max(lastSize, 1))
         let canReuseShortlist = lastSize > 0
@@ -171,20 +193,23 @@ class SurpriseQueries {
                     cachedState.validatedQueries.shuffled().prefix(cachedRevalidationLimit)
                 ),
                 persistedCount: lastSize,
-                revalidatesCachedSubset: true
+                revalidatesCachedSubset: true,
+                reusesUnchangedCache: false
             )
         }
         return ValidationPlan(
             candidates: candidates,
             persistedCount: currentSize,
-            revalidatesCachedSubset: false
+            revalidatesCachedSubset: false,
+            reusesUnchangedCache: false
         )
     }
 
     static func updatedCacheState(
         validatedQueries: [String],
         plan: ValidationPlan,
-        previous: SurpriseQueryCache.State
+        previous: SurpriseQueryCache.State,
+        currentRevision: SearchIndexContentRevision? = nil
     ) -> SurpriseQueryCache.State {
         let persistedQueries: [String]
         if plan.revalidatesCachedSubset {
@@ -196,17 +221,28 @@ class SurpriseQueries {
         }
         return SurpriseQueryCache.State(
             validatedQueries: persistedQueries,
-            lastValidatedCount: plan.persistedCount
+            lastValidatedCount: plan.persistedCount,
+            contentRevision: currentRevision
         )
     }
 
     /// Run all candidate queries against the search engine and keep only those
     /// that return at least one result above the score threshold.
     /// Call this after indexing completes.
-    static func validateQueries(using searchEngine: SearchEngine) async -> [String] {
+    static func validateQueries(
+        using searchEngine: SearchEngine,
+        contentRevision: SearchIndexContentRevision
+    ) async -> [String] {
         let currentSize = searchEngine.totalSize
         let cachedState = SurpriseQueryCache.load()
-        let plan = validationPlan(cachedState: cachedState, currentSize: currentSize)
+        let plan = validationPlan(
+            cachedState: cachedState,
+            currentSize: currentSize,
+            currentRevision: contentRevision
+        )
+        if plan.reusesUnchangedCache {
+            return cachedState.validatedQueries
+        }
 
         do {
             return try await SurpriseQueryValidationOperation.run(
@@ -222,7 +258,8 @@ class SurpriseQueries {
                     let state = updatedCacheState(
                         validatedQueries: valid,
                         plan: plan,
-                        previous: cachedState
+                        previous: cachedState,
+                        currentRevision: contentRevision
                     )
                     guard state != cachedState else { return }
                     SurpriseQueryCache.save(state)

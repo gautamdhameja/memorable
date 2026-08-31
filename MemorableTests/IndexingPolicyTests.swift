@@ -457,6 +457,37 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertTrue(validated.allSatisfy(updated.validatedQueries.contains))
     }
 
+    func testSurpriseValidationReusesCacheWhenIndexRevisionIsUnchanged() {
+        let revision = SearchIndexContentRevision(
+            photoCount: 100,
+            videoCount: 5,
+            videoFrameCount: 15,
+            latestPhotoRowID: 100,
+            latestVideoRowID: 5,
+            latestVideoFrameRowID: 15,
+            latestPhotoID: "photo-100",
+            latestVideoID: "video-5",
+            latestVideoFrameID: "frame-15",
+            latestPhotoIndexedAt: Date(timeIntervalSince1970: 300),
+            latestVideoIndexedAt: Date(timeIntervalSince1970: 200),
+            latestVideoFrameIndexedAt: Date(timeIntervalSince1970: 200)
+        )
+        let cachedState = SurpriseQueryCache.State(
+            validatedQueries: ["golden hour", "mountain view"],
+            lastValidatedCount: 105,
+            contentRevision: revision
+        )
+
+        let plan = SurpriseQueries.validationPlan(
+            cachedState: cachedState,
+            currentSize: 105,
+            currentRevision: revision
+        )
+
+        XCTAssertTrue(plan.reusesUnchangedCache)
+        XCTAssertTrue(plan.candidates.isEmpty)
+    }
+
     func testSurpriseValidationUsesFullCandidateSetAfterCumulativeGrowthThreshold() {
         let cachedState = SurpriseQueryCache.State(
             validatedQueries: ["golden hour"],

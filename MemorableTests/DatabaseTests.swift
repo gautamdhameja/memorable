@@ -383,6 +383,26 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(geocodingCounts.indexedVideos, 1)
     }
 
+    func testSearchIndexContentRevisionChangesForSameCountReplacement() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var original = makePhoto(localIdentifier: "original")
+        original.indexedAt = Date(timeIntervalSince1970: 100)
+        try database.insertPhoto(original)
+        let originalRevision = try database.searchIndexContentRevision()
+
+        try database.deleteOrphanedPhotos(localIdentifiers: ["original"])
+        var replacement = makePhoto(localIdentifier: "replacement")
+        replacement.indexedAt = original.indexedAt
+        try database.insertPhoto(replacement)
+        let replacementRevision = try database.searchIndexContentRevision()
+
+        XCTAssertEqual(originalRevision.photoCount, replacementRevision.photoCount)
+        XCTAssertNotEqual(originalRevision, replacementRevision)
+    }
+
     func testPhotoPersistenceRejectsMalformedEmbedding() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },

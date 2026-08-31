@@ -331,6 +331,21 @@ struct IndexedMediaCounts {
     var total: Int { photos + videos }
 }
 
+struct SearchIndexContentRevision: Codable, Equatable, Sendable {
+    let photoCount: Int
+    let videoCount: Int
+    let videoFrameCount: Int
+    let latestPhotoRowID: Int64
+    let latestVideoRowID: Int64
+    let latestVideoFrameRowID: Int64
+    let latestPhotoID: String?
+    let latestVideoID: String?
+    let latestVideoFrameID: String?
+    let latestPhotoIndexedAt: Date?
+    let latestVideoIndexedAt: Date?
+    let latestVideoFrameIndexedAt: Date?
+}
+
 struct IndexedMediaIdentifiers {
     let photos: Set<String>
     let videos: Set<String>
@@ -429,6 +444,7 @@ protocol DatabaseProtocol: Sendable {
     func indexedCount() throws -> Int
     func hasIndexedPhotos() throws -> Bool
     func indexedMediaCounts() throws -> IndexedMediaCounts
+    func searchIndexContentRevision() throws -> SearchIndexContentRevision
     func photoLibraryIndexedMediaCounts() throws -> IndexedMediaCounts
     /// Returns at most `SearchIndexLimits.maximumMediaItems` newest identifiers
     /// across photos and videos, including for oversized legacy stores.
@@ -647,6 +663,27 @@ extension DatabaseProtocol {
             embedding: embedding
         )
         return result
+    }
+
+    /// Compatibility default for lightweight test doubles. The production
+    /// database includes row identity and timestamps so same-count media
+    /// replacements still invalidate derived search suggestions.
+    func searchIndexContentRevision() throws -> SearchIndexContentRevision {
+        let counts = try indexedMediaCounts()
+        return SearchIndexContentRevision(
+            photoCount: counts.photos,
+            videoCount: counts.videos,
+            videoFrameCount: counts.videos,
+            latestPhotoRowID: Int64(counts.photos),
+            latestVideoRowID: Int64(counts.videos),
+            latestVideoFrameRowID: Int64(counts.videos),
+            latestPhotoID: nil,
+            latestVideoID: nil,
+            latestVideoFrameID: nil,
+            latestPhotoIndexedAt: nil,
+            latestVideoIndexedAt: nil,
+            latestVideoFrameIndexedAt: nil
+        )
     }
 
     /// Compatibility default for test doubles. `AppDatabase` performs both

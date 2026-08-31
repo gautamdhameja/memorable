@@ -119,6 +119,16 @@ final class SharedUtilitiesTests: XCTestCase {
         XCTAssertEqual(values.isExcludedFromBackup, true)
     }
 
+    func testSurpriseQueryCacheDecodesLegacyStateWithoutContentRevision() throws {
+        let legacyJSON = Data(#"{"validatedQueries":["golden hour"],"lastValidatedCount":42}"#.utf8)
+
+        let state = try JSONDecoder().decode(SurpriseQueryCache.State.self, from: legacyJSON)
+
+        XCTAssertEqual(state.validatedQueries, ["golden hour"])
+        XCTAssertEqual(state.lastValidatedCount, 42)
+        XCTAssertNil(state.contentRevision)
+    }
+
     func testImageLoadGenerationRejectsLateCompletionAfterMemoryPressure() {
         XCTAssertFalse(ImageLoadGenerationPolicy.acceptsCompletion(
             startedGeneration: 1,

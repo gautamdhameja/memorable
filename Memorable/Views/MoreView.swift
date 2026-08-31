@@ -514,16 +514,17 @@ struct SurpriseExploreView: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .onChange(of: canExplore) { _, isAvailable in
             guard !isAvailable else { return }
-            cancelExplore()
-            results.removeAll(keepingCapacity: false)
-            selectedPhoto = nil
+            clearExploreResults()
+        }
+        .onChange(of: indexingService.validatedSearchSuggestions) { oldValue, newValue in
+            guard oldValue != newValue else { return }
+            clearExploreResults()
         }
         .onDisappear { cancelExplore() }
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didReceiveMemoryWarningNotification
         )) { _ in
-            cancelExplore()
-            results.removeAll(keepingCapacity: false)
+            clearExploreResults()
         }
         .fullScreenCover(item: $selectedPhoto) { result in
             if result.isVideo {
@@ -590,6 +591,14 @@ struct SurpriseExploreView: View {
         exploreTask?.cancel()
         exploreTask = nil
         isLoading = false
+    }
+
+    private func clearExploreResults() {
+        cancelExplore()
+        query = ""
+        results.removeAll(keepingCapacity: false)
+        selectedPhoto = nil
+        noEligibleResults = false
     }
 }
 

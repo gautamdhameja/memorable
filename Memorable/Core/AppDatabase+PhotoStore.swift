@@ -172,6 +172,45 @@ extension AppDatabase {
         }
     }
 
+    func searchIndexContentRevision() throws -> SearchIndexContentRevision {
+        try dbQueue.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT
+                        (SELECT COUNT(*) FROM indexed_photos) AS photoCount,
+                        (SELECT COUNT(*) FROM indexed_videos) AS videoCount,
+                        (SELECT COUNT(*) FROM indexed_video_frames) AS videoFrameCount,
+                        (SELECT COALESCE(MAX(rowid), 0) FROM indexed_photos) AS latestPhotoRowID,
+                        (SELECT COALESCE(MAX(rowid), 0) FROM indexed_videos) AS latestVideoRowID,
+                        (SELECT COALESCE(MAX(rowid), 0) FROM indexed_video_frames) AS latestVideoFrameRowID,
+                        (SELECT id FROM indexed_photos ORDER BY rowid DESC LIMIT 1) AS latestPhotoID,
+                        (SELECT id FROM indexed_videos ORDER BY rowid DESC LIMIT 1) AS latestVideoID,
+                        (SELECT id FROM indexed_video_frames ORDER BY rowid DESC LIMIT 1) AS latestVideoFrameID,
+                        (SELECT indexedAt FROM indexed_photos ORDER BY rowid DESC LIMIT 1) AS latestPhotoIndexedAt,
+                        (SELECT indexedAt FROM indexed_videos ORDER BY rowid DESC LIMIT 1) AS latestVideoIndexedAt,
+                        (SELECT indexedAt FROM indexed_video_frames ORDER BY rowid DESC LIMIT 1) AS latestVideoFrameIndexedAt
+                """
+            ) else {
+                throw DatabaseCapabilityError.unavailable
+            }
+            return SearchIndexContentRevision(
+                photoCount: row["photoCount"],
+                videoCount: row["videoCount"],
+                videoFrameCount: row["videoFrameCount"],
+                latestPhotoRowID: row["latestPhotoRowID"],
+                latestVideoRowID: row["latestVideoRowID"],
+                latestVideoFrameRowID: row["latestVideoFrameRowID"],
+                latestPhotoID: row["latestPhotoID"],
+                latestVideoID: row["latestVideoID"],
+                latestVideoFrameID: row["latestVideoFrameID"],
+                latestPhotoIndexedAt: row["latestPhotoIndexedAt"],
+                latestVideoIndexedAt: row["latestVideoIndexedAt"],
+                latestVideoFrameIndexedAt: row["latestVideoFrameIndexedAt"]
+            )
+        }
+    }
+
     func photoLibraryIndexedMediaCounts() throws -> IndexedMediaCounts {
         try dbQueue.read { db in
             IndexedMediaCounts(

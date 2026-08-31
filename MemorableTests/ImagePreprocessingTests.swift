@@ -544,12 +544,14 @@ final class ImagePreprocessingTests: XCTestCase {
     }
 
     private static func waitUntil(
-        attempts: Int = 2_000,
+        timeout: Duration = .seconds(2),
         condition: @escaping @Sendable () async -> Bool
     ) async -> Bool {
-        for _ in 0..<attempts {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
             if await condition() { return true }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(5))
         }
         return false
     }

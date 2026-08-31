@@ -966,7 +966,22 @@ class IndexingService: ObservableObject {
                     durationSeconds: CFAbsoluteTimeGetCurrent() - startedAt
                 )
             }
-            let validated = await SurpriseQueries.validateQueries(using: self.searchEngine)
+            let revision: SearchIndexContentRevision
+            do {
+                let db = self.database
+                revision = try await CancellableDetachedOperation.run {
+                    try db.searchIndexContentRevision()
+                }
+            } catch is CancellationError {
+                return .cancelled
+            } catch {
+                logger.error("[SurpriseQueries] Revision load failed: \(error.safeDiagnosticCode)")
+                return .cancelled
+            }
+            let validated = await SurpriseQueries.validateQueries(
+                using: self.searchEngine,
+                contentRevision: revision
+            )
             guard !Task.isCancelled else { return .cancelled }
             if self.validatedSearchSuggestions != validated {
                 self.validatedSearchSuggestions = validated
