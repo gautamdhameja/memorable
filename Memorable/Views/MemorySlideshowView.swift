@@ -45,6 +45,14 @@ struct MemorySlideshowView: View {
                                     .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
                             }
                         }
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                        .modifier(
+                            GlassPanelModifier(
+                                cornerRadius: 18,
+                                tint: Color.black.opacity(0.14)
+                            )
+                        )
                         .padding(.horizontal, 24)
                         .padding(.bottom, 40)
                         .frame(maxWidth: .infinity)
@@ -76,14 +84,25 @@ struct MemorySlideshowView: View {
                             Image(systemName: "xmark")
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundStyle(.white)
-                                .padding(12)
-                                .background(.ultraThinMaterial)
-                                .clipShape(Circle())
+                                .frame(width: 40, height: 40)
+                                .modifier(
+                                    GlassCircleModifier(
+                                        tint: Color.black.opacity(0.16)
+                                    )
+                                )
                         }
                         Spacer()
                         Text("Memories")
                             .font(.footnote.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.6))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .padding(.horizontal, 12)
+                            .frame(height: 34)
+                            .modifier(
+                                GlassCapsuleModifier(
+                                    tint: Color.black.opacity(0.12),
+                                    interactive: false
+                                )
+                            )
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)

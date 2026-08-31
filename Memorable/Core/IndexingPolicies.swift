@@ -1,6 +1,16 @@
 import Foundation
 import os
 
+enum SearchSuggestionVisibilityPolicy {
+    static func shouldShow(
+        indexingProgress: IndexingProgress,
+        isReady: Bool,
+        hasValidatedSuggestions: Bool
+    ) -> Bool {
+        !indexingProgress.isRunning && isReady && hasValidatedSuggestions
+    }
+}
+
 struct IndexingProgressPublisher {
     static let minimumInterval: TimeInterval = 0.25
 

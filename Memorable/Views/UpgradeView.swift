@@ -6,7 +6,7 @@ struct UpgradeView: View {
 
     var body: some View {
         ZStack {
-            Celestial.Colors.surfaceContainerLow.ignoresSafeArea()
+            CelestialBackdrop()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -42,6 +42,13 @@ struct UpgradeView: View {
                         proFeature("Smarter dates and places", detail: "Understand descriptions like “last winter in Berlin”")
                         CelestialHairline()
                     }
+                    .padding(.horizontal, 16)
+                    .modifier(
+                        GlassPanelModifier(
+                            cornerRadius: 20,
+                            tint: Celestial.Colors.amber.opacity(0.08)
+                        )
+                    )
                     .padding(.top, 30)
 
                     Text("One-time purchase. No subscription.")
@@ -67,14 +74,15 @@ struct UpgradeView: View {
                                 Text("Upgrade to Pro")
                             }
                         }
-                        .font(.system(.headline, design: .rounded, weight: .semibold))
-                        .foregroundStyle(Celestial.Colors.onPrimaryContainer)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 52)
-                        .background(Celestial.Colors.amber)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .opacity(proManager.product == nil ? 0.5 : 1.0)
                     }
+                    .buttonStyle(
+                        CelestialButtonStyle(
+                            tint: Celestial.Colors.amber,
+                            foreground: Celestial.Colors.surfaceDim
+                        )
+                    )
                     .disabled(proManager.product == nil)
                     .padding(.top, 14)
 
@@ -95,10 +103,9 @@ struct UpgradeView: View {
                                 .controlSize(.small)
                         } else {
                             Text("Restore Purchase")
-                                .font(.subheadline)
-                                .foregroundStyle(Celestial.Colors.primaryDim)
                         }
                     }
+                    .buttonStyle(CelestialSecondaryButtonStyle())
                     .disabled(proManager.isRestoring)
 
                     if let message = proManager.restoreMessage {
@@ -130,9 +137,8 @@ struct UpgradeView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                    .padding(10)
-                    .background(Celestial.Colors.surfaceVariant.opacity(0.5))
-                    .clipShape(Circle())
+                    .frame(width: 38, height: 38)
+                    .modifier(GlassCircleModifier())
             }
             .accessibilityLabel("Close")
             .padding(16)

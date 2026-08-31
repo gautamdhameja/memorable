@@ -22,15 +22,6 @@ enum SearchMediaFilter: String, CaseIterable {
     }
 }
 
-enum SearchSuggestionVisibilityPolicy {
-    static func shouldShow(
-        indexingProgress: IndexingProgress,
-        isReady: Bool
-    ) -> Bool {
-        !indexingProgress.isRunning && isReady
-    }
-}
-
 @MainActor
 final class SearchViewModel: ObservableObject {
     static let sortModeStorageKey = "searchSortMode"

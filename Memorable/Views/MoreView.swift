@@ -24,7 +24,7 @@ struct MoreView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Celestial.Colors.background.ignoresSafeArea()
+                CelestialBackdrop()
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -74,10 +74,15 @@ struct MoreView: View {
                                 }
                             }
 
-                            NavigationLink {
-                                SurpriseExploreView(searchEngine: searchEngine)
-                            } label: {
-                                toolRow(icon: "scope", title: "Explore", subtitle: "Places, scenes and text")
+                            if indexingService.canShowValidatedSearchSuggestions {
+                                NavigationLink {
+                                    SurpriseExploreView(
+                                        searchEngine: searchEngine,
+                                        indexingService: indexingService
+                                    )
+                                } label: {
+                                    toolRow(icon: "scope", title: "Explore", subtitle: "Matched in your library")
+                                }
                             }
 
                             Button(action: { showDuplicates = true }) {
@@ -88,7 +93,9 @@ struct MoreView: View {
                                 toolRow(icon: "photo.stack", title: "Photo sources", subtitle: "Library and custom folders")
                             }
                         }
-                        .padding(.top, 8)
+                        .padding(.horizontal, 14)
+                        .modifier(GlassPanelModifier(cornerRadius: 20))
+                        .padding(.top, 12)
 
                         proStatus
                             .padding(.top, 30)
@@ -203,8 +210,8 @@ struct MoreView: View {
                 .padding(.top, 14)
             }
         }
-        .padding(.bottom, 20)
-        .overlay(alignment: .bottom) { CelestialHairline() }
+        .padding(18)
+        .modifier(GlassPanelModifier(cornerRadius: 20))
     }
 
     private var indexStatusTitle: String {
@@ -227,10 +234,7 @@ struct MoreView: View {
 
     private func toolRow(icon: String, title: String, subtitle: String) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(Celestial.Colors.primaryDim)
-                .frame(width: 20)
+            CelestialGlassIcon(systemName: icon, size: 34)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.body.weight(.medium))
@@ -285,13 +289,14 @@ struct MoreView: View {
                 }
             }
         }
-        .padding(.vertical, 18)
-        .overlay(alignment: .top) {
-            Rectangle().fill(Celestial.Colors.amber.opacity(0.35)).frame(height: 1)
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Celestial.Colors.amber.opacity(0.35)).frame(height: 1)
-        }
+        .padding(18)
+        .modifier(
+            GlassPanelModifier(
+                cornerRadius: 20,
+                tint: Celestial.Colors.amber.opacity(0.10),
+                interactive: !proManager.isPro
+            )
+        )
     }
 }
 
@@ -314,7 +319,7 @@ struct PrivacyPolicyView: View {
 
     var body: some View {
         ZStack {
-            Celestial.Colors.background.ignoresSafeArea()
+            CelestialBackdrop()
             ScrollView {
                 Text(Self.policyText)
                     .font(.body)
@@ -341,7 +346,7 @@ struct SmartAlbumResultsView: View {
 
     var body: some View {
         ZStack {
-            Celestial.Colors.background.ignoresSafeArea()
+            CelestialBackdrop()
 
             if isLoading {
                 ProgressView()
@@ -436,6 +441,7 @@ struct SmartAlbumMasonryGrid: View {
 
 struct SurpriseExploreView: View {
     let searchEngine: SearchEngine
+    @ObservedObject var indexingService: IndexingService
     @Environment(\.database) private var database
     @State private var query: String = ""
     @State private var results: [SearchResult] = []
@@ -443,30 +449,35 @@ struct SurpriseExploreView: View {
     @State private var selectedPhoto: SearchResult?
     @State private var exploreTask: Task<Void, Never>?
     @State private var exploreGeneration = 0
+    @State private var noEligibleResults = false
+
+    private var canExplore: Bool {
+        indexingService.canShowValidatedSearchSuggestions
+    }
 
     var body: some View {
         ZStack {
-            Celestial.Colors.background.ignoresSafeArea()
+            CelestialBackdrop()
 
             VStack(spacing: 16) {
                 if results.isEmpty && !isLoading {
                     Spacer()
                     VStack(spacing: 16) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 48, weight: .thin))
-                            .foregroundStyle(Celestial.Colors.primaryDim)
-                        Text("Tap to discover a random memory")
+                        CelestialGlassIcon(
+                            systemName: "sparkles",
+                            tint: Celestial.Colors.amber,
+                            size: 68
+                        )
+                        Text(noEligibleResults
+                             ? "No eligible memories matched right now"
+                             : "Tap to discover a random memory")
                             .font(.subheadline)
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         Button(action: { explore() }) {
-                            Label("Surprise Me", systemImage: "sparkles")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Celestial.Colors.onPrimaryContainer)
-                                .padding(.horizontal, 28)
-                                .padding(.vertical, 14)
-                                .background(Celestial.Colors.primaryContainer)
-                                .clipShape(Capsule())
+                            Label(noEligibleResults ? "Try Again" : "Surprise Me", systemImage: "sparkles")
                         }
+                        .buttonStyle(CelestialButtonStyle())
+                        .disabled(!canExplore)
                     }
                     Spacer()
                 } else if isLoading {
@@ -481,8 +492,7 @@ struct SurpriseExploreView: View {
                             .foregroundStyle(Celestial.Colors.onSurface)
                         Spacer()
                         Button("Try Another") { explore() }
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(Celestial.Colors.primaryFixedDim)
+                            .buttonStyle(CelestialSecondaryButtonStyle())
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -502,6 +512,12 @@ struct SurpriseExploreView: View {
         .navigationTitle("Explore")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
+        .onChange(of: canExplore) { _, isAvailable in
+            guard !isAvailable else { return }
+            cancelExplore()
+            results.removeAll(keepingCapacity: false)
+            selectedPhoto = nil
+        }
         .onDisappear { cancelExplore() }
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didReceiveMemoryWarningNotification
@@ -527,27 +543,37 @@ struct SurpriseExploreView: View {
     }
 
     private func explore() {
+        guard canExplore else { return }
+        let suggestions = indexingService.validatedSearchSuggestions.shuffled()
         cancelExplore()
         exploreGeneration += 1
         let generation = exploreGeneration
         isLoading = true
-        let surprise = SurpriseQueries.random()
-        query = surprise
+        noEligibleResults = false
+        indexingService.prioritizeUserSearch()
         exploreTask = Task {
             do {
-                let found = try await ExploreSearchOperation.run {
-                    Array(try await searchEngine.search(
-                        query: surprise,
-                        featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro)
-                    ).results.prefix(20))
-                }
-                let photoIDs = found.filter { !$0.isVideo }.map(\.id)
                 let database = database
-                let eligiblePhotoIDs = try await CancellableDetachedOperation.run {
-                    try database.distinctMemoryPhotoIDs(in: photoIDs)
-                }
+                let match = try await ExploreSearchOperation.firstEligibleMatch(
+                    suggestions: suggestions,
+                    search: { suggestion in
+                        Array(try await searchEngine.search(
+                            query: suggestion,
+                            featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro)
+                        ).results.prefix(20))
+                    },
+                    filter: { found in
+                        let photoIDs = found.filter { !$0.isVideo }.map(\.id)
+                        let eligiblePhotoIDs = try await CancellableDetachedOperation.run {
+                            try database.distinctMemoryPhotoIDs(in: photoIDs)
+                        }
+                        return found.filter { $0.isVideo || eligiblePhotoIDs.contains($0.id) }
+                    }
+                )
                 guard !Task.isCancelled, generation == exploreGeneration else { return }
-                results = found.filter { $0.isVideo || eligiblePhotoIDs.contains($0.id) }
+                query = match?.query ?? ""
+                results = match?.results ?? []
+                noEligibleResults = match == nil
             } catch is CancellationError {
                 return
             } catch {
@@ -568,6 +594,8 @@ struct SurpriseExploreView: View {
 }
 
 enum ExploreSearchOperation {
+    static let maximumSuggestionAttempts = 3
+
     static func run(
         search: @escaping @Sendable () async throws -> [SearchResult]
     ) async throws -> [SearchResult] {
@@ -575,6 +603,24 @@ enum ExploreSearchOperation {
         let results = try await search()
         try Task.checkCancellation()
         return results
+    }
+
+    static func firstEligibleMatch(
+        suggestions: [String],
+        maximumAttempts: Int = maximumSuggestionAttempts,
+        search: @escaping @Sendable (String) async throws -> [SearchResult],
+        filter: @escaping @Sendable ([SearchResult]) async throws -> [SearchResult]
+    ) async throws -> (query: String, results: [SearchResult])? {
+        for suggestion in suggestions.prefix(max(0, maximumAttempts)) {
+            try Task.checkCancellation()
+            let found = try await search(suggestion)
+            let eligibleResults = try await filter(found)
+            try Task.checkCancellation()
+            if !eligibleResults.isEmpty {
+                return (suggestion, eligibleResults)
+            }
+        }
+        return nil
     }
 }
 
@@ -640,7 +686,7 @@ struct LicensesView: View {
 
     var body: some View {
         ZStack {
-            Celestial.Colors.background.ignoresSafeArea()
+            CelestialBackdrop()
 
             List {
                 ForEach(entries) { entry in
@@ -655,8 +701,12 @@ struct LicensesView: View {
                                 .font(.footnote)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
+                        .padding(.vertical, 8)
                     }
-                    .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+                    .padding(12)
+                    .modifier(GlassPanelModifier(cornerRadius: 16, interactive: true))
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 }
             }
             .scrollContentBackground(.hidden)
@@ -672,7 +722,7 @@ private struct LicenseDetailView: View {
 
     var body: some View {
         ZStack {
-            Celestial.Colors.background.ignoresSafeArea()
+            CelestialBackdrop()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {

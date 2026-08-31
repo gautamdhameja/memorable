@@ -169,11 +169,8 @@ final class EncoderConcurrencyTests: XCTestCase {
         let task = Task {
             try await encoder.encodeCancellable(text: "cancel this search")
         }
-        for _ in 0..<2_000 where !(await model.probe.hasStarted) {
-            await Task.yield()
-        }
-        let hasStarted = await model.probe.hasStarted
-        XCTAssertTrue(hasStarted)
+        let didStart = await model.probe.waitUntilStarted()
+        XCTAssertTrue(didStart)
 
         task.cancel()
         _ = await task.result
@@ -291,6 +288,15 @@ private actor AsyncPredictionProbe {
 
     func markStarted() {
         hasStarted = true
+    }
+
+    func waitUntilStarted() async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while !hasStarted, clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return hasStarted
     }
 
     func markCancelled() {

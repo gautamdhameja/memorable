@@ -39,7 +39,15 @@ struct IndexingSlideshowView: View {
                             }
                         }
                         .padding(.horizontal, 20)
-                        .padding(.vertical, 16)
+                        .padding(.vertical, 12)
+                        .modifier(
+                            GlassPanelModifier(
+                                cornerRadius: 16,
+                                tint: Color.black.opacity(0.14)
+                            )
+                        )
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 10)
                         .frame(maxWidth: .infinity)
                         .background(
                             LinearGradient(

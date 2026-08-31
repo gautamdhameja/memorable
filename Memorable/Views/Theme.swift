@@ -102,6 +102,30 @@ enum Celestial {
     static let navBackground = Colors.background.opacity(0.94)
 }
 
+struct CelestialBackdrop: View {
+    var body: some View {
+        ZStack {
+            Celestial.Colors.background
+
+            RadialGradient(
+                colors: [Celestial.Colors.primaryDim.opacity(0.13), .clear],
+                center: .topLeading,
+                startRadius: 0,
+                endRadius: 360
+            )
+
+            RadialGradient(
+                colors: [Celestial.Colors.amber.opacity(0.055), .clear],
+                center: .bottomTrailing,
+                startRadius: 0,
+                endRadius: 320
+            )
+        }
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+}
+
 struct CelestialHairline: View {
     var body: some View {
         Rectangle()

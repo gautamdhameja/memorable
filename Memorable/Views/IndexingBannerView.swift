@@ -55,14 +55,8 @@ struct IndexingBannerView: View {
                 Button("Cancel automatic resume") {
                     indexingService.stopIndexing()
                 }
-                .font(.body.weight(.medium))
-                .foregroundStyle(Celestial.Colors.onSurface)
                 .frame(maxWidth: .infinity)
-                .frame(height: 50)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Celestial.Colors.onSurface.opacity(0.16), lineWidth: 1)
-                }
+                .buttonStyle(CelestialSecondaryButtonStyle(tint: Celestial.Colors.onSurface))
                 .padding(.top, 26)
             } else if indexingService.progress.isRunning {
                 Text("SEARCH INDEX")
@@ -129,14 +123,8 @@ struct IndexingBannerView: View {
                 Button("Stop indexing") {
                     indexingService.stopIndexing()
                 }
-                .font(.body.weight(.medium))
-                .foregroundStyle(Celestial.Colors.onSurface)
                 .frame(maxWidth: .infinity)
-                .frame(height: 50)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Celestial.Colors.onSurface.opacity(0.16), lineWidth: 1)
-                }
+                .buttonStyle(CelestialSecondaryButtonStyle(tint: Celestial.Colors.onSurface))
                 .padding(.top, 26)
                 .accessibilityLabel("Stop indexing")
             } else {
@@ -148,8 +136,8 @@ struct IndexingBannerView: View {
                 .accessibilityHint("Scans your photo library and builds a searchable index")
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 12)
+        .padding(18)
+        .modifier(GlassPanelModifier(cornerRadius: 22))
     }
 
     private func progressRow(label: String, value: String, accent: Bool = false) -> some View {

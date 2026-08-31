@@ -8,7 +8,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Celestial.Colors.background.ignoresSafeArea()
+            CelestialBackdrop()
 
             if !onboardingComplete {
                 OnboardingView(
@@ -58,10 +58,10 @@ struct ContentView: View {
     private var photoAccessDeniedView: some View {
         VStack(alignment: .leading, spacing: 18) {
             Spacer()
-            Image(systemName: "photo.badge.exclamationmark")
-                .font(.system(size: 42, weight: .light))
-                .foregroundStyle(Celestial.Colors.primaryDim)
-                .accessibilityHidden(true)
+            CelestialGlassIcon(
+                systemName: "photo.badge.exclamationmark",
+                size: 64
+            )
             Text("Photo access is required")
                 .font(.title.bold())
                 .foregroundStyle(Celestial.Colors.onSurface)
@@ -82,10 +82,11 @@ struct ContentView: View {
     private func errorView(message: String) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             Spacer()
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 42, weight: .light))
-                .foregroundStyle(Celestial.Colors.error)
-                .accessibilityHidden(true)
+            CelestialGlassIcon(
+                systemName: "exclamationmark.triangle",
+                tint: Celestial.Colors.error,
+                size: 64
+            )
             Text("Something went wrong")
                 .font(.title.bold())
                 .foregroundStyle(Celestial.Colors.onSurface)
@@ -123,6 +124,12 @@ struct ContentView: View {
                     .frame(width: 6, height: 6)
                     .offset(x: 71)
             }
+            .modifier(
+                GlassCircleModifier(
+                    tint: Celestial.Colors.primaryDim.opacity(0.08),
+                    interactive: false
+                )
+            )
 
             Text("Memorable")
                 .font(.largeTitle.bold())
@@ -162,21 +169,5 @@ struct ContentView: View {
         case .none:
             break
         }
-    }
-}
-
-// MARK: - Celestial Button Style
-
-struct CelestialButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(.subheadline, design: .rounded, weight: .semibold))
-            .foregroundStyle(Celestial.Colors.onPrimaryContainer)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 14)
-            .background(Celestial.Colors.primaryContainer)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
-            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
     }
 }

@@ -12,13 +12,12 @@ struct SourceManagerView: View {
 
     var body: some View {
         ZStack {
-            Celestial.Colors.background.ignoresSafeArea()
+            CelestialBackdrop()
 
             List {
                 Section {
                     HStack(spacing: 14) {
-                        Image(systemName: "photo.on.rectangle")
-                            .foregroundStyle(Celestial.Colors.primaryDim)
+                        CelestialGlassIcon(systemName: "photo.on.rectangle", size: 34)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Apple Photos")
                                 .font(.body.weight(.medium))
@@ -45,7 +44,10 @@ struct SourceManagerView: View {
                                 .foregroundStyle(Celestial.Colors.primaryDim)
                         }
                     }
-                    .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+                    .padding(12)
+                    .modifier(GlassPanelModifier(cornerRadius: 16))
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     .disabled(!database.allowsIndexingWrites)
                 } header: {
                     Text("Photo Library")
@@ -58,13 +60,18 @@ struct SourceManagerView: View {
                         Text("No folders added")
                             .font(.subheadline)
                             .foregroundStyle(Celestial.Colors.outline)
-                            .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+                            .padding(12)
+                            .modifier(GlassPanelModifier(cornerRadius: 16))
+                            .listRowBackground(Color.clear)
                     }
 
                     ForEach(sources.filter { $0.type == PhotoSourceType.folder.rawValue }) { source in
                         HStack(spacing: 14) {
-                            Image(systemName: "folder")
-                                .foregroundStyle(Celestial.Colors.tertiaryDim)
+                            CelestialGlassIcon(
+                                systemName: "folder",
+                                tint: Celestial.Colors.tertiaryDim,
+                                size: 34
+                            )
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(source.name)
                                     .font(.body.weight(.medium))
@@ -84,7 +91,10 @@ struct SourceManagerView: View {
                             .disabled(indexingService.progress.isRunning)
                             .accessibilityLabel("Refresh \(source.name)")
                         }
-                        .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+                        .padding(12)
+                        .modifier(GlassPanelModifier(cornerRadius: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     }
                     .onDelete { offsets in
                         let folderSources = sources.filter { $0.type == PhotoSourceType.folder.rawValue }
@@ -110,9 +120,9 @@ struct SourceManagerView: View {
                         }
                     }) {
                         Label(proManager.isPro ? "Add Folder" : "Add Folder (Pro)", systemImage: "plus.circle")
-                            .foregroundStyle(Celestial.Colors.primaryFixedDim)
                     }
-                    .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+                    .buttonStyle(CelestialSecondaryButtonStyle())
+                    .listRowBackground(Color.clear)
                     .disabled(!database.allowsIndexingWrites)
                 } header: {
                     Text("Folders")

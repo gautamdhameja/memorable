@@ -13,7 +13,7 @@ struct DuplicateFinderView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Celestial.Colors.background.ignoresSafeArea()
+                CelestialBackdrop()
 
                 Group {
                     if isScanning {
@@ -26,9 +26,11 @@ struct DuplicateFinderView: View {
                         }
                     } else if duplicates.isEmpty && scanComplete {
                         VStack(spacing: 16) {
-                            Image(systemName: "checkmark.circle")
-                                .font(.system(size: 48, weight: .thin))
-                                .foregroundStyle(Celestial.Colors.primaryDim)
+                            CelestialGlassIcon(
+                                systemName: "checkmark",
+                                tint: Celestial.Colors.emerald,
+                                size: 64
+                            )
                             Text("No duplicates found")
                                 .font(.subheadline)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
@@ -40,8 +42,9 @@ struct DuplicateFinderView: View {
                                     DuplicatePairRow(pair: pair, searchEngine: searchEngine) { deletedPair in
                                         duplicates.removeAll { $0.id == deletedPair.id }
                                     }
-                                    .listRowBackground(Celestial.Colors.background)
+                                    .listRowBackground(Color.clear)
                                     .listRowSeparator(.hidden)
+                                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                                 }
                             } header: {
                                 HStack {
@@ -56,9 +59,11 @@ struct DuplicateFinderView: View {
                         .scrollContentBackground(.hidden)
                     } else {
                         VStack(spacing: 16) {
-                            Image(systemName: "doc.on.doc")
-                                .font(.system(size: 48, weight: .thin))
-                                .foregroundStyle(Celestial.Colors.outlineVariant)
+                            CelestialGlassIcon(
+                                systemName: "square.on.square",
+                                tint: Celestial.Colors.onSurfaceVariant,
+                                size: 64
+                            )
                             Text("Find near-identical photos in your library")
                                 .font(.subheadline)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
@@ -172,11 +177,9 @@ struct DuplicatePairRow: View {
                     showDeleteConfirm = true
                 } label: {
                     Label("Delete Left", systemImage: "trash")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Celestial.Colors.error)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 40)
                 }
+                .buttonStyle(CelestialSecondaryButtonStyle(tint: Celestial.Colors.error))
                 .disabled(isDeleting)
 
                 Button {
@@ -184,15 +187,14 @@ struct DuplicatePairRow: View {
                     showDeleteConfirm = true
                 } label: {
                     Label("Delete Right", systemImage: "trash")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Celestial.Colors.error)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 40)
                 }
+                .buttonStyle(CelestialSecondaryButtonStyle(tint: Celestial.Colors.error))
                 .disabled(isDeleting)
             }
         }
-        .padding(.vertical, 8)
+        .padding(14)
+        .modifier(GlassPanelModifier(cornerRadius: 18))
         .task {
             imageLoadTask?.cancel()
             let task = Task { @MainActor in

@@ -30,17 +30,8 @@ struct SearchView: View {
     @AppStorage(SearchViewModel.sortModeStorageKey) private var sortModeRaw: String = SearchSortMode.relevance.rawValue
 
     private static let placeholders = [
-        "Search for your moment...",
-        "Describe your memory...",
-        "What are you looking for?",
-        "Try \"sunset at the beach\"...",
-        "Try \"birthday cake\"...",
-    ]
-
-    private static let searchExamples = [
-        "birthday cake with candles",
-        "my dog in the snow",
-        "Paris in spring 2024",
+        "Search your photos...",
+        "Describe what you remember...",
     ]
 
     init(
@@ -147,7 +138,7 @@ struct SearchView: View {
         let filteredSearchResults = viewModel.filteredResults(viewModel.results)
         NavigationStack {
             ZStack {
-                Celestial.Colors.background.ignoresSafeArea()
+                CelestialBackdrop()
 
                 VStack(spacing: 0) {
                     searchHeader
@@ -235,10 +226,7 @@ struct SearchView: View {
                             IndexingSlideshowView(captionService: captionService)
                                 .padding(.top, 8)
                         } else if viewModel.results.isEmpty && viewModel.queryText.isEmpty {
-                            if SearchSuggestionVisibilityPolicy.shouldShow(
-                                indexingProgress: indexingService.progress,
-                                isReady: indexingService.isReady
-                            ) {
+                            if hasHomeContent {
                                 homeView
                             } else {
                                 emptyState
@@ -388,20 +376,32 @@ struct SearchView: View {
                 .font(.title2.bold())
                 .tracking(-0.5)
                 .foregroundStyle(Celestial.Colors.onSurface)
+                .layoutPriority(1)
             Spacer()
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(Celestial.Colors.primaryDim)
-                    .frame(width: 6, height: 6)
-                Text("On device")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            if canShowValidatedSuggestions {
+                Button(action: performSurpriseSearch) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "wand.and.stars")
+                            .font(.caption.weight(.bold))
+                        Text("Surprise me")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(Celestial.Colors.amber)
+                    .padding(.horizontal, 13)
+                    .frame(height: 38)
+                    .modifier(
+                        GlassCapsuleModifier(
+                            tint: Celestial.Colors.amber.opacity(0.14)
+                        )
+                    )
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Surprise me with a photo search")
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Search runs on this device")
         }
         .padding(.horizontal, 26)
-        .padding(.top, 14)
+        .padding(.top, 8)
     }
 
     private var searchBar: some View {
@@ -480,16 +480,34 @@ struct SearchView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(Celestial.Colors.surfaceVariant.opacity(0.5))
-        .cornerRadius(10)
+        .modifier(
+            GlassPanelModifier(
+                cornerRadius: 12,
+                tint: Celestial.Colors.amber.opacity(0.09),
+                interactive: true
+            )
+        )
         .padding(.horizontal, 16)
     }
 
     // MARK: - Home (Albums + History)
 
+    private var canShowValidatedSuggestions: Bool {
+        indexingService.canShowValidatedSearchSuggestions
+    }
+
+    private var hasHomeContent: Bool {
+        guard !indexingService.progress.isRunning, indexingService.isReady else { return false }
+        return canShowValidatedSuggestions
+            || !smartAlbums.isEmpty
+            || !viewModel.searchHistory.isEmpty
+    }
+
     private var homeView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            searchExamplesView
+            if canShowValidatedSuggestions {
+                validatedSuggestionsView
+            }
             if !smartAlbums.isEmpty {
                 smartAlbumsView
             }
@@ -514,46 +532,48 @@ struct SearchView: View {
         }
     }
 
-    private var searchExamplesView: some View {
-        VStack(spacing: 0) {
-            ForEach(Self.searchExamples, id: \.self) { example in
-                Button {
-                    viewModel.setQueryText(example)
-                    performSearch(saveToHistory: true)
-                } label: {
-                    HStack(spacing: 12) {
-                        Text(example)
-                            .font(.body)
-                            .foregroundStyle(Celestial.Colors.secondary)
-                        Spacer()
-                        Image(systemName: "arrow.up.left")
-                            .font(.caption)
-                            .foregroundStyle(Celestial.Colors.outlineVariant)
-                    }
-                    .frame(minHeight: 50)
-                    .contentShape(Rectangle())
-                }
-                CelestialHairline()
-            }
+    private var validatedSuggestionsView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("MATCHED IN YOUR LIBRARY")
+                .font(.caption.weight(.medium))
+                .tracking(0.6)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
 
-            Button {
-                Haptics.medium()
-                viewModel.setQueryText(SurpriseQueries.random())
-                performSearch()
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: "scope")
-                    Text("Surprise me")
-                    Spacer()
+            VStack(spacing: 0) {
+                ForEach(indexingService.validatedSearchSuggestions.prefix(3), id: \.self) { suggestion in
+                    Button {
+                        viewModel.setQueryText(suggestion)
+                        performSearch(saveToHistory: true)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Text(suggestion)
+                                .font(.body)
+                                .foregroundStyle(Celestial.Colors.secondary)
+                            Spacer()
+                            Image(systemName: "arrow.up.left")
+                                .font(.caption)
+                                .foregroundStyle(Celestial.Colors.outlineVariant)
+                        }
+                        .frame(minHeight: 50)
+                        .contentShape(Rectangle())
+                    }
+                    CelestialHairline()
                 }
-                .font(.body.weight(.medium))
-                .foregroundStyle(Celestial.Colors.amber)
-                .frame(minHeight: 50)
-                .contentShape(Rectangle())
             }
-            CelestialHairline()
+            .padding(.horizontal, 14)
+            .modifier(GlassPanelModifier(cornerRadius: 18))
         }
-        .padding(.horizontal, 26)
+        .padding(.horizontal, 16)
+    }
+
+    private func performSurpriseSearch() {
+        guard canShowValidatedSuggestions,
+              let suggestion = indexingService.validatedSearchSuggestions.randomElement() else { return }
+        Haptics.medium()
+        viewModel.setQueryText(suggestion)
+        performSearch()
     }
 
     // Slim one-line progress strip shown while reverse-geocoding photos in the
@@ -578,6 +598,9 @@ struct SearchView: View {
                 .accessibilityLabel("Finding photo locations: \(completed) of \(total) complete")
         }
         .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .modifier(GlassPanelModifier(cornerRadius: 12))
+        .padding(.horizontal, 16)
         .padding(.bottom, 8)
     }
 
@@ -594,8 +617,7 @@ struct SearchView: View {
                 Label("Index remaining media", systemImage: "arrow.clockwise")
                     .font(.subheadline.weight(.medium))
             }
-            .buttonStyle(.bordered)
-            .tint(Celestial.Colors.primaryDim)
+            .buttonStyle(CelestialSecondaryButtonStyle())
             .padding(.top, 10)
             .frame(maxWidth: .infinity)
             .accessibilityHint("Resumes indexing media that was skipped before the Pro upgrade")
@@ -648,6 +670,14 @@ struct SearchView: View {
                                     .lineLimit(1)
                                     .frame(width: 108, alignment: .leading)
                             }
+                            .padding(8)
+                            .modifier(
+                                GlassPanelModifier(
+                                    cornerRadius: 14,
+                                    tint: Celestial.Colors.primaryDim.opacity(0.08),
+                                    interactive: true
+                                )
+                            )
                         }
                         .contextMenu {
                             Button(role: .destructive) {
@@ -718,6 +748,9 @@ struct SearchView: View {
                 }
             }
         }
+        .padding(.bottom, 8)
+        .modifier(GlassPanelModifier(cornerRadius: 18))
+        .padding(.horizontal, 16)
     }
 
     // MARK: - Last Results (when search cleared)
@@ -951,9 +984,10 @@ struct SearchView: View {
                 Circle()
                     .stroke(Celestial.Colors.primaryDim.opacity(0.30), style: StrokeStyle(lineWidth: 1, dash: [2, 8]))
                     .frame(width: 94, height: 94)
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 30, weight: .light))
-                    .foregroundStyle(Celestial.Colors.primaryDim)
+                CelestialGlassIcon(
+                    systemName: "magnifyingglass",
+                    size: 58
+                )
                 Circle()
                     .fill(Celestial.Colors.amber)
                     .frame(width: 6, height: 6)
@@ -978,18 +1012,13 @@ struct SearchView: View {
                     .font(.body)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .padding(.top, 10)
-                Button(action: {
-                    Haptics.medium()
-                    let surprise = SurpriseQueries.random()
-                    viewModel.setQueryText(surprise)
-                    performSearch()
-                }) {
-                    Label("Surprise Me", systemImage: "sparkles")
-                        .font(.subheadline.weight(.medium))
+                if canShowValidatedSuggestions {
+                    Button(action: performSurpriseSearch) {
+                        Label("Surprise Me", systemImage: "sparkles")
+                    }
+                    .buttonStyle(CelestialSecondaryButtonStyle())
+                    .padding(.top, 20)
                 }
-                .buttonStyle(.bordered)
-                .tint(Celestial.Colors.primaryDim)
-                .padding(.top, 20)
             } else {
                 if indexingService.indexRebuildRequired {
                     Text("Update the search index")
@@ -1002,13 +1031,9 @@ struct SearchView: View {
                         .padding(.top, 12)
                     Button(action: { indexingService.rebuildRequiredIndex() }) {
                         Label("Rebuild Search Index", systemImage: "arrow.triangle.2.circlepath")
-                            .font(.headline)
-                            .foregroundStyle(Celestial.Colors.onPrimaryContainer)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 50)
-                            .background(Celestial.Colors.primaryContainer)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
+                    .buttonStyle(CelestialButtonStyle())
                     .padding(.top, 24)
                     .accessibilityHint("Clears the incompatible search index and rebuilds it on this device")
                     .disabled(!database.allowsIndexingWrites)
@@ -1023,13 +1048,9 @@ struct SearchView: View {
                         .padding(.top, 12)
                     Button(action: { indexingService.startIndexing() }) {
                         Text("Build Search Index")
-                            .font(.headline)
-                            .foregroundStyle(Celestial.Colors.onPrimaryContainer)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 50)
-                            .background(Celestial.Colors.primaryContainer)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
+                    .buttonStyle(CelestialButtonStyle())
                     .padding(.top, 24)
                     .accessibilityHint("Scans your photo library and builds a searchable index")
                     .disabled(!database.allowsIndexingWrites)
@@ -1122,7 +1143,11 @@ struct SearchView: View {
             CelestialHairline()
         }
         .padding(.horizontal, 22)
+        .padding(.top, 12)
         .padding(.bottom, 6)
+        .modifier(GlassPanelModifier(cornerRadius: 18))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 
     private func structuredQuerySentence(_ summary: FilterSummary) -> Text {

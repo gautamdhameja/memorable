@@ -244,6 +244,13 @@ struct SearchResultsViewer: View {
                             Label("Results", systemImage: "chevron.left")
                                 .font(.body)
                                 .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .frame(height: 40)
+                                .modifier(
+                                    GlassCapsuleModifier(
+                                        tint: Color.black.opacity(0.16)
+                                    )
+                                )
                         }
                         .accessibilityLabel("Back to results")
                         Spacer()
@@ -251,21 +258,35 @@ struct SearchResultsViewer: View {
                             Text("\(currentIndex + 1) of \(displayedResults.count)")
                                 .font(.subheadline)
                                 .foregroundStyle(.white.opacity(0.82))
+                                .padding(.horizontal, 11)
+                                .frame(height: 34)
+                                .modifier(
+                                    GlassCapsuleModifier(
+                                        tint: Color.black.opacity(0.12),
+                                        interactive: false
+                                    )
+                                )
                         }
                         Spacer()
                         if canShareCurrentPhoto {
                             Button(action: { shareCurrentPhoto() }) {
-                                if shareCoordinator.isPreparing {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .tint(.white)
-                                        .frame(width: 44, height: 44)
-                                } else {
-                                    Image(systemName: "square.and.arrow.up")
-                                        .font(.body.weight(.semibold))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 44, height: 44)
+                                Group {
+                                    if shareCoordinator.isPreparing {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                            .tint(.white)
+                                    } else {
+                                        Image(systemName: "square.and.arrow.up")
+                                            .font(.body.weight(.semibold))
+                                            .foregroundStyle(.white)
+                                    }
                                 }
+                                .frame(width: 40, height: 40)
+                                .modifier(
+                                    GlassCircleModifier(
+                                        tint: Color.black.opacity(0.16)
+                                    )
+                                )
                             }
                             .disabled(shareCoordinator.isPreparing || shareCoordinator.preparedItem != nil)
                             .accessibilityLabel("Share photo")
@@ -312,8 +333,16 @@ struct SearchResultsViewer: View {
                                 }
                             }
                             .frame(minHeight: 44)
-                            .padding(.horizontal, 26)
-                            .padding(.bottom, 20)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .modifier(
+                                GlassPanelModifier(
+                                    cornerRadius: 18,
+                                    tint: Color.black.opacity(0.16)
+                                )
+                            )
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 16)
                         }
                     }
                 }

@@ -419,7 +419,7 @@ final class IndexingPolicyTests: XCTestCase {
         task.cancel()
 
         do {
-            try await task.value
+            _ = try await task.value
             XCTFail("Expected cancellation")
         } catch is CancellationError {
             // Expected.
@@ -427,6 +427,58 @@ final class IndexingPolicyTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
         XCTAssertFalse(state.withLock { $0.persisted })
+    }
+
+    func testSurpriseValidationRechecksABoundedCachedShortlistWithoutAdvancingBaseline() {
+        let cachedQueries = (0..<20).map { "query-\($0)" }
+        let cachedState = SurpriseQueryCache.State(
+            validatedQueries: cachedQueries,
+            lastValidatedCount: 100
+        )
+
+        let plan = SurpriseQueries.validationPlan(
+            cachedState: cachedState,
+            currentSize: 105
+        )
+
+        XCTAssertEqual(plan.candidates.count, SurpriseQueries.cachedRevalidationLimit)
+        XCTAssertTrue(plan.candidates.allSatisfy(cachedQueries.contains))
+        XCTAssertEqual(plan.persistedCount, 100)
+        XCTAssertTrue(plan.revalidatesCachedSubset)
+
+        let validated = Array(plan.candidates.dropLast())
+        let updated = SurpriseQueries.updatedCacheState(
+            validatedQueries: validated,
+            plan: plan,
+            previous: cachedState
+        )
+        XCTAssertEqual(updated.lastValidatedCount, 100)
+        XCTAssertEqual(updated.validatedQueries.count, cachedQueries.count - 1)
+        XCTAssertTrue(validated.allSatisfy(updated.validatedQueries.contains))
+    }
+
+    func testSurpriseValidationUsesFullCandidateSetAfterCumulativeGrowthThreshold() {
+        let cachedState = SurpriseQueryCache.State(
+            validatedQueries: ["golden hour"],
+            lastValidatedCount: 100
+        )
+
+        let plan = SurpriseQueries.validationPlan(
+            cachedState: cachedState,
+            currentSize: 110
+        )
+
+        XCTAssertEqual(plan.candidates, SurpriseQueries.candidates)
+        XCTAssertEqual(plan.persistedCount, 110)
+        XCTAssertFalse(plan.revalidatesCachedSubset)
+
+        let updated = SurpriseQueries.updatedCacheState(
+            validatedQueries: ["sunset over water"],
+            plan: plan,
+            previous: cachedState
+        )
+        XCTAssertEqual(updated.validatedQueries, ["sunset over water"])
+        XCTAssertEqual(updated.lastValidatedCount, 110)
     }
 
     @MainActor
@@ -842,15 +894,23 @@ final class IndexingPolicyTests: XCTestCase {
 
         XCTAssertFalse(SearchSuggestionVisibilityPolicy.shouldShow(
             indexingProgress: videoProgress,
-            isReady: true
+            isReady: true,
+            hasValidatedSuggestions: true
         ))
         XCTAssertTrue(SearchSuggestionVisibilityPolicy.shouldShow(
             indexingProgress: idleProgress,
-            isReady: true
+            isReady: true,
+            hasValidatedSuggestions: true
         ))
         XCTAssertFalse(SearchSuggestionVisibilityPolicy.shouldShow(
             indexingProgress: idleProgress,
-            isReady: false
+            isReady: false,
+            hasValidatedSuggestions: true
+        ))
+        XCTAssertFalse(SearchSuggestionVisibilityPolicy.shouldShow(
+            indexingProgress: idleProgress,
+            isReady: true,
+            hasValidatedSuggestions: false
         ))
     }
 }

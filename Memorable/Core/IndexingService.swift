@@ -26,6 +26,7 @@ class IndexingService: ObservableObject {
         }
     }
     @Published var newPhotosAvailable = false
+    @Published private(set) var validatedSearchSuggestions: [String] = []
     @Published private(set) var indexRebuildRequired = false
     @Published var indexVersion: Int = 0 {
         didSet {
@@ -87,6 +88,14 @@ class IndexingService: ObservableObject {
 
     var onIndexReady: (() -> Void)?
     var onIndexUnavailable: (() -> Void)?
+
+    var canShowValidatedSearchSuggestions: Bool {
+        SearchSuggestionVisibilityPolicy.shouldShow(
+            indexingProgress: progress,
+            isReady: isReady,
+            hasValidatedSuggestions: !validatedSearchSuggestions.isEmpty
+        )
+    }
 
     private lazy var libraryWorker = PhotoLibraryIndexingWorker(
         imageEncoder: imageEncoder,
@@ -167,6 +176,12 @@ class IndexingService: ObservableObject {
         }
         if scheduleOrphanCleanup && loaded {
             enqueueOrphanCleanup(
+                delayAfterDependencies: IndexingConfig.postLaunchAutoResumeDelaySeconds
+            )
+        }
+        if loaded && (scheduleAutoResume || scheduleOrphanCleanup) {
+            enqueueSurpriseQueryValidation(
+                workflowID: UUID(),
                 delayAfterDependencies: IndexingConfig.postLaunchAutoResumeDelaySeconds
             )
         }
@@ -251,6 +266,7 @@ class IndexingService: ObservableObject {
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         thermalResumeIntent = intent
+        hideValidatedSearchSuggestions()
         SurpriseQueries.clearValidated()
         enqueueLibraryIndexing(resumeIntentID: intent.id)
     }
@@ -264,6 +280,7 @@ class IndexingService: ObservableObject {
         guard markRunningIfIdle() else { return }
         thermalResumeIntent = intent
         newPhotosAvailable = false
+        hideValidatedSearchSuggestions()
         enqueueLibraryIndexing(resumeIntentID: intent.id)
     }
 
@@ -280,6 +297,7 @@ class IndexingService: ObservableObject {
         stopIndexing(preserveThermalResume: true)
         guard markRunningIfIdle() else { return }
         thermalResumeIntent = intent
+        hideValidatedSearchSuggestions()
         SurpriseQueries.clearValidated()
         enqueueLibraryIndexing(rebuildRequired: true, resumeIntentID: intent.id)
     }
@@ -341,6 +359,7 @@ class IndexingService: ObservableObject {
 
     func cancelAllWorkForMemoryPressure() {
         jobQueue.cancelAll()
+        hideValidatedSearchSuggestions()
         scheduledSavedFolderSourceIDs.removeAll()
         storageMutationTask?.cancel()
         stopObservingPhotoChanges()
@@ -375,6 +394,7 @@ class IndexingService: ObservableObject {
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         thermalResumeIntent = intent
+        hideValidatedSearchSuggestions()
         let workflowID = UUID()
         let shouldResumeGeocoding = jobQueue.contains(.geocodeMedia)
         jobQueue.enqueue(IndexingJob(
@@ -396,6 +416,10 @@ class IndexingService: ObservableObject {
                 }
                 let outcome = await self.folderWorker.index(url: url, name: name)
                 guard outcome.didComplete, !Task.isCancelled else { return outcome }
+                self.enqueueSurpriseQueryValidation(
+                    workflowID: workflowID,
+                    replacingCancelledJob: true
+                )
                 self.enqueueEnrichment(workflowID: workflowID)
                 if shouldResumeGeocoding {
                     self.enqueueGeocoding(workflowID: workflowID)
@@ -418,9 +442,11 @@ class IndexingService: ObservableObject {
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         thermalResumeIntent = intent
+        hideValidatedSearchSuggestions()
         scheduledSavedFolderSourceIDs.insert(source.id)
+        let workflowID = UUID()
         jobQueue.enqueue(IndexingJob(
-            workflowID: UUID(),
+            workflowID: workflowID,
             kind: .indexFolder,
             priority: .userInitiated
         ) { [weak self] in
@@ -435,7 +461,13 @@ class IndexingService: ObservableObject {
             ) {
                 self.beginBackgroundTask()
                 defer { self.endBackgroundTask() }
-                return await self.folderWorker.reindex(source: source)
+                let outcome = await self.folderWorker.reindex(source: source)
+                guard outcome.didComplete, !Task.isCancelled else { return outcome }
+                self.enqueueSurpriseQueryValidation(
+                    workflowID: workflowID,
+                    replacingCancelledJob: true
+                )
+                return .completed
             }
         })
     }
@@ -448,6 +480,7 @@ class IndexingService: ObservableObject {
         try await runTrackedStorageMutation { [weak self] in
             guard let self else { throw CancellationError() }
             self.stopIndexing()
+            self.hideValidatedSearchSuggestions()
             let db = self.database
             try await IndexingStorageMutation.run(
                 waitForIdle: { await self.jobQueue.waitUntilIdle() },
@@ -459,7 +492,11 @@ class IndexingService: ObservableObject {
                     self.isReady = false
                     self.onIndexUnavailable?()
                     guard !self.searchEngine.isMemoryPressureSuspended else { return }
-                    _ = await self.reloadSearchIndex()
+                    guard await self.reloadSearchIndex() else { return }
+                    self.enqueueSurpriseQueryValidation(
+                        workflowID: UUID(),
+                        replacingCancelledJob: true
+                    )
                 }
             )
         }
@@ -524,6 +561,7 @@ class IndexingService: ObservableObject {
             guard let self else { return }
             jobQueue.cancelAll()
             scheduledSavedFolderSourceIDs.removeAll()
+            hideValidatedSearchSuggestions()
             await jobQueue.waitUntilIdle()
             let db = database
             do {
@@ -539,7 +577,11 @@ class IndexingService: ObservableObject {
                         self.searchEngine.resumeAfterMemoryPressure()
                         self.isReady = false
                         self.onIndexUnavailable?()
-                        _ = await self.reloadSearchIndex()
+                        guard await self.reloadSearchIndex() else { return }
+                        self.enqueueSurpriseQueryValidation(
+                            workflowID: UUID(),
+                            replacingCancelledJob: true
+                        )
                         self.hitFreeLimit = FreeTierStatePolicy.hitIndexLimit(
                             previouslyHit: self.hitFreeLimit,
                             reconciliation: result
@@ -924,9 +966,20 @@ class IndexingService: ObservableObject {
                     durationSeconds: CFAbsoluteTimeGetCurrent() - startedAt
                 )
             }
-            await SurpriseQueries.validateQueries(using: self.searchEngine)
-            return Task.isCancelled ? .cancelled : .completed
+            let validated = await SurpriseQueries.validateQueries(using: self.searchEngine)
+            guard !Task.isCancelled else { return .cancelled }
+            if self.validatedSearchSuggestions != validated {
+                self.validatedSearchSuggestions = validated
+            }
+            return .completed
         })
+    }
+
+    private func hideValidatedSearchSuggestions() {
+        jobQueue.cancel(.validateSurpriseQueries)
+        if !validatedSearchSuggestions.isEmpty {
+            validatedSearchSuggestions = []
+        }
     }
 
     private func enqueueSavedFolderReindexingIfNeeded() async {
@@ -955,6 +1008,7 @@ class IndexingService: ObservableObject {
         ).filter { !scheduledSavedFolderSourceIDs.contains($0.id) }
 
         guard !candidates.isEmpty else { return }
+        hideValidatedSearchSuggestions()
         let candidateIDs = Set(candidates.map(\.id))
         scheduledSavedFolderSourceIDs.formUnion(candidateIDs)
         jobQueue.enqueue(IndexingJob(
@@ -996,7 +1050,12 @@ class IndexingService: ObservableObject {
                         }
                         return .cancelled
                     } else {
-                        return await self.reloadSearchIndex() ? outcome : .failed
+                        guard await self.reloadSearchIndex() else { return .failed }
+                        self.enqueueSurpriseQueryValidation(
+                            workflowID: UUID(),
+                            replacingCancelledJob: true
+                        )
+                        return outcome
                     }
                 }
                 if Task.isCancelled {
@@ -1005,7 +1064,12 @@ class IndexingService: ObservableObject {
                     }
                     return .cancelled
                 }
-                return await self.reloadSearchIndex() ? .completed : .failed
+                guard await self.reloadSearchIndex() else { return .failed }
+                self.enqueueSurpriseQueryValidation(
+                    workflowID: UUID(),
+                    replacingCancelledJob: true
+                )
+                return .completed
             }
         })
     }
@@ -1082,10 +1146,20 @@ class IndexingService: ObservableObject {
             delayAfterDependencies: delayAfterDependencies
         ) { [weak self] in
             guard let self else { return .cancelled }
-            let removedOrphans = await self.cleanOrphanedEmbeddings()
+            let cleanup = await self.cleanOrphanedEmbeddings()
+            if cleanup.changedIndex {
+                let reloaded = Task.isCancelled
+                    ? await self.reloadSearchIndexInFreshTask()
+                    : await self.reloadSearchIndex()
+                guard reloaded else { return .cancelled }
+            }
             guard !Task.isCancelled else { return .cancelled }
-            guard removedOrphans else { return .completed }
-            return await self.reloadSearchIndex() ? .completed : .cancelled
+            guard cleanup.invalidatedSuggestions else { return .completed }
+            self.enqueueSurpriseQueryValidation(
+                workflowID: UUID(),
+                replacingCancelledJob: true
+            )
+            return .completed
         })
     }
 
@@ -1100,6 +1174,11 @@ class IndexingService: ObservableObject {
             priority: .maintenance
         ) { [weak self] in
             guard let self else { return .cancelled }
+            guard !orphanedPhotoIDs.isEmpty || !orphanedVideoIDs.isEmpty else {
+                return .completed
+            }
+            let mutationState = OSAllocatedUnfairLock(initialState: false)
+            self.hideValidatedSearchSuggestions()
             do {
                 try await CancellableDetachedOperation.run {
                     if !orphanedPhotoIDs.isEmpty {
@@ -1107,6 +1186,7 @@ class IndexingService: ObservableObject {
                             PHPhotoLibrary.authorizationStatus(for: .readWrite)
                         ) else { throw CancellationError() }
                         try database.deleteOrphanedPhotos(localIdentifiers: orphanedPhotoIDs)
+                        mutationState.withLock { $0 = true }
                     }
                     try Task.checkCancellation()
                     if !orphanedVideoIDs.isEmpty {
@@ -1114,12 +1194,37 @@ class IndexingService: ObservableObject {
                             PHPhotoLibrary.authorizationStatus(for: .readWrite)
                         ) else { throw CancellationError() }
                         try database.deleteOrphanedVideos(localIdentifiers: orphanedVideoIDs)
+                        mutationState.withLock { $0 = true }
                     }
                 }
-                guard !Task.isCancelled else { return .cancelled }
-                return await self.reloadSearchIndex() ? .completed : .cancelled
+                if Task.isCancelled {
+                    if mutationState.withLock({ $0 }) {
+                        _ = await self.reloadSearchIndexInFreshTask()
+                    }
+                    return .cancelled
+                }
+                guard await self.reloadSearchIndex() else { return .cancelled }
+                self.enqueueSurpriseQueryValidation(
+                    workflowID: UUID(),
+                    replacingCancelledJob: true
+                )
+                return .completed
+            } catch is CancellationError {
+                if mutationState.withLock({ $0 }) {
+                    _ = await self.reloadSearchIndexInFreshTask()
+                }
+                return .cancelled
             } catch {
                 logger.error("Error cleaning orphaned photos: \(error.safeDiagnosticCode)")
+                if mutationState.withLock({ $0 }) {
+                    guard await self.reloadSearchIndex() else { return .cancelled }
+                }
+                if !Task.isCancelled {
+                    self.enqueueSurpriseQueryValidation(
+                        workflowID: UUID(),
+                        replacingCancelledJob: true
+                    )
+                }
                 return .cancelled
             }
         })
@@ -1369,7 +1474,14 @@ class IndexingService: ObservableObject {
 
     // MARK: - Orphan Cleanup
 
-    private func cleanOrphanedEmbeddings() async -> Bool {
+    private struct OrphanCleanupResult {
+        var changedIndex = false
+        var invalidatedSuggestions = false
+    }
+
+    private func cleanOrphanedEmbeddings() async -> OrphanCleanupResult {
+        let mutationState = OSAllocatedUnfairLock(initialState: false)
+        var invalidatedSuggestions = false
         do {
             guard PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(
                 PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -1377,7 +1489,7 @@ class IndexingService: ObservableObject {
                 #if DEBUG
                 logger.info("[IndexingService] Skipping orphan cleanup without full Photos access")
                 #endif
-                return false
+                return OrphanCleanupResult()
             }
             let db = database
             let scanTask = Task.detached(priority: .utility) {
@@ -1422,11 +1534,11 @@ class IndexingService: ObservableObject {
             try Task.checkCancellation()
             if exceededSafetyThreshold {
                 logger.warning("Orphan cleanup skipped: candidate removals exceed the 20% safety threshold")
-                return false
+                return OrphanCleanupResult()
             }
 
             let totalOrphans = orphanedPhotos.count + orphanedVideos.count
-            guard totalOrphans > 0 else { return false }
+            guard totalOrphans > 0 else { return OrphanCleanupResult() }
 
             // Safety: never auto-delete when more than 20% appear orphaned.
             // A large mismatch can reflect a transient PhotoKit visibility issue.
@@ -1439,8 +1551,11 @@ class IndexingService: ObservableObject {
             )
             if orphanRatio > IndexingConfig.maxOrphanRatio {
                 logger.warning("Orphan cleanup skipped: \(totalOrphans)/\(photoLibraryIndexedCount) (\(Int(orphanRatio * 100))%) exceeds 20% threshold")
-                return false
+                return OrphanCleanupResult()
             }
+
+            hideValidatedSearchSuggestions()
+            invalidatedSuggestions = true
 
             // Delete orphaned photos
             if !orphanedPhotos.isEmpty {
@@ -1452,6 +1567,7 @@ class IndexingService: ObservableObject {
                         PHPhotoLibrary.authorizationStatus(for: .readWrite)
                     ) else { throw CancellationError() }
                     try db.deleteOrphanedPhotos(localIdentifiers: photoIDsToDelete)
+                    mutationState.withLock { $0 = true }
                 }
                 try Task.checkCancellation()
                 #if DEBUG
@@ -1469,18 +1585,28 @@ class IndexingService: ObservableObject {
                         PHPhotoLibrary.authorizationStatus(for: .readWrite)
                     ) else { throw CancellationError() }
                     try db.deleteOrphanedVideos(localIdentifiers: videoIDsToDelete)
+                    mutationState.withLock { $0 = true }
                 }
                 try Task.checkCancellation()
                 #if DEBUG
                 logger.info("Cleaned \(videoDeleteCount) orphaned video embeddings")
                 #endif
             }
-            return true
+            return OrphanCleanupResult(
+                changedIndex: mutationState.withLock { $0 },
+                invalidatedSuggestions: invalidatedSuggestions
+            )
         } catch is CancellationError {
-            return false
+            return OrphanCleanupResult(
+                changedIndex: mutationState.withLock { $0 },
+                invalidatedSuggestions: invalidatedSuggestions
+            )
         } catch {
             logger.error("Orphan cleanup failed: \(error.safeDiagnosticCode)")
-            return false
+            return OrphanCleanupResult(
+                changedIndex: mutationState.withLock { $0 },
+                invalidatedSuggestions: invalidatedSuggestions
+            )
         }
     }
 

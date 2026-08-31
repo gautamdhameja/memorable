@@ -11,7 +11,7 @@ struct OnThisDayView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Celestial.Colors.background.ignoresSafeArea()
+                CelestialBackdrop()
 
                 ScrollView {
                     VStack(spacing: 0) {
@@ -21,9 +21,11 @@ struct OnThisDayView: View {
                                 .padding(.top, 60)
                         } else if yearGroups.isEmpty {
                             VStack(spacing: 16) {
-                                Image(systemName: indexedCount == 0 ? "photo.on.rectangle.angled" : "calendar")
-                                    .font(.system(size: 48, weight: .thin))
-                                    .foregroundStyle(Celestial.Colors.outlineVariant)
+                                CelestialGlassIcon(
+                                    systemName: indexedCount == 0 ? "photo.on.rectangle.angled" : "calendar",
+                                    tint: Celestial.Colors.onSurfaceVariant,
+                                    size: 64
+                                )
                                 if indexedCount == 0 {
                                     Text("Index your photo library to unlock memories")
                                         .font(.subheadline)
@@ -69,13 +71,13 @@ struct OnThisDayView: View {
 
                                     Button(action: { showSlideshow = true }) {
                                         Label("Relive your memories", systemImage: "play.fill")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(Celestial.Colors.surfaceDim)
-                                            .padding(.horizontal, 20)
-                                            .frame(height: 46)
-                                            .background(Celestial.Colors.onSurface)
-                                            .clipShape(Capsule())
                                     }
+                                    .buttonStyle(
+                                        CelestialButtonStyle(
+                                            tint: Celestial.Colors.onSurface,
+                                            foreground: Celestial.Colors.surfaceDim
+                                        )
+                                    )
                                     .padding(.top, 22)
                                 }
                                 .padding(.horizontal, 26)

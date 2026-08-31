@@ -8,7 +8,7 @@ struct OnboardingView: View {
 
     var body: some View {
         ZStack {
-            Celestial.Colors.background.ignoresSafeArea()
+            CelestialBackdrop()
 
             TabView(selection: $currentPage) {
                 searchByMemoryPage.tag(0)
@@ -23,7 +23,7 @@ struct OnboardingView: View {
     private var searchByMemoryPage: some View {
         GeometryReader { proxy in
             VStack(alignment: .leading, spacing: 0) {
-                SemanticConstellationHero()
+                MemoryReelHero()
                     .frame(height: min(258, max(218, proxy.size.height * 0.31)))
                     .padding(.top, max(22, proxy.safeAreaInsets.top + 10))
 
@@ -37,25 +37,32 @@ struct OnboardingView: View {
                 }
                 .padding(.horizontal, 15)
                 .frame(height: 50)
-                .background(Celestial.Colors.surfaceContainer.opacity(0.92))
-                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .stroke(Celestial.Colors.primaryDim.opacity(0.42), lineWidth: 1)
-                }
+                .modifier(GlassSearchBarModifier(cornerRadius: 13))
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Example search: sunset at the beach last summer")
 
                 Spacer().frame(height: max(34, proxy.size.height * 0.055))
 
-                Text("Search your photos\nby what you remember")
+                VStack(alignment: .leading, spacing: -2) {
+                    Text("Search your photos")
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                    Text("by what you remember")
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [Celestial.Colors.primary, Celestial.Colors.amber],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                }
                     .font(.largeTitle.bold())
                     .tracking(-0.8)
-                    .foregroundStyle(Celestial.Colors.onSurface)
 
-                Text("Describe the moment. No tags, no albums to keep up with.")
+                (Text("Describe the moment. ")
+                    .foregroundColor(Celestial.Colors.onSurfaceVariant)
+                    + Text("No tags or albums to maintain.")
+                    .foregroundColor(Celestial.Colors.primary.opacity(0.88)))
                     .font(.body)
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .lineSpacing(5)
                     .padding(.top, 16)
 
@@ -74,14 +81,20 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             Spacer().frame(height: 122)
 
-            Text("Your photos stay\non this iPhone")
+            VStack(alignment: .leading, spacing: -2) {
+                Text("Your photos stay")
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text("on this iPhone")
+                    .foregroundStyle(Celestial.Colors.primary)
+            }
                 .font(.largeTitle.bold())
                 .tracking(-0.8)
-                .foregroundStyle(Celestial.Colors.onSurface)
 
-            Text("No developer account, tracking, or automatic photo uploads.")
+            (Text("No developer account or tracking. ")
+                .foregroundColor(Celestial.Colors.primary.opacity(0.88))
+                + Text("No automatic photo uploads.")
+                .foregroundColor(Celestial.Colors.onSurfaceVariant))
                 .font(.body)
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .padding(.top, 16)
 
             VStack(spacing: 0) {
@@ -90,7 +103,9 @@ struct OnboardingView: View {
                 privacyRow(number: "03", text: "Delete the index any time")
                 CelestialHairline()
             }
-            .padding(.top, 64)
+            .padding(.horizontal, 16)
+            .modifier(GlassPanelModifier(cornerRadius: 18))
+            .padding(.top, 54)
 
             Text("Search works offline after place names have been resolved.")
                 .font(.subheadline)
@@ -120,9 +135,10 @@ struct OnboardingView: View {
                         style: StrokeStyle(lineWidth: 1, dash: [2, 8])
                     )
                     .frame(width: 106, height: 106)
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(Celestial.Colors.primaryDim)
+                CelestialGlassIcon(
+                    systemName: "magnifyingglass",
+                    size: 64
+                )
                 Circle()
                     .fill(Celestial.Colors.amber)
                     .frame(width: 6, height: 6)
@@ -131,15 +147,21 @@ struct OnboardingView: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 80)
 
-            Text("Make local media\nsearchable")
+            VStack(alignment: .leading, spacing: -2) {
+                Text("Make local media")
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text("searchable")
+                    .foregroundStyle(Celestial.Colors.amber)
+            }
                 .font(.title.bold())
                 .tracking(-0.7)
-                .foregroundStyle(Celestial.Colors.onSurface)
                 .padding(.top, 62)
 
-            Text("Indexing runs on this iPhone. Locally available photos become searchable as it goes.")
+            (Text("Indexing runs on this iPhone. ")
+                .foregroundColor(Celestial.Colors.onSurfaceVariant)
+                + Text("Photos become searchable as it goes.")
+                .foregroundColor(Celestial.Colors.amber.opacity(0.90)))
                 .font(.body)
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .lineSpacing(5)
                 .padding(.top, 16)
 
@@ -149,6 +171,8 @@ struct OnboardingView: View {
                 setupRow(label: "Free tier indexes", value: "First 500 items", accent: true)
                 CelestialHairline()
             }
+            .padding(.horizontal, 16)
+            .modifier(GlassPanelModifier(cornerRadius: 18))
             .padding(.top, 32)
 
             Spacer()
@@ -164,13 +188,14 @@ struct OnboardingView: View {
                 completeOnboarding()
             } label: {
                 Text("Build Search Index")
-                    .font(.headline)
-                    .foregroundStyle(Celestial.Colors.onPrimaryContainer)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(Celestial.Colors.primaryDim)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .buttonStyle(
+                CelestialButtonStyle(
+                    tint: Celestial.Colors.amber,
+                    foreground: Celestial.Colors.surfaceDim
+                )
+            )
 
             Button("Not now") {
                 startIndexAfterCompletion = false
@@ -218,142 +243,255 @@ struct OnboardingView: View {
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { index in
                     Capsule()
-                        .fill(index == currentPage ? Celestial.Colors.primaryDim : Celestial.Colors.onSurface.opacity(0.20))
+                        .fill(
+                            index == currentPage
+                                ? pageAccent
+                                : Celestial.Colors.onSurface.opacity(0.20)
+                        )
                         .frame(width: 20, height: 3)
                 }
             }
 
             Button(action: action) {
                 Text(primaryTitle)
-                    .font(.headline)
-                    .foregroundStyle(Celestial.Colors.onPrimaryContainer)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(Celestial.Colors.primaryDim)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .buttonStyle(CelestialButtonStyle())
         }
     }
 
     private func completeOnboarding() {
         withAnimation(.easeInOut(duration: 0.25)) { isComplete = true }
     }
+
+    private var pageAccent: Color {
+        currentPage == 2 ? Celestial.Colors.amber : Celestial.Colors.primaryDim
+    }
 }
 
-private struct SemanticConstellationHero: View {
+private struct MemoryReelHero: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var revealed = false
 
     var body: some View {
-        GeometryReader { proxy in
-            let width = proxy.size.width
-            let height = proxy.size.height
-            let center = CGPoint(x: width * 0.5, y: height * 0.52)
-            let memoryPoints = [
-                CGPoint(x: width * 0.24, y: height * 0.25),
-                CGPoint(x: width * 0.78, y: height * 0.25),
-                CGPoint(x: width * 0.20, y: height * 0.75),
-                CGPoint(x: width * 0.80, y: height * 0.76),
-            ]
+        ZStack {
+            Ellipse()
+                .fill(Celestial.Colors.primaryDim.opacity(0.13))
+                .frame(width: 250, height: 138)
+                .blur(radius: 28)
 
-            ZStack {
-                Canvas { context, _ in
-                    for point in memoryPoints {
-                        var path = Path()
-                        path.move(to: center)
-                        path.addLine(to: point)
-                        context.stroke(
-                            path,
-                            with: .color(Celestial.Colors.primaryDim.opacity(0.18)),
-                            style: StrokeStyle(lineWidth: 1, dash: [2, 6])
-                        )
-                    }
-                }
+            AbstractMemoryCard(
+                palette: .alpine,
+                isFocused: false
+            )
+            .frame(width: 92, height: 122)
+            .rotationEffect(.degrees(revealed ? -10 : -2))
+            .offset(x: revealed ? -88 : -20, y: 13)
+            .opacity(revealed ? 0.82 : 0)
+
+            AbstractMemoryCard(
+                palette: .evening,
+                isFocused: false
+            )
+            .frame(width: 92, height: 122)
+            .rotationEffect(.degrees(revealed ? 10 : 2))
+            .offset(x: revealed ? 88 : 20, y: 13)
+            .opacity(revealed ? 0.82 : 0)
+
+            AbstractMemoryCard(
+                palette: .goldenHour,
+                isFocused: true
+            )
+            .frame(width: 120, height: 154)
+            .scaleEffect(revealed ? 1 : 0.92)
+            .offset(y: -4)
+            .shadow(color: Celestial.Colors.amber.opacity(0.18), radius: 24, y: 10)
+
+            searchLens
+                .offset(x: 63, y: 49)
+                .scaleEffect(revealed ? 1 : 0.5)
                 .opacity(revealed ? 1 : 0)
-
-                Ellipse()
-                    .stroke(Celestial.Colors.primaryDim.opacity(0.16), lineWidth: 1)
-                    .frame(width: width * 0.68, height: height * 0.42)
-                    .rotationEffect(.degrees(-11))
-
-                Circle()
-                    .fill(Celestial.Colors.surfaceContainer)
-                    .frame(width: 72, height: 72)
-                    .overlay {
-                        Circle()
-                            .stroke(Celestial.Colors.primaryDim.opacity(0.72), lineWidth: 1)
-                    }
-                    .overlay {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 25, weight: .light))
-                            .foregroundStyle(Celestial.Colors.primary)
-                    }
-                    .shadow(color: Celestial.Colors.primaryDim.opacity(0.20), radius: 24)
-                    .position(center)
-
-                SemanticMemoryGlyph(symbol: "mountain.2.fill")
-                    .position(memoryPoints[0])
-                SemanticMemoryGlyph(symbol: "sun.horizon.fill", isMatch: true)
-                    .position(memoryPoints[1])
-                SemanticMemoryGlyph(symbol: "pawprint.fill")
-                    .position(memoryPoints[2])
-                SemanticMemoryGlyph(symbol: "birthday.cake.fill")
-                    .position(memoryPoints[3])
-            }
-            .opacity(revealed ? 1 : 0)
-            .scaleEffect(revealed ? 1 : 0.96)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityHidden(true)
         .onAppear {
             if reduceMotion {
                 revealed = true
             } else {
-                withAnimation(.easeOut(duration: 0.65)) {
+                withAnimation(.spring(response: 0.72, dampingFraction: 0.82)) {
                     revealed = true
                 }
             }
         }
     }
-}
 
-private struct SemanticMemoryGlyph: View {
-    let symbol: String
-    var isMatch = false
-
-    var body: some View {
+    private var searchLens: some View {
         ZStack(alignment: .topTrailing) {
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .fill(Celestial.Colors.surfaceContainerHigh)
-                .frame(width: 58, height: 58)
+            Circle()
+                .fill(.clear)
+                .frame(width: 62, height: 62)
+                .modifier(
+                    GlassCircleModifier(
+                        tint: Celestial.Colors.primaryDim.opacity(0.20)
+                    )
+                )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    Circle()
                         .stroke(
-                            isMatch
-                                ? Celestial.Colors.primaryDim.opacity(0.90)
-                                : Celestial.Colors.hairline,
+                            LinearGradient(
+                                colors: [Celestial.Colors.primary, Celestial.Colors.amber],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
                             lineWidth: 1
                         )
                 }
                 .overlay {
-                    Image(systemName: symbol)
-                        .font(.system(size: 20, weight: .light))
-                        .foregroundStyle(
-                            isMatch
-                                ? Celestial.Colors.primary
-                                : Celestial.Colors.onSurfaceVariant
-                        )
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Celestial.Colors.onSurface)
                 }
 
-            if isMatch {
-                Circle()
-                    .fill(Celestial.Colors.amber)
-                    .frame(width: 7, height: 7)
-                    .overlay {
-                        Circle().stroke(Celestial.Colors.background, lineWidth: 2)
-                    }
-                    .offset(x: 2, y: -2)
+            Circle()
+                .fill(Celestial.Colors.amber)
+                .frame(width: 8, height: 8)
+                .overlay(Circle().stroke(Celestial.Colors.background, lineWidth: 2))
+                .offset(x: -1, y: 2)
+        }
+        .shadow(color: Celestial.Colors.primaryDim.opacity(0.24), radius: 18, y: 8)
+    }
+}
+
+private struct AbstractMemoryCard: View {
+    enum Palette {
+        case alpine
+        case goldenHour
+        case evening
+
+        var colors: [Color] {
+            switch self {
+            case .alpine:
+                return [
+                    Color(red: 73 / 255, green: 126 / 255, blue: 164 / 255),
+                    Color(red: 24 / 255, green: 42 / 255, blue: 66 / 255),
+                ]
+            case .goldenHour:
+                return [
+                    Color(red: 80 / 255, green: 138 / 255, blue: 186 / 255),
+                    Color(red: 234 / 255, green: 172 / 255, blue: 99 / 255),
+                    Color(red: 73 / 255, green: 45 / 255, blue: 55 / 255),
+                ]
+            case .evening:
+                return [
+                    Color(red: 83 / 255, green: 75 / 255, blue: 139 / 255),
+                    Color(red: 31 / 255, green: 31 / 255, blue: 62 / 255),
+                ]
             }
         }
-        .frame(width: 62, height: 62)
+
+        var light: Color {
+            switch self {
+            case .alpine: return Celestial.Colors.primary
+            case .goldenHour: return Celestial.Colors.amber
+            case .evening: return Color(red: 201 / 255, green: 163 / 255, blue: 1)
+            }
+        }
+    }
+
+    let palette: Palette
+    let isFocused: Bool
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+
+            ZStack {
+                LinearGradient(
+                    colors: palette.colors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
+                Circle()
+                    .fill(palette.light.opacity(0.88))
+                    .frame(width: width * 0.34, height: width * 0.34)
+                    .blur(radius: palette == .goldenHour ? 1 : 5)
+                    .offset(x: width * 0.18, y: -height * 0.17)
+
+                Canvas { context, size in
+                    var distant = Path()
+                    distant.move(to: CGPoint(x: 0, y: size.height * 0.62))
+                    distant.addCurve(
+                        to: CGPoint(x: size.width, y: size.height * 0.58),
+                        control1: CGPoint(x: size.width * 0.28, y: size.height * 0.35),
+                        control2: CGPoint(x: size.width * 0.72, y: size.height * 0.78)
+                    )
+                    distant.addLine(to: CGPoint(x: size.width, y: size.height))
+                    distant.addLine(to: CGPoint(x: 0, y: size.height))
+                    distant.closeSubpath()
+                    context.fill(
+                        distant,
+                        with: .color(Celestial.Colors.surfaceContainerHigh.opacity(0.68))
+                    )
+
+                    var foreground = Path()
+                    foreground.move(to: CGPoint(x: 0, y: size.height * 0.78))
+                    foreground.addCurve(
+                        to: CGPoint(x: size.width, y: size.height * 0.72),
+                        control1: CGPoint(x: size.width * 0.32, y: size.height * 0.56),
+                        control2: CGPoint(x: size.width * 0.66, y: size.height * 0.92)
+                    )
+                    foreground.addLine(to: CGPoint(x: size.width, y: size.height))
+                    foreground.addLine(to: CGPoint(x: 0, y: size.height))
+                    foreground.closeSubpath()
+                    context.fill(
+                        foreground,
+                        with: .color(Celestial.Colors.surfaceDim.opacity(0.88))
+                    )
+                }
+
+                LinearGradient(
+                    colors: [.white.opacity(0.20), .clear, .black.opacity(0.18)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
+                if isFocused {
+                    VStack {
+                        Spacer()
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(Celestial.Colors.amber)
+                                .frame(width: 5, height: 5)
+                            Text("MATCH")
+                                .font(.system(size: 8, weight: .bold, design: .rounded))
+                                .tracking(0.8)
+                                .foregroundStyle(.white.opacity(0.90))
+                        }
+                        .padding(.horizontal, 8)
+                        .frame(height: 24)
+                        .modifier(
+                            GlassCapsuleModifier(
+                                tint: Color.black.opacity(0.12),
+                                interactive: false
+                            )
+                        )
+                        .padding(.bottom, 9)
+                    }
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 19, style: .continuous)
+                .stroke(
+                    isFocused
+                        ? Celestial.Colors.primary.opacity(0.68)
+                        : Color.white.opacity(0.14),
+                    lineWidth: isFocused ? 1.2 : 0.75
+                )
+        }
+        .shadow(color: .black.opacity(0.34), radius: 14, y: 9)
     }
 }

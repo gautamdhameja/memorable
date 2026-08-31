@@ -33,9 +33,13 @@ struct PhotoThumbnailView: View {
                             Image(systemName: "play.fill")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.white)
-                                .padding(7)
-                                .background(.black.opacity(0.58))
-                                .clipShape(Circle())
+                                .frame(width: 28, height: 28)
+                                .modifier(
+                                    GlassCircleModifier(
+                                        tint: Color.black.opacity(0.18),
+                                        interactive: false
+                                    )
+                                )
                                 .padding(7)
                         }
                     }
