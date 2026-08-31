@@ -75,6 +75,101 @@ final class SmartQueryParserConcurrencyTests: XCTestCase {
         }
     }
 
+    private actor TimeoutProbe {
+        private(set) var callCount = 0
+
+        func respond() async throws -> ParsedQuery {
+            callCount += 1
+            try await Task.sleep(for: .seconds(5))
+            return ParsedQuery(
+                visualDescription: "model result",
+                startDate: nil,
+                endDate: nil,
+                locationName: nil,
+                negativeTerms: []
+            )
+        }
+    }
+
+    private struct TimeoutResponder: SmartQueryResponding {
+        let probe: TimeoutProbe
+
+        func respond(to prompt: String) async throws -> ParsedQuery {
+            try await probe.respond()
+        }
+    }
+
+    private actor CancellationIgnoringProbe {
+        private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+        private var blockedContinuation: CheckedContinuation<Void, Never>?
+        private(set) var callCount = 0
+
+        func respond() async -> ParsedQuery {
+            callCount += 1
+            let callNumber = callCount
+            let waiters = startedWaiters
+            startedWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+
+            if callNumber == 1 {
+                await withCheckedContinuation { continuation in
+                    blockedContinuation = continuation
+                }
+            }
+
+            return ParsedQuery(
+                visualDescription: "model result",
+                startDate: nil,
+                endDate: nil,
+                locationName: nil,
+                negativeTerms: []
+            )
+        }
+
+        func waitUntilStarted() async {
+            guard callCount == 0 else { return }
+            await withCheckedContinuation { continuation in
+                startedWaiters.append(continuation)
+            }
+        }
+
+        func releaseBlockedResponse() {
+            blockedContinuation?.resume()
+            blockedContinuation = nil
+        }
+    }
+
+    private struct CancellationIgnoringResponder: SmartQueryResponding {
+        let probe: CancellationIgnoringProbe
+
+        func respond(to prompt: String) async throws -> ParsedQuery {
+            await probe.respond()
+        }
+    }
+
+    private actor ImmediateResponseProbe {
+        private(set) var callCount = 0
+
+        func respond() -> ParsedQuery {
+            callCount += 1
+            return ParsedQuery(
+                visualDescription: "model result",
+                startDate: nil,
+                endDate: nil,
+                locationName: nil,
+                negativeTerms: []
+            )
+        }
+    }
+
+    private struct ImmediateResponder: SmartQueryResponding {
+        let probe: ImmediateResponseProbe
+
+        func respond(to prompt: String) async throws -> ParsedQuery {
+            await probe.respond()
+        }
+    }
+
     func testConcurrentParsesUseIndependentResponders() async {
         let probe = ConcurrencyProbe()
         let parser = SmartQueryParser(isAvailable: true) {
@@ -99,6 +194,116 @@ final class SmartQueryParserConcurrencyTests: XCTestCase {
         let maximumConcurrentCallsOnOneResponder = await probe.maximumConcurrentCallsOnOneResponder
         XCTAssertEqual(uniqueResponderCount, requestCount)
         XCTAssertEqual(maximumConcurrentCallsOnOneResponder, 1)
+    }
+
+    func testTimedOutResponderFallsBackAndOpensCircuit() async {
+        let probe = TimeoutProbe()
+        let parser = SmartQueryParser(
+            isAvailable: true,
+            responseTimeoutSeconds: 0.02
+        ) {
+            TimeoutResponder(probe: probe)
+        }
+
+        let clock = ContinuousClock()
+        let startedAt = clock.now
+        let firstHints = await parser.parse(query: "dog")
+        let firstDuration = startedAt.duration(to: clock.now)
+        let secondHints = await parser.parse(query: "sunset")
+
+        XCTAssertEqual(firstHints.textQuery, "dog")
+        XCTAssertEqual(secondHints.textQuery, "sunset")
+        XCTAssertLessThan(firstDuration, .milliseconds(500))
+        let callCount = await probe.callCount
+        XCTAssertEqual(callCount, 1)
+    }
+
+    func testParentCancellationReturnsPromptlyWithoutOpeningCircuit() async {
+        let probe = CancellationIgnoringProbe()
+        let parser = SmartQueryParser(
+            isAvailable: true,
+            responseTimeoutSeconds: 5
+        ) {
+            CancellationIgnoringResponder(probe: probe)
+        }
+
+        let parseTask = Task {
+            await parser.parse(query: "dog")
+        }
+        await probe.waitUntilStarted()
+
+        let clock = ContinuousClock()
+        let cancelledAt = clock.now
+        parseTask.cancel()
+        let cancelledHints = await parseTask.value
+        let cancellationDuration = cancelledAt.duration(to: clock.now)
+
+        let nextHints = await parser.parse(query: "sunset")
+        let callCountWhileCancelledResponseWasActive = await probe.callCount
+        await probe.releaseBlockedResponse()
+
+        let recoveryDeadline = clock.now.advanced(by: .milliseconds(500))
+        var didRecoverSmartParsing = false
+        while clock.now < recoveryDeadline {
+            let recoveryHints = await parser.parse(query: "beach")
+            if recoveryHints.textQuery == "model result" {
+                didRecoverSmartParsing = true
+                break
+            }
+            await Task.yield()
+        }
+
+        XCTAssertEqual(cancelledHints.textQuery, "dog")
+        XCTAssertLessThan(cancellationDuration, .milliseconds(500))
+        XCTAssertEqual(nextHints.textQuery, "sunset")
+        XCTAssertEqual(callCountWhileCancelledResponseWasActive, 1)
+        XCTAssertTrue(didRecoverSmartParsing)
+        let finalCallCount = await probe.callCount
+        XCTAssertEqual(finalCallCount, 2)
+    }
+
+    func testCancelledResponderThatOutlivesDeadlineOpensCircuit() async throws {
+        let probe = CancellationIgnoringProbe()
+        let parser = SmartQueryParser(
+            isAvailable: true,
+            responseTimeoutSeconds: 0.02
+        ) {
+            CancellationIgnoringResponder(probe: probe)
+        }
+
+        let parseTask = Task {
+            await parser.parse(query: "dog")
+        }
+        await probe.waitUntilStarted()
+        parseTask.cancel()
+        _ = await parseTask.value
+
+        try await Task.sleep(for: .milliseconds(50))
+        await probe.releaseBlockedResponse()
+        let nextHints = await parser.parse(query: "sunset")
+
+        XCTAssertEqual(nextHints.textQuery, "sunset")
+        let callCount = await probe.callCount
+        XCTAssertEqual(callCount, 1)
+    }
+
+    func testSuccessfulResponseCancelsTimeoutWithoutOpeningCircuit() async throws {
+        let probe = ImmediateResponseProbe()
+        let parser = SmartQueryParser(
+            isAvailable: true,
+            responseTimeoutSeconds: 0.02
+        ) {
+            ImmediateResponder(probe: probe)
+        }
+
+        let firstHints = await parser.parse(query: "dog")
+        try await Task.sleep(for: .milliseconds(50))
+        let secondHints = await parser.parse(query: "sunset")
+
+        XCTAssertEqual(firstHints.textQuery, "model result")
+        XCTAssertEqual(secondHints.textQuery, "model result")
+        let callCount = await probe.callCount
+        XCTAssertEqual(callCount, 2)
     }
 
     func testSmartParserBoundsQueryBeforeBuildingPrompt() async {

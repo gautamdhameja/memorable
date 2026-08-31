@@ -1,5 +1,6 @@
 import Foundation
 import FoundationModels
+import os
 
 enum SmartQueryOutputPolicy {
     static let maximumVisualCharacters = QueryInputPolicy.maximumCharacterCount
@@ -16,6 +17,10 @@ enum SmartQueryOutputPolicy {
         )
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+}
+
+enum SmartQueryPerformancePolicy {
+    static let responseTimeoutSeconds: TimeInterval = 1.5
 }
 
 // Structured output from the on-device language model
@@ -53,23 +58,189 @@ private struct LanguageModelSmartQueryResponder: SmartQueryResponding {
 }
 
 @available(iOS 26.0, *)
+private final class SmartQueryCircuitBreaker: Sendable {
+    private struct State: Sendable {
+        var isOpen = false
+        var cancelledRequestCount = 0
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    var permitsRequest: Bool {
+        state.withLock { !$0.isOpen && $0.cancelledRequestCount == 0 }
+    }
+
+    func open() {
+        state.withLock { $0.isOpen = true }
+    }
+
+    func beginCancelledRequest() {
+        state.withLock { $0.cancelledRequestCount += 1 }
+    }
+
+    func finishCancelledRequest(timedOut: Bool) {
+        state.withLock { state in
+            state.cancelledRequestCount = max(0, state.cancelledRequestCount - 1)
+            if timedOut {
+                state.isOpen = true
+            }
+        }
+    }
+}
+
+@available(iOS 26.0, *)
+private enum SmartQueryResponseError: Error, Sendable {
+    case cancelled
+    case responder(String)
+    case timedOut
+}
+
+@available(iOS 26.0, *)
+private final class SmartQueryResponseController: Sendable {
+    typealias Response = Result<ParsedQuery, SmartQueryResponseError>
+
+    private struct State: Sendable {
+        var continuation: ContinuationGuard<Response>?
+        var responseTask: Task<Void, Never>?
+        var timeoutTask: Task<Void, Never>?
+        var isCallerCancelled = false
+        var isCancellationSuspended = false
+        var isFinished = false
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let circuitBreaker: SmartQueryCircuitBreaker
+
+    init(circuitBreaker: SmartQueryCircuitBreaker) {
+        self.circuitBreaker = circuitBreaker
+    }
+
+    @discardableResult
+    func installContinuation(_ continuation: ContinuationGuard<Response>) -> Bool {
+        let didInstall = state.withLock { state in
+            guard !state.isFinished, !state.isCallerCancelled else { return false }
+            state.continuation = continuation
+            return true
+        }
+        if !didInstall {
+            continuation.resume(returning: .failure(.cancelled))
+        }
+        return didInstall
+    }
+
+    @discardableResult
+    func startResponse(
+        _ operation: @escaping @Sendable () async -> Response
+    ) -> Bool {
+        state.withLock { state in
+            guard !state.isFinished, !state.isCallerCancelled else { return false }
+            let task = Task { [self] in
+                finish(await operation())
+            }
+            state.responseTask = task
+            return true
+        }
+    }
+
+    func registerTimeoutTask(_ task: Task<Void, Never>) {
+        let shouldCancel = state.withLock { state in
+            guard !state.isFinished else { return true }
+            state.timeoutTask = task
+            return false
+        }
+        if shouldCancel {
+            task.cancel()
+        }
+    }
+
+    func finish(_ response: Response) {
+        guard let completion = takeCompletion() else { return }
+        completion.timeoutTask?.cancel()
+        if completion.wasCancellationSuspended {
+            circuitBreaker.finishCancelledRequest(timedOut: false)
+        }
+        completion.continuation?.resume(returning: response)
+    }
+
+    func timeOut() {
+        guard let completion = takeCompletion() else { return }
+        completion.responseTask?.cancel()
+        if completion.wasCancellationSuspended {
+            circuitBreaker.finishCancelledRequest(timedOut: true)
+        } else {
+            circuitBreaker.open()
+        }
+        completion.continuation?.resume(returning: .failure(.timedOut))
+    }
+
+    func cancel() {
+        let cancellation = state.withLock { state -> (
+            continuation: ContinuationGuard<Response>?,
+            responseTask: Task<Void, Never>?
+        )? in
+            guard !state.isFinished, !state.isCallerCancelled else { return nil }
+            state.isCallerCancelled = true
+            if state.responseTask != nil {
+                state.isCancellationSuspended = true
+                circuitBreaker.beginCancelledRequest()
+            }
+            defer { state.continuation = nil }
+            return (state.continuation, state.responseTask)
+        }
+        guard let cancellation else { return }
+        cancellation.responseTask?.cancel()
+        cancellation.continuation?.resume(returning: .failure(.cancelled))
+    }
+
+    private func takeCompletion() -> (
+        continuation: ContinuationGuard<Response>?,
+        responseTask: Task<Void, Never>?,
+        timeoutTask: Task<Void, Never>?,
+        wasCancellationSuspended: Bool
+    )? {
+        state.withLock { state in
+            guard !state.isFinished else { return nil }
+            state.isFinished = true
+            defer {
+                state.continuation = nil
+                state.responseTask = nil
+                state.timeoutTask = nil
+            }
+            return (
+                state.continuation,
+                state.responseTask,
+                state.timeoutTask,
+                state.isCancellationSuspended
+            )
+        }
+    }
+}
+
+@available(iOS 26.0, *)
 struct SmartQueryParser: Sendable {
     private let responderFactory: @Sendable () -> any SmartQueryResponding
+    private let responseTimeoutSeconds: TimeInterval
+    private let circuitBreaker = SmartQueryCircuitBreaker()
     let isAvailable: Bool
 
     init(
         isAvailable: Bool = SystemLanguageModel.default.isAvailable,
+        responseTimeoutSeconds: TimeInterval = SmartQueryPerformancePolicy.responseTimeoutSeconds,
         responderFactory: @escaping @Sendable () -> any SmartQueryResponding = {
             LanguageModelSmartQueryResponder()
         }
     ) {
         self.isAvailable = isAvailable
+        self.responseTimeoutSeconds = max(0, responseTimeoutSeconds)
         self.responderFactory = responderFactory
     }
 
     func parse(query: String) async -> QueryHints {
         let query = QueryInputPolicy.bounded(query)
         guard isAvailable else {
+            return QueryParserFallback.parse(query: query)
+        }
+        guard circuitBreaker.permitsRequest else {
             return QueryParserFallback.parse(query: query)
         }
 
@@ -92,7 +263,7 @@ struct SmartQueryParser: Sendable {
         """
 
         do {
-            let parsed = try await responderFactory().respond(to: prompt)
+            let parsed = try await boundedResponse(to: prompt)
 
             var dateRange: DateRange?
             let isoFormatter = ISO8601DateFormatter()
@@ -204,9 +375,56 @@ struct SmartQueryParser: Sendable {
                 hasVisualQuery: hasVisual
             )
         } catch {
-            logger.error("Foundation model parse failed: \(error.safeDiagnosticCode), falling back to regex")
+            switch error {
+            case .cancelled:
+                break
+            case .timedOut:
+                logger.error("Foundation model parse timed out after \(responseTimeoutSeconds)s; disabling smart parsing for this launch")
+            case .responder(let diagnosticCode):
+                logger.error("Foundation model parse failed: \(diagnosticCode), falling back to regex")
+            }
             return QueryParserFallback.parse(query: query)
         }
+    }
+
+    private func boundedResponse(to prompt: String) async throws(SmartQueryResponseError) -> ParsedQuery {
+        let responder = responderFactory()
+        let controller = SmartQueryResponseController(circuitBreaker: circuitBreaker)
+
+        let result = await withTaskCancellationHandler {
+            await withCheckedContinuation {
+                (continuation: CheckedContinuation<Result<ParsedQuery, SmartQueryResponseError>, Never>) in
+                guard controller.installContinuation(ContinuationGuard(continuation)) else {
+                    return
+                }
+
+                guard controller.startResponse({
+                    let response: Result<ParsedQuery, SmartQueryResponseError>
+                    do {
+                        response = .success(try await responder.respond(to: prompt))
+                    } catch {
+                        response = .failure(.responder(error.safeDiagnosticCode))
+                    }
+                    return response
+                }) else {
+                    return
+                }
+
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(for: .seconds(responseTimeoutSeconds))
+                    } catch {
+                        return
+                    }
+                    controller.timeOut()
+                }
+                controller.registerTimeoutTask(timeoutTask)
+            }
+        } onCancel: {
+            controller.cancel()
+        }
+
+        return try result.get()
     }
 }
 
