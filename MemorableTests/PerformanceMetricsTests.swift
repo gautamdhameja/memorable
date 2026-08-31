@@ -52,4 +52,33 @@ final class PerformanceMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.completed.count, PerformanceMetrics.completedMetricLimit)
         XCTAssertEqual(metrics.completed.first?.name, "metric-10")
     }
+
+    func testDirectDurationRecordingIsThreadSafeAndBounded() async {
+        let metrics = PerformanceMetrics()
+
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<200 {
+                group.addTask {
+                    metrics.record("concurrent-\(index)", durationSeconds: 0.01)
+                }
+            }
+        }
+
+        XCTAssertEqual(metrics.completed.count, PerformanceMetrics.completedMetricLimit)
+    }
+
+    func testMainThreadResponsivenessPolicyIgnoresHealthyScheduling() {
+        XCTAssertNil(MainThreadResponsivenessPolicy.stallDuration(
+            scheduledAt: 10,
+            observedAt: 10.05
+        ))
+        XCTAssertEqual(
+            MainThreadResponsivenessPolicy.stallDuration(
+                scheduledAt: 10,
+                observedAt: 10.25
+            ) ?? 0,
+            0.25,
+            accuracy: 0.001
+        )
+    }
 }

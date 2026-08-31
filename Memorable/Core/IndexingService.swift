@@ -6,533 +6,6 @@ import Combine
 
 private let hitFreeLimitKey = "indexing.hitFreeLimit"
 
-struct PhotoLibraryChangeDiff: Equatable, Sendable {
-    var hasNewMedia: Bool
-    var orphanedPhotoIDs: Set<String>
-    var orphanedVideoIDs: Set<String>
-
-    static func evaluate(
-        libraryPhotos: Set<String>,
-        libraryVideos: Set<String>,
-        indexedPhotos: Set<String>,
-        indexedVideos: Set<String>,
-        allowsOrphanCleanup: Bool
-    ) -> PhotoLibraryChangeDiff {
-        PhotoLibraryChangeDiff(
-            hasNewMedia: !libraryPhotos.subtracting(indexedPhotos).isEmpty
-                || !libraryVideos.subtracting(indexedVideos).isEmpty,
-            orphanedPhotoIDs: allowsOrphanCleanup
-                ? indexedPhotos.subtracting(libraryPhotos)
-                : [],
-            orphanedVideoIDs: allowsOrphanCleanup
-                ? indexedVideos.subtracting(libraryVideos)
-                : []
-        )
-    }
-}
-
-struct PhotoLibraryChangeEvent: Equatable, Sendable {
-    var insertedPhotoIDs: Set<String> = []
-    var insertedVideoIDs: Set<String> = []
-    var removedPhotoIDs: Set<String> = []
-    var removedVideoIDs: Set<String> = []
-    var requiresFullReconciliation = false
-
-    static let fullReconciliation = PhotoLibraryChangeEvent(
-        requiresFullReconciliation: true
-    )
-
-    var hasWork: Bool {
-        requiresFullReconciliation
-            || !insertedPhotoIDs.isEmpty
-            || !insertedVideoIDs.isEmpty
-            || !removedPhotoIDs.isEmpty
-            || !removedVideoIDs.isEmpty
-    }
-
-    mutating func merge(_ other: PhotoLibraryChangeEvent) {
-        requiresFullReconciliation = requiresFullReconciliation
-            || other.requiresFullReconciliation
-        for id in other.insertedPhotoIDs {
-            removedPhotoIDs.remove(id)
-            insertedPhotoIDs.insert(id)
-        }
-        for id in other.insertedVideoIDs {
-            removedVideoIDs.remove(id)
-            insertedVideoIDs.insert(id)
-        }
-        for id in other.removedPhotoIDs {
-            insertedPhotoIDs.remove(id)
-            removedPhotoIDs.insert(id)
-        }
-        for id in other.removedVideoIDs {
-            insertedVideoIDs.remove(id)
-            removedVideoIDs.insert(id)
-        }
-    }
-}
-
-struct PhotoChangeScanState: Equatable {
-    private(set) var hasPendingChange = false
-    private(set) var isScanning = false
-
-    mutating func requestScan(isIndexing: Bool) -> Bool {
-        hasPendingChange = true
-        return startPendingScanIfPossible(isIndexing: isIndexing)
-    }
-
-    mutating func startPendingScanIfPossible(isIndexing: Bool) -> Bool {
-        guard hasPendingChange, !isIndexing, !isScanning else { return false }
-        hasPendingChange = false
-        isScanning = true
-        return true
-    }
-
-    mutating func finishScan(isIndexing: Bool) -> Bool {
-        isScanning = false
-        return startPendingScanIfPossible(isIndexing: isIndexing)
-    }
-
-    mutating func cancel() {
-        hasPendingChange = false
-        isScanning = false
-    }
-}
-
-enum PhotoLibraryOrphanCleanupAuthorizationPolicy {
-    static func allowsCleanup(_ status: PHAuthorizationStatus) -> Bool {
-        status == .authorized
-    }
-}
-
-enum PhotoLibraryChangeReconciler {
-    static func reconcile(
-        _ event: PhotoLibraryChangeEvent,
-        database: DatabaseProtocol,
-        authorizationStatus: PHAuthorizationStatus
-    ) throws -> PhotoLibraryChangeDiff {
-        if event.requiresFullReconciliation {
-            return try fullReconciliation(database: database)
-        }
-
-        let indexedInsertedPhotos = try database.existingPhotoIdentifiers(
-            in: Array(event.insertedPhotoIDs)
-        )
-        let indexedInsertedVideos = try database.existingVideoIdentifiers(
-            in: Array(event.insertedVideoIDs)
-        )
-        var orphanedPhotos: Set<String> = []
-        var orphanedVideos: Set<String> = []
-        if authorizationStatus == .authorized {
-            orphanedPhotos = try database.existingPhotoIdentifiers(
-                in: Array(event.removedPhotoIDs)
-            )
-            orphanedVideos = try database.existingVideoIdentifiers(
-                in: Array(event.removedVideoIDs)
-            )
-            let indexedCount = try database.photoLibraryIndexedMediaCounts().total
-            if OrphanCleanupSafetyPolicy.exceedsSafetyThreshold(
-                candidateRemovalCount: orphanedPhotos.count + orphanedVideos.count,
-                photoLibraryIndexedCount: indexedCount
-            ) {
-                orphanedPhotos.removeAll(keepingCapacity: false)
-                orphanedVideos.removeAll(keepingCapacity: false)
-            }
-        }
-        return PhotoLibraryChangeDiff(
-            hasNewMedia: !event.insertedPhotoIDs.subtracting(indexedInsertedPhotos).isEmpty
-                || !event.insertedVideoIDs.subtracting(indexedInsertedVideos).isEmpty,
-            orphanedPhotoIDs: orphanedPhotos,
-            orphanedVideoIDs: orphanedVideos
-        )
-    }
-
-    private static func fullReconciliation(
-        database: DatabaseProtocol
-    ) throws -> PhotoLibraryChangeDiff {
-        let allMedia = PhotoLibrary.fetchAllMedia()
-        var hasNewMedia = false
-        let pageSize = SearchIndexLimits.databasePageMediaItems
-        for pageStart in stride(from: 0, to: allMedia.count, by: pageSize) {
-            try Task.checkCancellation()
-            let pageEnd = min(pageStart + pageSize, allMedia.count)
-            var photoIDs: [String] = []
-            var videoIDs: [String] = []
-            photoIDs.reserveCapacity(pageEnd - pageStart)
-            videoIDs.reserveCapacity(pageEnd - pageStart)
-            for index in pageStart..<pageEnd {
-                let asset = allMedia.object(at: index)
-                if asset.mediaType == .video {
-                    videoIDs.append(asset.localIdentifier)
-                } else {
-                    photoIDs.append(asset.localIdentifier)
-                }
-            }
-            let pageDiff = PhotoLibraryChangeDiff.evaluate(
-                libraryPhotos: Set(photoIDs),
-                libraryVideos: Set(videoIDs),
-                indexedPhotos: try database.existingPhotoIdentifiers(in: photoIDs),
-                indexedVideos: try database.existingVideoIdentifiers(in: videoIDs),
-                allowsOrphanCleanup: false
-            )
-            hasNewMedia = hasNewMedia || pageDiff.hasNewMedia
-        }
-
-        var orphanedPhotos: Set<String> = []
-        var orphanedVideos: Set<String> = []
-        if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized {
-            let indexedCount = try database.photoLibraryIndexedMediaCounts().total
-            var cursor: SearchMediaPageCursor?
-            repeat {
-                try Task.checkCancellation()
-                let page = try database.loadIndexedMediaIdentifierPage(
-                    after: cursor,
-                    limit: pageSize
-                )
-                let identifiers = page.photos + page.videos
-                guard !identifiers.isEmpty else { break }
-                let existingAssets = PHAsset.fetchAssets(
-                    withLocalIdentifiers: identifiers,
-                    options: nil
-                )
-                var existing: Set<String> = []
-                existing.reserveCapacity(existingAssets.count)
-                existingAssets.enumerateObjects { asset, _, _ in
-                    existing.insert(asset.localIdentifier)
-                }
-                let pageDiff = PhotoLibraryChangeDiff.evaluate(
-                    libraryPhotos: Set(page.photos).intersection(existing),
-                    libraryVideos: Set(page.videos).intersection(existing),
-                    indexedPhotos: Set(page.photos),
-                    indexedVideos: Set(page.videos),
-                    allowsOrphanCleanup: true
-                )
-                orphanedPhotos.formUnion(pageDiff.orphanedPhotoIDs)
-                orphanedVideos.formUnion(pageDiff.orphanedVideoIDs)
-                if OrphanCleanupSafetyPolicy.exceedsSafetyThreshold(
-                    candidateRemovalCount: orphanedPhotos.count + orphanedVideos.count,
-                    photoLibraryIndexedCount: indexedCount
-                ) {
-                    orphanedPhotos.removeAll(keepingCapacity: false)
-                    orphanedVideos.removeAll(keepingCapacity: false)
-                    break
-                }
-                cursor = page.nextCursor
-            } while cursor != nil
-        }
-        return PhotoLibraryChangeDiff(
-            hasNewMedia: hasNewMedia,
-            orphanedPhotoIDs: orphanedPhotos,
-            orphanedVideoIDs: orphanedVideos
-        )
-    }
-}
-
-enum ThermalIndexingEffect: Equatable {
-    case none
-    case cancelWork
-    case restartWork
-}
-
-struct ThermalIndexingState: Equatable {
-    var isPaused = false
-    var resumeWhenCool = false
-}
-
-enum ThermalSafetyPolicy {
-    static func shouldPause(for state: ProcessInfo.ThermalState) -> Bool {
-        state == .serious || state == .critical
-    }
-
-    static func transition(
-        from current: ThermalIndexingState,
-        thermalState: ProcessInfo.ThermalState,
-        hasActiveWork: Bool
-    ) -> (state: ThermalIndexingState, effect: ThermalIndexingEffect) {
-        if shouldPause(for: thermalState) {
-            guard current.isPaused || current.resumeWhenCool || hasActiveWork else {
-                return (current, .none)
-            }
-            return (
-                ThermalIndexingState(
-                    isPaused: true,
-                    resumeWhenCool: current.resumeWhenCool || hasActiveWork
-                ),
-                hasActiveWork ? .cancelWork : .none
-            )
-        }
-        guard current.isPaused else { return (current, .none) }
-        return (
-            ThermalIndexingState(),
-            current.resumeWhenCool ? .restartWork : .none
-        )
-    }
-}
-
-private final class NotificationObservation: @unchecked Sendable {
-    private let token: OSAllocatedUnfairLock<NSObjectProtocol?>
-
-    init(token: NSObjectProtocol) {
-        self.token = OSAllocatedUnfairLock(uncheckedState: token)
-    }
-
-    func cancel() {
-        let token = token.withLockUnchecked { stored in
-            defer { stored = nil }
-            return stored
-        }
-        if let token {
-            NotificationCenter.default.removeObserver(token)
-        }
-    }
-
-    deinit {
-        cancel()
-    }
-}
-
-enum ProRevocationOperation {
-    static func run<Result: Sendable>(
-        trim: @escaping @Sendable () throws -> Result,
-        reload: @MainActor @escaping (Result) async -> Void
-    ) async throws {
-        let trimTask = Task.detached(priority: .userInitiated) {
-            try Task.checkCancellation()
-            return try trim()
-        }
-        let result = try await withTaskCancellationHandler {
-            try await trimTask.value
-        } onCancel: {
-            trimTask.cancel()
-        }
-        try Task.checkCancellation()
-        await reload(result)
-    }
-}
-
-@MainActor
-enum IndexingStorageMutation {
-    static func run(
-        waitForIdle: () async -> Void,
-        mutation: @escaping @Sendable () throws -> Void,
-        completion: () async throws -> Void
-    ) async throws {
-        await waitForIdle()
-        try Task.checkCancellation()
-        try await CancellableDetachedOperation.run(priority: .userInitiated, mutation)
-        try Task.checkCancellation()
-        try await completion()
-    }
-}
-
-enum PhotoEnrichmentTask {
-    static func run<Value: Sendable>(
-        _ operation: @escaping @Sendable () async -> Value
-    ) async -> Value? {
-        let task = Task.detached(priority: .utility) { () -> Value? in
-            guard !Task.isCancelled else { return nil }
-            let value = await operation()
-            guard !Task.isCancelled else { return nil }
-            return value
-        }
-        let value = await withTaskCancellationHandler {
-            await task.value
-        } onCancel: {
-            task.cancel()
-        }
-        return Task.isCancelled ? nil : value
-    }
-}
-
-@MainActor
-enum ProFolderIndexingOperation {
-    static func run(
-        isEntitled: () -> Bool,
-        operation: () async -> FolderIndexingOutcome
-    ) async -> IndexingJobOutcome {
-        guard isEntitled() else { return .cancelled }
-        switch await operation() {
-        case .completed, .completedWithWarnings:
-            return Task.isCancelled ? .cancelled : .completed
-        case .failed, .cancelled:
-            return .cancelled
-        }
-    }
-}
-
-enum SavedFolderReindexPolicy {
-    static func sourcesToReindex(
-        from sources: [PhotoSource],
-        isPro: Bool
-    ) -> [PhotoSource] {
-        guard isPro else { return [] }
-        return sources.filter {
-            $0.type == PhotoSourceType.folder.rawValue && $0.lastIndexedAt == nil
-        }
-    }
-}
-
-enum OrphanCleanupSafetyPolicy {
-    static func orphanRatio(
-        candidateRemovalCount: Int,
-        photoLibraryIndexedCount: Int
-    ) -> Double {
-        Double(candidateRemovalCount) / Double(max(photoLibraryIndexedCount, 1))
-    }
-
-    static func exceedsSafetyThreshold(
-        candidateRemovalCount: Int,
-        photoLibraryIndexedCount: Int
-    ) -> Bool {
-        orphanRatio(
-            candidateRemovalCount: candidateRemovalCount,
-            photoLibraryIndexedCount: photoLibraryIndexedCount
-        ) > IndexingConfig.maxOrphanRatio
-    }
-}
-
-enum ProUnlockIndexingRecoveryPolicy {
-    static func shouldStartLibraryIndexing(
-        isMemoryPressureSuspended: Bool,
-        hasLibraryIndexingWork: Bool
-    ) -> Bool {
-        !isMemoryPressureSuspended && !hasLibraryIndexingWork
-    }
-}
-
-protocol PhotoChangeObservationRegistrar: AnyObject {
-    func register(_ observer: PHPhotoLibraryChangeObserver)
-    func unregister(_ observer: PHPhotoLibraryChangeObserver)
-}
-
-private final class SystemPhotoChangeObservationRegistrar: PhotoChangeObservationRegistrar {
-    func register(_ observer: PHPhotoLibraryChangeObserver) {
-        PHPhotoLibrary.shared().register(observer)
-    }
-
-    func unregister(_ observer: PHPhotoLibraryChangeObserver) {
-        PHPhotoLibrary.shared().unregisterChangeObserver(observer)
-    }
-}
-
-final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
-    private let callback = OSAllocatedUnfairLock<(@MainActor @Sendable (PhotoLibraryChangeEvent) -> Void)?>(
-        initialState: nil
-    )
-    private let observing = OSAllocatedUnfairLock(initialState: false)
-    private let fetchResult = OSAllocatedUnfairLock<PHFetchResult<PHAsset>?>(
-        initialState: nil
-    )
-    private let registrar: PhotoChangeObservationRegistrar
-
-    override convenience init() {
-        self.init(registrar: SystemPhotoChangeObservationRegistrar())
-    }
-
-    init(registrar: PhotoChangeObservationRegistrar) {
-        self.registrar = registrar
-        super.init()
-    }
-
-    var onPhotoLibraryChange: (@MainActor @Sendable (PhotoLibraryChangeEvent) -> Void)? {
-        get { callback.withLock { $0 } }
-        set { callback.withLock { $0 = newValue } }
-    }
-
-    func startObserving() {
-        let shouldRegister = observing.withLock { isObserving in
-            guard !isObserving else { return false }
-            isObserving = true
-            return true
-        }
-        guard shouldRegister else { return }
-        registrar.register(self)
-        fetchResult.withLock { $0 = PhotoLibrary.fetchAllMedia() }
-    }
-
-    func stopObserving() {
-        let shouldUnregister = observing.withLock { isObserving in
-            guard isObserving else { return false }
-            isObserving = false
-            return true
-        }
-        callback.withLock { $0 = nil }
-        fetchResult.withLock { $0 = nil }
-        guard shouldUnregister else { return }
-        registrar.unregister(self)
-    }
-
-    func photoLibraryDidChange(_ changeInstance: PHChange) {
-        let event = fetchResult.withLock { storedResult -> PhotoLibraryChangeEvent in
-            guard let beforeChanges = storedResult,
-                  let details = changeInstance.changeDetails(for: beforeChanges) else {
-                storedResult = PhotoLibrary.fetchAllMedia()
-                return .fullReconciliation
-            }
-            storedResult = details.fetchResultAfterChanges
-            guard details.hasIncrementalChanges else {
-                return .fullReconciliation
-            }
-            var event = PhotoLibraryChangeEvent()
-            for asset in details.insertedObjects {
-                if asset.mediaType == .video {
-                    event.insertedVideoIDs.insert(asset.localIdentifier)
-                } else {
-                    event.insertedPhotoIDs.insert(asset.localIdentifier)
-                }
-            }
-            for asset in details.removedObjects {
-                if asset.mediaType == .video {
-                    event.removedVideoIDs.insert(asset.localIdentifier)
-                } else {
-                    event.removedPhotoIDs.insert(asset.localIdentifier)
-                }
-            }
-            return event
-        }
-        guard event.hasWork else { return }
-        enqueueDelivery(event)
-    }
-
-    func enqueueDelivery(_ event: PhotoLibraryChangeEvent) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self,
-                  self.observing.withLock({ $0 }),
-                  let callback = self.callback.withLock({ $0 }) else { return }
-            callback(event)
-        }
-    }
-
-    deinit {
-        stopObserving()
-    }
-}
-
-struct IndexingBatchCursor<Item> {
-    private let items: [Item]
-    private let batchSize: Int
-    private var nextIndex = 0
-
-    init(items: [Item], batchSize: Int) {
-        self.items = items
-        self.batchSize = max(1, batchSize)
-    }
-
-    var hasRemaining: Bool {
-        nextIndex < items.count
-    }
-
-    mutating func nextBatch(maxCount: Int? = nil) -> [Item] {
-        guard hasRemaining else { return [] }
-        let requestedCount = maxCount.map { min(batchSize, max(0, $0)) } ?? batchSize
-        guard requestedCount > 0 else { return [] }
-        let batchEnd = min(nextIndex + requestedCount, items.count)
-        let batch = Array(items[nextIndex..<batchEnd])
-        nextIndex = batchEnd
-        return batch
-    }
-}
-
 @MainActor
 class IndexingService: ObservableObject {
     @Published var progress = IndexingProgress(total: 0, completed: 0, isRunning: false) {
@@ -591,11 +64,10 @@ class IndexingService: ObservableObject {
     private let changeObserver = PhotoChangeObserver()
     private let batchSize = IndexingConfig.batchInsertSize
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
-    private let reverseGeocoder = ReverseGeocoder()
+    private let geocodingWorker: GeocodingWorker
     private let jobQueue = IndexingJobQueue()
     private var librarySession: PhotoLibraryIndexingWorker.Session?
     private var isObservingPhotoChanges = false
-    private var launchLibraryCountSnapshot: Int?
     private var photoChangeCheckTask: Task<Void, Never>?
     private var photoChangeScanState = PhotoChangeScanState()
     private var pendingPhotoLibraryChange = PhotoLibraryChangeEvent()
@@ -649,6 +121,10 @@ class IndexingService: ObservableObject {
         self.imageEncoder = imageEncoder
         self.searchEngine = searchEngine
         self.database = database
+        self.geocodingWorker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder()
+        )
         let token = NotificationCenter.default.addObserver(
             forName: ProcessInfo.thermalStateDidChangeNotification,
             object: nil,
@@ -673,21 +149,25 @@ class IndexingService: ObservableObject {
     @discardableResult
     func checkAndLoadExistingIndex(
         scheduleAutoResume: Bool = true,
-        cleanOrphans: Bool = true,
+        scheduleOrphanCleanup: Bool = true,
         loadPriority: TaskPriority = .utility
     ) async -> Bool {
         #if DEBUG
-        logger.info("[IndexingService] checkAndLoadExistingIndex start scheduleAutoResume=\(scheduleAutoResume), cleanOrphans=\(cleanOrphans), priority=\(String(describing: loadPriority))")
+        logger.info("[IndexingService] checkAndLoadExistingIndex start scheduleAutoResume=\(scheduleAutoResume), scheduleOrphanCleanup=\(scheduleOrphanCleanup), priority=\(String(describing: loadPriority))")
         #endif
-        let loaded = await loadExistingIndexIfAvailable(cleanOrphans: cleanOrphans, loadPriority: loadPriority)
+        let loaded = await loadExistingIndexIfAvailable(loadPriority: loadPriority)
         guard !Task.isCancelled else { return false }
         startObservingPhotoChanges()
         if scheduleAutoResume && loaded {
             enqueueLibraryIndexing(
-                autoResumeLibraryCount: launchLibraryCountSnapshot,
                 isAutoResume: true,
                 delayAfterDependencies: IndexingConfig.postLaunchAutoResumeDelaySeconds,
                 enqueueLaunchEnrichment: true
+            )
+        }
+        if scheduleOrphanCleanup && loaded {
+            enqueueOrphanCleanup(
+                delayAfterDependencies: IndexingConfig.postLaunchAutoResumeDelaySeconds
             )
         }
         #if DEBUG
@@ -697,10 +177,10 @@ class IndexingService: ObservableObject {
     }
 
     @discardableResult
-    func loadExistingIndexIfAvailable(cleanOrphans: Bool = false, loadPriority: TaskPriority = .utility) async -> Bool {
+    func loadExistingIndexIfAvailable(loadPriority: TaskPriority = .utility) async -> Bool {
         do {
             #if DEBUG
-            logger.info("[IndexingService] loadExistingIndexIfAvailable start cleanOrphans=\(cleanOrphans), priority=\(String(describing: loadPriority))")
+            logger.info("[IndexingService] loadExistingIndexIfAvailable start priority=\(String(describing: loadPriority))")
             #endif
             let db = database
             let rebuildRequired = try await CancellableDetachedOperation.run(priority: loadPriority) {
@@ -726,15 +206,6 @@ class IndexingService: ObservableObject {
                 #if DEBUG
                 logger.info("[IndexingService] Found \(photoCount) indexed photos and \(videoCount) indexed videos, loading index")
                 #endif
-
-                if cleanOrphans {
-                    let allMedia = try await CancellableDetachedOperation.run(priority: loadPriority) {
-                        PhotoLibrary.fetchAllMedia()
-                    }
-                    launchLibraryCountSnapshot = allMedia.count
-                    await enqueueAndWaitForOrphanCleanup()
-                    try Task.checkCancellation()
-                }
 
                 let didLoad = try await CancellableDetachedOperation.run(priority: loadPriority) { [searchEngine] in
                     try searchEngine.loadIndex()
@@ -831,13 +302,41 @@ class IndexingService: ObservableObject {
         }
     }
 
-    func deferEnrichmentForUserSearch() {
-        guard jobQueue.contains(.enrichPhotos) else { return }
-        jobQueue.cancel(.enrichPhotos)
-        enqueueEnrichment(
-            workflowID: UUID(),
-            delayAfterDependencies: IndexingConfig.surpriseValidationDelaySeconds
-        )
+    func prioritizeUserSearch() {
+        if jobQueue.contains(.validateSurpriseQueries) {
+            jobQueue.cancel(.validateSurpriseQueries)
+            enqueueSurpriseQueryValidation(
+                workflowID: UUID(),
+                delayAfterDependencies: IndexingConfig.userSearchBackgroundWorkDelaySeconds,
+                replacingCancelledJob: true
+            )
+        }
+
+        if jobQueue.contains(.enrichPhotos) {
+            jobQueue.cancel(.enrichPhotos)
+            enqueueEnrichment(
+                workflowID: UUID(),
+                delayAfterDependencies: IndexingConfig.userSearchBackgroundWorkDelaySeconds
+            )
+        }
+
+        if jobQueue.contains(.geocodeMedia) {
+            jobQueue.cancel(.geocodeMedia)
+            geocodingProgress = nil
+            enqueueGeocoding(
+                workflowID: UUID(),
+                delayAfterDependencies: IndexingConfig.userSearchBackgroundWorkDelaySeconds,
+                replacingCancelledJob: true
+            )
+        }
+
+        if jobQueue.contains(.cleanOrphans) {
+            jobQueue.cancel(.cleanOrphans)
+            enqueueOrphanCleanup(
+                delayAfterDependencies: IndexingConfig.userSearchBackgroundWorkDelaySeconds,
+                replacingCancelledJob: true
+            )
+        }
     }
 
     func cancelAllWorkForMemoryPressure() {
@@ -975,6 +474,7 @@ class IndexingService: ObservableObject {
                 waitForIdle: { await self.jobQueue.waitUntilIdle() },
                 mutation: { try db.resetIndexedMedia() },
                 completion: {
+                    self.indexRebuildRequired = true
                     self.searchEngine.dropIndex()
                     self.isReady = false
                     self.onIndexUnavailable?()
@@ -1394,18 +894,39 @@ class IndexingService: ObservableObject {
     private func enqueuePostIndexingJobs(workflowID: UUID) {
         jobQueue.cancel(.enrichPhotos)
         enqueueEnrichment(workflowID: workflowID, dependencies: [.indexVideos])
+        enqueueSurpriseQueryValidation(
+            workflowID: workflowID,
+            dependencies: [.indexVideos],
+            delayAfterDependencies: IndexingConfig.surpriseValidationDelaySeconds
+        )
+        enqueueGeocoding(workflowID: workflowID, dependencies: [.indexVideos])
+    }
+
+    private func enqueueSurpriseQueryValidation(
+        workflowID: UUID,
+        dependencies: Set<IndexingJobKind> = [],
+        delayAfterDependencies: TimeInterval = 0,
+        replacingCancelledJob: Bool = false
+    ) {
+        guard replacingCancelledJob || !jobQueue.contains(.validateSurpriseQueries) else { return }
         jobQueue.enqueue(IndexingJob(
             workflowID: workflowID,
             kind: .validateSurpriseQueries,
             priority: .maintenance,
-            dependencies: [.indexVideos],
-            delayAfterDependencies: IndexingConfig.surpriseValidationDelaySeconds
+            dependencies: dependencies,
+            delayAfterDependencies: delayAfterDependencies
         ) { [weak self] in
             guard let self, self.searchEngine.isIndexLoaded else { return .cancelled }
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            defer {
+                PerformanceMetrics.shared.record(
+                    PerformancePhase.surpriseValidation,
+                    durationSeconds: CFAbsoluteTimeGetCurrent() - startedAt
+                )
+            }
             await SurpriseQueries.validateQueries(using: self.searchEngine)
             return Task.isCancelled ? .cancelled : .completed
         })
-        enqueueGeocoding(workflowID: workflowID, dependencies: [.indexVideos])
     }
 
     private func enqueueSavedFolderReindexingIfNeeded() async {
@@ -1531,14 +1052,17 @@ class IndexingService: ObservableObject {
 
     private func enqueueGeocoding(
         workflowID: UUID,
-        dependencies: Set<IndexingJobKind> = []
+        dependencies: Set<IndexingJobKind> = [],
+        delayAfterDependencies: TimeInterval = 0,
+        replacingCancelledJob: Bool = false
     ) {
-        guard !jobQueue.contains(.geocodeMedia) else { return }
+        guard replacingCancelledJob || !jobQueue.contains(.geocodeMedia) else { return }
         jobQueue.enqueue(IndexingJob(
             workflowID: workflowID,
             kind: .geocodeMedia,
             priority: .background,
-            dependencies: dependencies
+            dependencies: dependencies,
+            delayAfterDependencies: delayAfterDependencies
         ) { [weak self] in
             guard let self else { return .cancelled }
             await self.geocodeIndexedMedia()
@@ -1546,18 +1070,23 @@ class IndexingService: ObservableObject {
         })
     }
 
-    private func enqueueAndWaitForOrphanCleanup() async {
-        let workflowID = UUID()
+    private func enqueueOrphanCleanup(
+        delayAfterDependencies: TimeInterval = 0,
+        replacingCancelledJob: Bool = false
+    ) {
+        guard replacingCancelledJob || !jobQueue.contains(.cleanOrphans) else { return }
         jobQueue.enqueue(IndexingJob(
-            workflowID: workflowID,
+            workflowID: UUID(),
             kind: .cleanOrphans,
-            priority: .maintenance
+            priority: .maintenance,
+            delayAfterDependencies: delayAfterDependencies
         ) { [weak self] in
             guard let self else { return .cancelled }
-            await self.cleanOrphanedEmbeddings()
-            return Task.isCancelled ? .cancelled : .completed
+            let removedOrphans = await self.cleanOrphanedEmbeddings()
+            guard !Task.isCancelled else { return .cancelled }
+            guard removedOrphans else { return .completed }
+            return await self.reloadSearchIndex() ? .completed : .cancelled
         })
-        await jobQueue.waitUntilIdle()
     }
 
     private func enqueueLightweightOrphanCleanup(
@@ -1605,7 +1134,21 @@ class IndexingService: ObservableObject {
 
     /// Checks whether interrupted indexing should resume after launch.
     private func autoResumeDecision(totalInLibrary providedTotal: Int? = nil) async -> AutoResumeDecision {
-        let totalInLibrary = providedTotal ?? PhotoLibrary.fetchAllMedia().count
+        let totalInLibrary: Int
+        if let providedTotal {
+            totalInLibrary = providedTotal
+        } else {
+            do {
+                totalInLibrary = try await CancellableDetachedOperation.run(priority: .utility) {
+                    PhotoLibrary.fetchAllMedia().count
+                }
+            } catch is CancellationError {
+                return .noIndex
+            } catch {
+                logger.error("Failed to read photo library size: \(error.safeDiagnosticCode)")
+                return .noIndex
+            }
+        }
 
         let counts: IndexedMediaCounts
         do {
@@ -1763,12 +1306,17 @@ class IndexingService: ObservableObject {
             await SceneClassifier.classify(image: image)
         }
         guard let sceneLabels, !Task.isCancelled else { return nil }
+        let encodedSceneLabels = SceneClassifier.labelsToString(sceneLabels)
 
         return PhotoEnrichmentUpdate(
             localIdentifier: candidate.localIdentifier,
             ocrText: ocrText,
             sharpnessScore: sharpness,
-            sceneLabels: SceneClassifier.labelsToString(sceneLabels)
+            sceneLabels: encodedSceneLabels,
+            isDocumentImage: MemoryContentPolicy.isDocumentImage(
+                ocrText: ocrText,
+                sceneLabels: encodedSceneLabels
+            )
         )
     }
 
@@ -1786,7 +1334,7 @@ class IndexingService: ObservableObject {
                 )
             }
         }
-        guard let asset = PhotoLibrary.getAsset(by: candidate.localIdentifier) else {
+        guard let asset = await PhotoLibrary.resolveAsset(by: candidate.localIdentifier) else {
             return nil
         }
         if highQuality {
@@ -1821,7 +1369,7 @@ class IndexingService: ObservableObject {
 
     // MARK: - Orphan Cleanup
 
-    private func cleanOrphanedEmbeddings() async {
+    private func cleanOrphanedEmbeddings() async -> Bool {
         do {
             guard PhotoLibraryOrphanCleanupAuthorizationPolicy.allowsCleanup(
                 PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -1829,7 +1377,7 @@ class IndexingService: ObservableObject {
                 #if DEBUG
                 logger.info("[IndexingService] Skipping orphan cleanup without full Photos access")
                 #endif
-                return
+                return false
             }
             let db = database
             let scanTask = Task.detached(priority: .utility) {
@@ -1874,11 +1422,11 @@ class IndexingService: ObservableObject {
             try Task.checkCancellation()
             if exceededSafetyThreshold {
                 logger.warning("Orphan cleanup skipped: candidate removals exceed the 20% safety threshold")
-                return
+                return false
             }
 
             let totalOrphans = orphanedPhotos.count + orphanedVideos.count
-            guard totalOrphans > 0 else { return }
+            guard totalOrphans > 0 else { return false }
 
             // Safety: never auto-delete when more than 20% appear orphaned.
             // A large mismatch can reflect a transient PhotoKit visibility issue.
@@ -1891,7 +1439,7 @@ class IndexingService: ObservableObject {
             )
             if orphanRatio > IndexingConfig.maxOrphanRatio {
                 logger.warning("Orphan cleanup skipped: \(totalOrphans)/\(photoLibraryIndexedCount) (\(Int(orphanRatio * 100))%) exceeds 20% threshold")
-                return
+                return false
             }
 
             // Delete orphaned photos
@@ -1927,10 +1475,12 @@ class IndexingService: ObservableObject {
                 logger.info("Cleaned \(videoDeleteCount) orphaned video embeddings")
                 #endif
             }
+            return true
         } catch is CancellationError {
-            return
+            return false
         } catch {
             logger.error("Orphan cleanup failed: \(error.safeDiagnosticCode)")
+            return false
         }
     }
 
@@ -1939,160 +1489,26 @@ class IndexingService: ObservableObject {
     /// Reverse-geocodes indexed photos and videos that have GPS but no location strings yet.
     /// Runs in the background after indexing completes without blocking search.
     private func geocodeIndexedMedia() async {
-        // Absolute (library-wide) figures so the progress indicator reflects
-        // total geocoding progress across the library, not just work remaining
-        // in this session. Without this, the bar appears to reset to 0 on
-        // every launch even though prior sessions already did most of the work.
-        let db = database
-        let counts: GeocodingCounts
-        do {
-            counts = try await CancellableDetachedOperation.run {
-                try db.geocodingCounts()
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer {
+            PerformanceMetrics.shared.record(
+                PerformancePhase.postIndexGeocoding,
+                durationSeconds: CFAbsoluteTimeGetCurrent() - startedAt
+            )
+        }
+        let result = await geocodingWorker.run { [weak self] progress in
+            self?.geocodingProgress = progress.map {
+                (completed: $0.completed, total: $0.total)
             }
-        } catch is CancellationError {
-            geocodingProgress = nil
-            return
-        } catch {
-            logger.error("[Geocoder] Failed to load geocoding counts: \(error.safeDiagnosticCode)")
+        }
+        if result.wasCancelled {
             geocodingProgress = nil
             return
         }
-        let totalWithGPS = counts.totalWithGPS
-        let remainingAtStart = counts.remaining
-        let alreadyGeocoded = max(0, totalWithGPS - remainingAtStart)
-
-        #if DEBUG
-        logger.info("[Geocoder] Starting: \(remainingAtStart) / \(totalWithGPS) remaining out of GPS-tagged media (\(counts.indexedPhotos) photos + \(counts.indexedVideos) videos indexed)")
-        #endif
-
-        if remainingAtStart > 0 {
-            geocodingProgress = (completed: alreadyGeocoded, total: totalWithGPS)
-        }
-
-        let photoResult = await geocodeMediaSource(
-            label: "photos",
-            progressBase: alreadyGeocoded,
-            fetchBatch: {
-                try await CancellableDetachedOperation.run {
-                    try db.photosNeedingLocationBackfill(limit: 500)
-                }
-            },
-            updateLocation: { localIdentifier, location in
-                try await CancellableDetachedOperation.run {
-                    try db.updatePhotoLocationStrings(
-                        localIdentifier: localIdentifier,
-                        city: location.city,
-                        state: location.state,
-                        country: location.country,
-                        name: location.name
-                    )
-                }
-            }
-        )
-        if photoResult.cancelled { return }
-
-        let videoResult = await geocodeMediaSource(
-            label: "videos",
-            progressBase: alreadyGeocoded + photoResult.completed,
-            fetchBatch: {
-                try await CancellableDetachedOperation.run {
-                    try db.videosNeedingLocationBackfill(limit: 500)
-                }
-            },
-            updateLocation: { localIdentifier, location in
-                try await CancellableDetachedOperation.run {
-                    try db.updateVideoLocationStrings(
-                        localIdentifier: localIdentifier,
-                        city: location.city,
-                        state: location.state,
-                        country: location.country,
-                        name: location.name
-                    )
-                }
-            }
-        )
-        if videoResult.cancelled { return }
-        let totalGeocoded = photoResult.completed + videoResult.completed
-
-        #if DEBUG
-        logger.info("[Geocoder] Completed: \(totalGeocoded) media items geocoded")
-        #endif
-        if totalGeocoded > 0 {
+        if result.changedLocations {
             _ = await reloadSearchIndex()
         }
         geocodingProgress = nil
-    }
-
-    private func geocodeMediaSource(
-        label: String,
-        progressBase: Int,
-        fetchBatch: () async throws -> [(localIdentifier: String, lat: Double, lon: Double)],
-        updateLocation: (String, LocationStrings) async throws -> Void
-    ) async -> (completed: Int, cancelled: Bool) {
-        var completed = 0
-        // Avoid retry loops within one run. Failed coordinates and database
-        // writes remain eligible on the next app launch.
-        var failedIdentifiers = Set<String>()
-
-        while true {
-            let batch: [(localIdentifier: String, lat: Double, lon: Double)]
-            do {
-                batch = try await fetchBatch()
-            } catch is CancellationError {
-                return (completed, true)
-            } catch {
-                logger.error("[Geocoder] Failed to fetch \(label) backfill batch: \(error.safeDiagnosticCode)")
-                break
-            }
-            if batch.isEmpty { break }
-
-            let actionable = batch.filter {
-                !failedIdentifiers.contains($0.localIdentifier)
-            }
-            if actionable.isEmpty { break }
-
-            for candidate in actionable {
-                if Task.isCancelled { return (completed, true) }
-                guard let location = await reverseGeocoder.reverseGeocode(
-                    latitude: candidate.lat,
-                    longitude: candidate.lon
-                ) else {
-                    failedIdentifiers.insert(candidate.localIdentifier)
-                    continue
-                }
-
-                do {
-                    try await updateLocation(candidate.localIdentifier, location)
-                    try Task.checkCancellation()
-                } catch is CancellationError {
-                    return (completed, true)
-                } catch {
-                    failedIdentifiers.insert(candidate.localIdentifier)
-                    logger.error("[Geocoder] Failed to update a \(label) location: \(error.safeDiagnosticCode)")
-                    continue
-                }
-
-                completed += 1
-                if let current = geocodingProgress {
-                    geocodingProgress = (
-                        completed: progressBase + completed,
-                        total: current.total
-                    )
-                }
-
-                #if DEBUG
-                if completed <= 5 || completed % 50 == 0 {
-                    logger.info("[Geocoder] Completed \(label) item #\(completed)")
-                }
-                #endif
-            }
-
-            #if DEBUG
-            logger.info("[Geocoder] \(label) progress: \(completed) geocoded, \(failedIdentifiers.count) failed")
-            #endif
-        }
-
-        return (completed, false)
     }
 
 }

@@ -33,9 +33,21 @@ struct ContentView: View {
         }
         .preferredColorScheme(.dark)
         .task(id: onboardingComplete) {
-            await initializeIfNeeded()
+            if onboardingComplete {
+                await initializeIfNeeded()
+            } else {
+                // Let the first onboarding frame paint before Core ML begins
+                // loading the bundled models in the background.
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                updateOnboardingModelPrewarm(for: scenePhase)
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
+            if !onboardingComplete {
+                updateOnboardingModelPrewarm(for: newPhase)
+                return
+            }
             guard newPhase == .active, onboardingComplete else { return }
             Task { await appState.refreshPhotoAuthorization() }
         }
@@ -135,6 +147,20 @@ struct ContentView: View {
         guard onboardingComplete else { return }
         if !appState.readiness.isShellReady && appState.errorMessage == nil {
             await appState.initialize()
+        }
+    }
+
+    private func updateOnboardingModelPrewarm(for phase: ScenePhase) {
+        switch OnboardingModelPrewarmPolicy.action(
+            onboardingComplete: onboardingComplete,
+            sceneIsActive: phase == .active
+        ) {
+        case .start:
+            appState.startOnboardingModelPrewarm()
+        case .cancel:
+            appState.cancelOnboardingModelPrewarm()
+        case .none:
+            break
         }
     }
 }

@@ -4,6 +4,35 @@ import os
 @testable import Memorable
 
 final class IndexingPolicyTests: XCTestCase {
+    func testIndexingProgressPublisherThrottlesIntermediateUpdatesButPublishesCompletion() {
+        var publisher = IndexingProgressPublisher()
+        var published: [Int] = []
+        let record: (IndexingProgress) -> Void = { published.append($0.completed) }
+
+        publisher.publish(
+            IndexingProgress(total: 100, completed: 0, isRunning: true, phase: .photos),
+            now: 1,
+            using: record
+        )
+        publisher.publish(
+            IndexingProgress(total: 100, completed: 1, isRunning: true, phase: .photos),
+            now: 1.1,
+            using: record
+        )
+        publisher.publish(
+            IndexingProgress(total: 100, completed: 2, isRunning: true, phase: .photos),
+            now: 1.3,
+            using: record
+        )
+        publisher.publish(
+            IndexingProgress(total: 100, completed: 2, isRunning: false, phase: .photos),
+            now: 1.31,
+            using: record
+        )
+
+        XCTAssertEqual(published, [0, 2, 2])
+    }
+
     func testIncrementalPhotoChangeReconcilerHandlesSameCountReplacement() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },
@@ -667,6 +696,18 @@ final class IndexingPolicyTests: XCTestCase {
     func testAutomaticBackgroundWorkUsesPostLaunchDeferral() {
         XCTAssertGreaterThan(IndexingConfig.postLaunchAutoResumeDelaySeconds, 0)
         XCTAssertGreaterThan(IndexingConfig.surpriseValidationDelaySeconds, 0)
+        XCTAssertGreaterThan(IndexingConfig.userSearchBackgroundWorkDelaySeconds, 0)
+        XCTAssertGreaterThan(IndexingConfig.geocodingProgressPublishIntervalSeconds, 0)
+    }
+
+    func testGeocodingProgressPublicationIsThrottled() {
+        XCTAssertFalse(GeocodingProgressPublicationPolicy.shouldPublish(elapsed: 0))
+        XCTAssertFalse(GeocodingProgressPublicationPolicy.shouldPublish(
+            elapsed: IndexingConfig.geocodingProgressPublishIntervalSeconds / 2
+        ))
+        XCTAssertTrue(GeocodingProgressPublicationPolicy.shouldPublish(
+            elapsed: IndexingConfig.geocodingProgressPublishIntervalSeconds
+        ))
     }
 
     @MainActor
@@ -779,6 +820,38 @@ final class IndexingPolicyTests: XCTestCase {
 
         XCTAssertNil(progress.itemsPerSecond)
         XCTAssertNil(progress.estimatedSecondsRemaining)
+    }
+
+    func testSearchSuggestionsStayHiddenUntilVideoIndexingFinishes() {
+        let videoProgress = IndexingProgress(
+            total: 100,
+            completed: 80,
+            isRunning: true,
+            phase: .videos,
+            photosComplete: true,
+            searchableCount: 70
+        )
+        let idleProgress = IndexingProgress(
+            total: 100,
+            completed: 100,
+            isRunning: false,
+            phase: .idle,
+            photosComplete: true,
+            searchableCount: 100
+        )
+
+        XCTAssertFalse(SearchSuggestionVisibilityPolicy.shouldShow(
+            indexingProgress: videoProgress,
+            isReady: true
+        ))
+        XCTAssertTrue(SearchSuggestionVisibilityPolicy.shouldShow(
+            indexingProgress: idleProgress,
+            isReady: true
+        ))
+        XCTAssertFalse(SearchSuggestionVisibilityPolicy.shouldShow(
+            indexingProgress: idleProgress,
+            isReady: false
+        ))
     }
 }
 

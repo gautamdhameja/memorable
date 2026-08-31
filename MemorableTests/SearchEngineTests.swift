@@ -106,6 +106,27 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(response.results.last?.id, "photo-0025")
     }
 
+    func testAsyncSearchPassesItsPreparedEmbeddingDirectlyIntoRanking() async throws {
+        let encoder = CountingTextEncoder(embedding: floatVector(first: 1))
+        let engine = SearchEngine(
+            textEncoder: encoder,
+            database: SearchFixtureDatabase(photos: [
+                FixturePhoto(
+                    id: "photo-1",
+                    localIdentifier: "local-photo-1",
+                    date: nil,
+                    embedding: float16Vector(first: 1)
+                )
+            ])
+        )
+
+        try engine.loadIndex()
+        let response = try await engine.search(query: "dog", featurePolicy: .basic)
+
+        XCTAssertEqual(response.results.map(\.id), ["photo-1"])
+        XCTAssertEqual(encoder.encodeCount, 1)
+    }
+
     func testSearchRejectsShortQueryEmbeddingBeforeSimilarityScoring() throws {
         let engine = SearchEngine(
             textEncoder: FakeTextEncoder(["dog": [1]]),
@@ -188,7 +209,7 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(engine.indexSize, 1)
     }
 
-    func testConcurrentSearchWaitsForBoundedReloadAndUsesReplacement() async throws {
+    func testSearchContinuesUsingOldSnapshotWhileReplacementLoads() async throws {
         let loadGate = ManualResetLoadGate()
         let database = SearchFixtureDatabase(
             photos: [
@@ -202,11 +223,10 @@ final class SearchEngineTests: XCTestCase {
             photoLoadGate: loadGate,
             gatedPhotoLoadNumber: 2
         )
-        let scorer = BlockingSimilaritySearch()
         let engine = SearchEngine(
             textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
             database: database,
-            photoSimilaritySearch: scorer
+            photoSimilaritySearch: RecordingSimilaritySearch()
         )
         try engine.loadIndex()
         XCTAssertEqual(engine.indexSize, 1)
@@ -238,34 +258,30 @@ final class SearchEngineTests: XCTestCase {
             SearchIndexMemoryState(
                 reloadPhase: .loadingResidentData,
                 residentMediaCount: 1,
-                ownsPhotoAccelerator: false,
+                ownsPhotoAccelerator: true,
                 ownsVideoAccelerator: false
             )
         )
 
-        let queryHints = hints(text: "dog")
-        let search = Task.detached {
-            try engine.hybridSearch(hints: queryHints)
-        }
         XCTAssertEqual(
-            scorer.searchStarted.wait(timeout: .now() + 0.05),
-            .timedOut,
-            "A search must not retain the old snapshot during replacement construction"
+            try engine.hybridSearch(hints: hints(text: "dog")).results.map(\.id),
+            ["photo-1"],
+            "A replacement load must not block or partially mutate the serving snapshot"
         )
 
         loadGate.open()
         try await reload.value
-        XCTAssertEqual(scorer.searchStarted.wait(timeout: .now() + 1), .success)
-        scorer.resumeSearch.signal()
-        let response = try await search.value
 
         XCTAssertEqual(engine.indexSize, 1)
-        XCTAssertEqual(response.results.map(\.id), ["photo-2"])
+        XCTAssertEqual(
+            try engine.hybridSearch(hints: hints(text: "dog")).results.map(\.id),
+            ["photo-2"]
+        )
         XCTAssertEqual(engine.indexMemoryState.reloadPhase, .idle)
         XCTAssertTrue(engine.indexMemoryState.ownsPhotoAccelerator)
     }
 
-    func testReloadDrainsActiveSearchBeforeRetiringAccelerator() async throws {
+    func testReloadDoesNotRetireAcceleratorBeforeReplacementDataIsReady() async throws {
         let loadGate = ManualResetLoadGate()
         let database = SearchFixtureDatabase(
             photos: [
@@ -287,26 +303,10 @@ final class SearchEngineTests: XCTestCase {
         )
         try engine.loadIndex()
 
-        let queryHints = hints(text: "dog")
-        let search = Task.detached {
-            try engine.hybridSearch(hints: queryHints)
-        }
-        XCTAssertEqual(scorer.searchStarted.wait(timeout: .now() + 1), .success)
-
         let reload = Task.detached { try engine.loadIndex() }
-        XCTAssertEqual(
-            loadGate.started.wait(timeout: .now() + 0.05),
-            .timedOut,
-            "Replacement allocation must wait for the active snapshot reader"
-        )
-        XCTAssertEqual(engine.indexMemoryState.reloadPhase, .idle)
-        XCTAssertTrue(engine.indexMemoryState.ownsPhotoAccelerator)
-
-        scorer.resumeSearch.signal()
-        _ = try await search.value
         XCTAssertEqual(loadGate.started.wait(timeout: .now() + 1), .success)
         XCTAssertEqual(engine.indexMemoryState.reloadPhase, .loadingResidentData)
-        XCTAssertFalse(engine.indexMemoryState.ownsPhotoAccelerator)
+        XCTAssertTrue(engine.indexMemoryState.ownsPhotoAccelerator)
 
         loadGate.open()
         try await reload.value
@@ -342,9 +342,9 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertTrue(engine.isIndexLoaded)
         XCTAssertEqual(engine.indexSize, 1)
         XCTAssertEqual(engine.indexMemoryState.reloadPhase, .idle)
-        XCTAssertFalse(
+        XCTAssertTrue(
             engine.indexMemoryState.ownsPhotoAccelerator,
-            "A failed reload keeps the old CPU fallback without retaining the old GPU generation"
+            "A failed reload must keep the previous accelerated generation intact"
         )
         XCTAssertEqual(
             try engine.hybridSearch(hints: hints(text: "dog")).results.map(\.id),
@@ -398,7 +398,7 @@ final class SearchEngineTests: XCTestCase {
             SearchIndexMemoryState(
                 reloadPhase: .idle,
                 residentMediaCount: 1,
-                ownsPhotoAccelerator: false,
+                ownsPhotoAccelerator: true,
                 ownsVideoAccelerator: false
             )
         )
@@ -445,15 +445,11 @@ final class SearchEngineTests: XCTestCase {
             SearchIndexMemoryState(
                 reloadPhase: .buildingAccelerators,
                 residentMediaCount: 1,
-                ownsPhotoAccelerator: false,
+                ownsPhotoAccelerator: true,
                 ownsVideoAccelerator: false
             )
         )
-        XCTAssertEqual(
-            scorer.indexedCount,
-            0,
-            "The previous accelerator buffer must be cleared before replacement allocation"
-        )
+        XCTAssertEqual(scorer.indexedCount, 1)
 
         buildGate.open()
         try await reload.value
@@ -1090,6 +1086,166 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(response.results.first?.id, "page-2-match")
     }
 
+    func testDecodedTailPagesAreReusedAcrossWarmSearches() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "resident",
+                localIdentifier: "resident",
+                date: Date(timeIntervalSince1970: 200),
+                embedding: float16Vector(first: 0.1)
+            ),
+            .init(
+                id: "tail",
+                localIdentifier: "tail",
+                date: Date(timeIntervalSince1970: 100),
+                embedding: float16Vector(first: 0.9)
+            ),
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            residentMediaLimit: 1
+        )
+
+        try engine.loadIndex()
+        _ = try engine.hybridSearch(hints: hints(text: "dog"))
+        let loadsAfterColdSearch = database.photoLoadCount
+        _ = try engine.hybridSearch(hints: hints(text: "dog"))
+
+        XCTAssertEqual(database.photoLoadCount, loadsAfterColdSearch)
+    }
+
+    func testReloadInvalidatesDecodedTailPages() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "resident",
+                localIdentifier: "resident",
+                date: Date(timeIntervalSince1970: 200),
+                embedding: float16Vector(first: 0.01)
+            ),
+            .init(
+                id: "old-tail",
+                localIdentifier: "old-tail",
+                date: Date(timeIntervalSince1970: 100),
+                embedding: float16Vector(first: 0.9)
+            ),
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            residentMediaLimit: 1
+        )
+
+        try engine.loadIndex()
+        XCTAssertEqual(
+            try engine.hybridSearch(hints: hints(text: "dog")).results.map(\.id),
+            ["old-tail"]
+        )
+
+        database.photos = [
+            .init(
+                id: "resident",
+                localIdentifier: "resident",
+                date: Date(timeIntervalSince1970: 200),
+                embedding: float16Vector(first: 0.01)
+            ),
+            .init(
+                id: "new-tail",
+                localIdentifier: "new-tail",
+                date: Date(timeIntervalSince1970: 100),
+                embedding: float16Vector(first: 0.95)
+            ),
+        ]
+        let loadsBeforeReload = database.photoLoadCount
+
+        try engine.loadIndex()
+        XCTAssertEqual(database.photoLoadCount, loadsBeforeReload + 1)
+        let loadsBeforeSearch = database.photoLoadCount
+        XCTAssertEqual(
+            try engine.hybridSearch(hints: hints(text: "dog")).results.map(\.id),
+            ["new-tail"]
+        )
+        XCTAssertEqual(
+            database.photoLoadCount,
+            loadsBeforeSearch + 1,
+            "The first search after a reload must refetch rather than reuse the previous generation's tail"
+        )
+    }
+
+    func testMemoryPressureRecoveryDoesNotReuseDecodedTailPages() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "resident",
+                localIdentifier: "resident",
+                date: Date(timeIntervalSince1970: 200),
+                embedding: float16Vector(first: 0.01)
+            ),
+            .init(
+                id: "old-tail",
+                localIdentifier: "old-tail",
+                date: Date(timeIntervalSince1970: 100),
+                embedding: float16Vector(first: 0.9)
+            ),
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            residentMediaLimit: 1
+        )
+
+        try engine.loadIndex()
+        _ = try engine.hybridSearch(hints: hints(text: "dog"))
+        database.photos = [
+            .init(
+                id: "resident",
+                localIdentifier: "resident",
+                date: Date(timeIntervalSince1970: 200),
+                embedding: float16Vector(first: 0.01)
+            ),
+            .init(
+                id: "post-pressure-tail",
+                localIdentifier: "post-pressure-tail",
+                date: Date(timeIntervalSince1970: 100),
+                embedding: float16Vector(first: 0.95)
+            ),
+        ]
+
+        engine.suspendForMemoryPressure()
+        engine.resumeAfterMemoryPressure()
+        try engine.loadIndex()
+
+        XCTAssertEqual(
+            try engine.hybridSearch(hints: hints(text: "dog")).results.map(\.id),
+            ["post-pressure-tail"]
+        )
+    }
+
+    func testLargeLibraryUsesPersistedMediaCountBeyondResidentWindow() throws {
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "resident",
+                    localIdentifier: "resident",
+                    date: nil,
+                    embedding: float16Vector(first: 1)
+                )
+            ],
+            persistedPhotoCount: SearchEngine.maxRecommendedPhotos,
+            persistedVideoCount: 1
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database,
+            residentMediaLimit: 1
+        )
+
+        try engine.loadIndex()
+
+        XCTAssertEqual(engine.residentSize, 1)
+        XCTAssertEqual(engine.totalSize, SearchEngine.maxRecommendedPhotos + 1)
+        XCTAssertTrue(engine.isLargeLibrary)
+    }
+
     func testFindSimilarPagesWhenSourceAndMatchAreOutsideResidentWindow() throws {
         let database = SearchFixtureDatabase(photos: [
             .init(
@@ -1275,6 +1431,24 @@ final class FakeTextEncoder: TextEmbeddingEncoding {
     }
 }
 
+final class CountingTextEncoder: TextEmbeddingEncoding {
+    private let embedding: [Float]
+    private let count = OSAllocatedUnfairLock(initialState: 0)
+
+    init(embedding: [Float]) {
+        self.embedding = embedding
+    }
+
+    var encodeCount: Int {
+        count.withLock { $0 }
+    }
+
+    func encode(text: String) throws -> [Float] {
+        count.withLock { $0 += 1 }
+        return embedding
+    }
+}
+
 final class RecordingSimilaritySearch: SimilaritySearching {
     private struct State: Sendable {
         var count = 0
@@ -1412,6 +1586,8 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     private let state: OSAllocatedUnfairLock<State>
     private let photoLoadGate: ManualResetLoadGate?
     private let gatedPhotoLoadNumber: Int
+    private let persistedPhotoCount: Int?
+    private let persistedVideoCount: Int?
 
     var photos: [FixturePhoto] {
         get { state.withLock { $0.photos } }
@@ -1435,13 +1611,17 @@ final class SearchFixtureDatabase: DatabaseProtocol {
         photos: [FixturePhoto] = [],
         videos: [FixtureVideo] = [],
         photoLoadGate: ManualResetLoadGate? = nil,
-        gatedPhotoLoadNumber: Int = 1
+        gatedPhotoLoadNumber: Int = 1,
+        persistedPhotoCount: Int? = nil,
+        persistedVideoCount: Int? = nil
     ) {
         self.state = OSAllocatedUnfairLock(
             initialState: State(photos: photos, videos: videos)
         )
         self.photoLoadGate = photoLoadGate
         self.gatedPhotoLoadNumber = gatedPhotoLoadNumber
+        self.persistedPhotoCount = persistedPhotoCount
+        self.persistedVideoCount = persistedVideoCount
     }
 
     func indexedCount() throws -> Int { photos.count }
@@ -1537,8 +1717,8 @@ final class SearchFixtureDatabase: DatabaseProtocol {
             photos: try makePhotoIndex(snapshot.photos.filter { selectedPhotoIDs.contains($0.id) }),
             videos: try makeVideoIndex(snapshot.videos.filter { selectedVideoIDs.contains($0.id) }),
             mediaCount: selected.count,
-            totalPhotoCount: snapshot.photos.count,
-            totalVideoCount: videosByID.count,
+            totalPhotoCount: persistedPhotoCount ?? snapshot.photos.count,
+            totalVideoCount: persistedVideoCount ?? videosByID.count,
             nextCursor: nextCursor
         )
     }
@@ -1675,9 +1855,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
         completingRequiredRebuild: Bool
     ) throws -> Bool { false }
     func isVideoIndexed(localIdentifier: String) throws -> Bool { false }
-    func allIndexedVideoIdentifiers() throws -> Set<String> { [] }
     func deleteOrphanedVideos(localIdentifiers: Set<String>) throws {}
-    func trimToLimit(_ limit: Int) throws {}
     func reconcileFreeTier(_ limit: Int) throws -> FreeTierReconciliationResult {
         FreeTierReconciliationResult(retainedMediaCount: 0, didTrimMedia: false)
     }

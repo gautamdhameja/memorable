@@ -175,7 +175,10 @@ class SurpriseQueries {
             try await SurpriseQueryValidationOperation.run(
                 candidates: candidates,
                 evaluate: { query in
-                    let response = try await searchEngine.search(query: query)
+                    let response = try await searchEngine.search(
+                        query: query,
+                        recordsUserTiming: false
+                    )
                     return !response.results.isEmpty
                 },
                 persist: { valid in

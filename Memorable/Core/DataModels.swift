@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import Accelerate
 
 // MARK: - Constants
 
@@ -29,6 +30,8 @@ struct IndexedPhoto: Codable, FetchableRecord, PersistableRecord, Identifiable {
     var locationCountry: String?
     var locationName: String?
     var sceneLabels: String?
+    var isScreenshot: Bool = false
+    var isDocumentImage: Bool = false
     var enrichmentComplete: Bool = false
 
     static let databaseTableName = "indexed_photos"
@@ -60,6 +63,7 @@ struct PhotoEnrichmentUpdate: Equatable, Sendable {
     let ocrText: String?
     let sharpnessScore: Double?
     let sceneLabels: String?
+    var isDocumentImage: Bool = false
     var outcome: PhotoEnrichmentOutcome = .completed
 }
 
@@ -91,6 +95,25 @@ struct SlideshowPhoto: Identifiable, Sendable {
     let embedding: Data
     let sourceId: String
     let filePath: String?
+    let requiresContentValidation: Bool
+
+    init(
+        id: String,
+        localIdentifier: String,
+        creationDate: Date?,
+        embedding: Data,
+        sourceId: String,
+        filePath: String?,
+        requiresContentValidation: Bool = false
+    ) {
+        self.id = id
+        self.localIdentifier = localIdentifier
+        self.creationDate = creationDate
+        self.embedding = embedding
+        self.sourceId = sourceId
+        self.filePath = filePath
+        self.requiresContentValidation = requiresContentValidation
+    }
 
     var searchResult: SearchResult {
         SearchResult(
@@ -103,6 +126,97 @@ struct SlideshowPhoto: Identifiable, Sendable {
             sourceId: sourceId,
             filePath: filePath
         )
+    }
+}
+
+enum MemoryContentPolicy {
+    static let minimumDocumentCharacters = 120
+    static let minimumDocumentWords = 18
+
+    private static let screenshotDimensions: Set<String> = [
+        "1170x2532", "2532x1170",
+        "1179x2556", "2556x1179",
+        "1290x2796", "2796x1290",
+        "1284x2778", "2778x1284",
+        "1125x2436", "2436x1125",
+        "1242x2688", "2688x1242",
+        "1080x1920", "1920x1080",
+        "750x1334", "1334x750",
+        "1668x2388", "2388x1668",
+        "2048x2732", "2732x2048",
+    ]
+
+    private static let documentLabels: Set<String> = [
+        "document", "receipt", "invoice", "form", "menu", "newspaper",
+        "book page", "web page", "presentation", "spreadsheet",
+    ]
+
+    static func isLikelyScreenshotDimensions(width: Int, height: Int) -> Bool {
+        screenshotDimensions.contains("\(width)x\(height)")
+    }
+
+    static func isDocumentImage(ocrText: String?, sceneLabels: String?) -> Bool {
+        let labels = SceneClassifier.stringToLabels(sceneLabels)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        if labels.contains(where: { documentLabels.contains($0) }) {
+            return true
+        }
+
+        guard let ocrText else { return false }
+        let words = ocrText.split(whereSeparator: \Character.isWhitespace)
+        let alphanumericCount = ocrText.unicodeScalars.reduce(into: 0) { count, scalar in
+            if CharacterSet.alphanumerics.contains(scalar) { count += 1 }
+        }
+        return words.count >= minimumDocumentWords
+            && alphanumericCount >= minimumDocumentCharacters
+    }
+
+    static func isEligible(
+        isMarkedScreenshot: Bool,
+        isMarkedDocument: Bool = false,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        ocrText: String?,
+        sceneLabels: String?
+    ) -> Bool {
+        !isMarkedScreenshot
+            && !isMarkedDocument
+            && !isLikelyScreenshotDimensions(width: pixelWidth, height: pixelHeight)
+            && !isDocumentImage(ocrText: ocrText, sceneLabels: sceneLabels)
+    }
+}
+
+struct MemoryDuplicateFilter {
+    private var retainedEmbeddings: [[Float]] = []
+
+    var retainedCount: Int { retainedEmbeddings.count }
+
+    mutating func accepts(
+        _ embeddingData: Data,
+        threshold: Float = SearchConfig.duplicateThreshold
+    ) -> Bool {
+        guard let embedding = embeddingData.validatedFloat16Embedding() else { return false }
+        let values = embedding.map(Float.init)
+
+        for retained in retainedEmbeddings {
+            var similarity: Float = 0
+            vDSP_dotpr(
+                values,
+                1,
+                retained,
+                1,
+                &similarity,
+                vDSP_Length(values.count)
+            )
+            if similarity >= threshold { return false }
+        }
+
+        retainedEmbeddings.append(values)
+        return true
+    }
+
+    mutating func reset() {
+        retainedEmbeddings.removeAll(keepingCapacity: true)
     }
 }
 

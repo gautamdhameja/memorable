@@ -148,7 +148,8 @@ enum SlideshowSelectionPolicy {
         historyLimit: Int,
         maxAttempts: Int = 5,
         fetch: () async -> Item?,
-        identifier: (Item) -> String
+        identifier: (Item) -> String,
+        accepts: (Item) -> Bool = { _ in true }
     ) async -> SlideshowSelection<Item>? {
         let boundedAttempts = max(1, maxAttempts)
         var fallback: Item?
@@ -156,6 +157,7 @@ enum SlideshowSelectionPolicy {
         for _ in 0..<boundedAttempts {
             guard !Task.isCancelled else { return nil }
             guard let candidate = await fetch() else { break }
+            guard accepts(candidate) else { continue }
             fallback = candidate
             if !recentIDs.contains(identifier(candidate)) {
                 return selection(
@@ -188,6 +190,18 @@ enum SlideshowSelectionPolicy {
         }
         updated.insert(identifier(item))
         return SlideshowSelection(item: item, recentIDs: updated)
+    }
+}
+
+enum MemoryPresentationValidator {
+    static func isEligible(image: UIImage, requiresValidation: Bool) async -> Bool {
+        guard requiresValidation else { return true }
+        async let ocrText = OCRService.extractTextFast(from: image)
+        async let sceneLabels = SceneClassifier.classify(image: image)
+        return !MemoryContentPolicy.isDocumentImage(
+            ocrText: await ocrText,
+            sceneLabels: SceneClassifier.labelsToString(await sceneLabels)
+        )
     }
 }
 

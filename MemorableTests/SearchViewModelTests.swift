@@ -162,6 +162,24 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertEqual(SearchViewModel.sortModeStorageKey, "searchSortMode")
     }
 
+    @MainActor
+    func testSubmittedSearchPrioritizesUserWorkBeforeSearching() async {
+        var events: [String] = []
+        let model = makeModel(
+            prioritizeUserSearch: { events.append("prioritize") },
+            search: { _ in
+                events.append("search")
+                return Self.response(ids: [])
+            }
+        )
+
+        model.setQueryText("cats")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(events, ["prioritize", "search"])
+    }
+
     func testForegroundValidationPartitionsPhotoKitAndFolderResults() {
         let candidates = [
             Self.result(id: "photo-valid"),
@@ -187,7 +205,7 @@ final class SearchViewModelTests: XCTestCase {
     @MainActor
     func testPreparationFailureResetsSearchLifecycle() async {
         let model = SearchViewModel(dependencies: .init(
-            deferEnrichmentForUserSearch: {},
+            prioritizeUserSearch: {},
             isSemanticSearchReady: { false },
             isIndexReady: { false },
             isIndexLoaded: { false },
@@ -215,7 +233,7 @@ final class SearchViewModelTests: XCTestCase {
     @MainActor
     func testUnavailableIndexResetsSearchLifecycle() async {
         let model = SearchViewModel(dependencies: .init(
-            deferEnrichmentForUserSearch: {},
+            prioritizeUserSearch: {},
             isSemanticSearchReady: { false },
             isIndexReady: { false },
             isIndexLoaded: { false },
@@ -242,12 +260,13 @@ final class SearchViewModelTests: XCTestCase {
 
     @MainActor
     private func makeModel(
+        prioritizeUserSearch: @escaping () -> Void = {},
         search: @escaping (String) async throws -> SearchResponse,
         validate: @escaping ([SearchResult]) async -> Set<String> = { results in Set(results.map(\.id)) },
         detectScreenshots: @escaping ([SearchResult]) async -> Set<String> = { _ in [] }
     ) -> SearchViewModel {
         SearchViewModel(dependencies: .init(
-            deferEnrichmentForUserSearch: {},
+            prioritizeUserSearch: prioritizeUserSearch,
             isSemanticSearchReady: { true },
             isIndexReady: { true },
             isIndexLoaded: { true },

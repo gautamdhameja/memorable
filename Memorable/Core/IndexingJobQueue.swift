@@ -241,7 +241,9 @@ final class IndexingJobQueue {
 
     private func schedulePreemptionIfNeeded(for activeJob: ActiveJob) {
         guard !cancelledIDs.contains(activeJob.job.id),
-              activeJob.job.kind == .enrichPhotos || activeJob.job.kind == .geocodeMedia else {
+              activeJob.job.kind == .enrichPhotos
+                || activeJob.job.kind == .geocodeMedia
+                || activeJob.job.kind == .validateSurpriseQueries else {
             return
         }
         let userJobs = pending.filter { $0.job.priority == .userInitiated }

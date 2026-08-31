@@ -9,9 +9,7 @@ struct PhotoThumbnailView: View {
     private var accessibilityDescription: String {
         let type = result.isVideo ? "Video" : "Photo"
         if let date = result.creationDate {
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            return "\(type), from \(formatter.string(from: date))"
+            return "\(type), from \(date.formatted(date: .abbreviated, time: .omitted))"
         }
         return type
     }
@@ -61,13 +59,10 @@ struct PhotoThumbnailView: View {
             let task = Task { @MainActor in
                 imageLoadGeneration &+= 1
                 let generation = imageLoadGeneration
-                #if DEBUG
-                logger.info("[PhotoThumbnailView] start load isVideo=\(result.isVideo) score=\(String(format: "%.4f", result.score)) frame=\(result.bestFramePosition ?? -1)")
-                #endif
                 let loaded: UIImage?
                 if result.sourceId == PhotoSourceType.photokit.rawValue,
                    !result.isVideo,
-                   let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
+                   let asset = await PhotoLibrary.resolveAsset(by: result.localIdentifier) {
                     loaded = await PhotoLibrary.loadThumbnail(for: asset)
                 } else {
                     loaded = await PhotoLibrary.loadImage(
@@ -82,13 +77,6 @@ struct PhotoThumbnailView: View {
                 ) {
                     thumbnail = loaded
                 }
-                #if DEBUG
-                if let thumbnail {
-                    logger.info("[PhotoThumbnailView] loaded thumbnail size=\(String(format: "%.0fx%.0f", thumbnail.size.width, thumbnail.size.height))")
-                } else {
-                    logger.warning("[PhotoThumbnailView] media load failed isVideo=\(result.isVideo)")
-                }
-                #endif
             }
             imageLoadTask = task
             await withTaskCancellationHandler {

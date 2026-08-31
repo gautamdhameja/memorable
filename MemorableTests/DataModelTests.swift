@@ -58,6 +58,50 @@ final class DataModelTests: XCTestCase {
         XCTAssertLessThanOrEqual(MemoryConfig.maximumOnThisDayPhotosPerYear, 500)
     }
 
+    func testMemoryContentPolicyRejectsScreenshotsAndDocumentImages() {
+        XCTAssertFalse(MemoryContentPolicy.isEligible(
+            isMarkedScreenshot: true,
+            pixelWidth: 900,
+            pixelHeight: 1_200,
+            ocrText: nil,
+            sceneLabels: nil
+        ))
+        XCTAssertFalse(MemoryContentPolicy.isEligible(
+            isMarkedScreenshot: false,
+            pixelWidth: 1_170,
+            pixelHeight: 2_532,
+            ocrText: nil,
+            sceneLabels: nil
+        ))
+        XCTAssertFalse(MemoryContentPolicy.isEligible(
+            isMarkedScreenshot: false,
+            pixelWidth: 1_200,
+            pixelHeight: 1_600,
+            ocrText: Array(repeating: "document text", count: 20).joined(separator: " "),
+            sceneLabels: "document,text"
+        ))
+        XCTAssertTrue(MemoryContentPolicy.isEligible(
+            isMarkedScreenshot: false,
+            pixelWidth: 4_032,
+            pixelHeight: 3_024,
+            ocrText: "Trail summit",
+            sceneLabels: "mountain,outdoor"
+        ))
+    }
+
+    func testMemoryDuplicateFilterKeepsOneRepresentativePerNearDuplicateGroup() {
+        var first = [Float](repeating: 0, count: EmbeddingConfig.dimensions)
+        first[0] = 1
+        var distinct = [Float](repeating: 0, count: EmbeddingConfig.dimensions)
+        distinct[1] = 1
+        var filter = MemoryDuplicateFilter()
+
+        XCTAssertTrue(filter.accepts(first.toFloat16Data()))
+        XCTAssertFalse(filter.accepts(first.toFloat16Data()))
+        XCTAssertTrue(filter.accepts(distinct.toFloat16Data()))
+        XCTAssertEqual(filter.retainedCount, 2)
+    }
+
     // MARK: - EmbeddingConfig
 
     func testEmbeddingDimensions() {

@@ -294,6 +294,33 @@ final class ImagePreprocessingTests: XCTestCase {
         XCTAssertTrue(FolderScanner.isValidImageFile(imageURL, within: root))
     }
 
+    func testFolderScannerLoadsIndexingImageAndOriginalDimensionsTogether() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let imageURL = root.appendingPathComponent("image.png")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: 8, height: 4),
+            format: format
+        )
+        try XCTUnwrap(renderer.image { context in
+            UIColor.red.setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 8, height: 4))
+        }.pngData()).write(to: imageURL)
+
+        let loaded = try XCTUnwrap(
+            FolderScanner.loadIndexingImage(from: imageURL, within: root)
+        )
+        XCTAssertEqual(loaded.width, 8)
+        XCTAssertEqual(loaded.height, 4)
+        XCTAssertGreaterThan(loaded.image.size.width, 0)
+        XCTAssertGreaterThan(loaded.image.size.height, 0)
+    }
+
     func testFolderScannerRejectsFilesOutsideSourceFolder() throws {
         let parent = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

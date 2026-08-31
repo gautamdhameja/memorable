@@ -243,6 +243,109 @@ final class DatabaseTests: XCTestCase {
         XCTAssertNotEqual(try database.fetchRandomPhoto(sharp: true)?.id, "outside")
     }
 
+    func testMemoryQueriesExcludeNonPhotoContentAndCollapseDuplicates() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let memoryDate = try XCTUnwrap(Calendar.current.date(byAdding: .year, value: -1, to: Date()))
+
+        var duplicateOne = makePhoto(localIdentifier: "duplicate-1")
+        duplicateOne.id = "duplicate-1"
+        duplicateOne.creationDate = memoryDate
+        duplicateOne.sharpnessScore = 90
+        var duplicateTwo = makePhoto(localIdentifier: "duplicate-2")
+        duplicateTwo.id = "duplicate-2"
+        duplicateTwo.creationDate = memoryDate
+        duplicateTwo.sharpnessScore = 90
+        var distinct = makePhoto(localIdentifier: "distinct")
+        distinct.id = "distinct"
+        distinct.creationDate = memoryDate
+        distinct.embedding = floatVector(second: 1).toFloat16Data()
+        distinct.sharpnessScore = 90
+        var screenshot = makePhoto(localIdentifier: "screenshot")
+        screenshot.id = "screenshot"
+        screenshot.creationDate = memoryDate
+        screenshot.isScreenshot = true
+        screenshot.sharpnessScore = 90
+        var document = makePhoto(localIdentifier: "document")
+        document.id = "document"
+        document.creationDate = memoryDate
+        document.isDocumentImage = true
+        document.sharpnessScore = 90
+
+        try database.insertPhotos(
+            [duplicateOne, duplicateTwo, distinct, screenshot, document],
+            completingRequiredRebuild: false
+        )
+
+        let retainedIDs = try database.distinctMemoryPhotoIDs(
+            in: ["duplicate-1", "duplicate-2", "distinct", "screenshot", "document"]
+        )
+        XCTAssertEqual(retainedIDs, ["duplicate-1", "distinct"])
+
+        let onThisDayIDs = Set(try database.onThisDayPhotos().flatMap { $0.photos.map(\.id) })
+        XCTAssertEqual(onThisDayIDs.count, 2)
+        XCTAssertTrue(onThisDayIDs.contains("distinct"))
+        XCTAssertEqual(onThisDayIDs.intersection(["duplicate-1", "duplicate-2"]).count, 1)
+        XCTAssertFalse(onThisDayIDs.contains("screenshot"))
+        XCTAssertFalse(onThisDayIDs.contains("document"))
+
+        let randomID = try database.fetchRandomPhoto(sharp: true)?.id
+        XCTAssertTrue(randomID == "duplicate-1" || randomID == "duplicate-2" || randomID == "distinct")
+    }
+
+    func testMemoryClassificationMigrationBackfillsExistingRowsWithoutDeletingThem() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v10-folder-source-integrity")
+        let documentText = Array(repeating: "existing document text", count: 20)
+            .joined(separator: " ")
+        try queue.write { db in
+            for row in [
+                ("screenshot", 1_170, 2_532, nil as String?, nil as String?),
+                ("document", 1_200, 1_600, documentText as String?, "document" as String?),
+                ("photo", 4_032, 3_024, "Summit" as String?, "mountain,outdoor" as String?),
+            ] {
+                try db.execute(
+                    sql: """
+                        INSERT INTO indexed_photos (
+                            id, localIdentifier, pixelWidth, pixelHeight, embedding,
+                            indexedAt, ocrText, sceneLabels
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        row.0,
+                        row.0,
+                        row.1,
+                        row.2,
+                        floatVector(first: 1).toFloat16Data(),
+                        Date(timeIntervalSince1970: 200),
+                        row.3,
+                        row.4,
+                    ]
+                )
+            }
+        }
+
+        try AppDatabase.migrator.migrate(queue)
+
+        let classifications = try queue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, isScreenshot, isDocumentImage
+                    FROM indexed_photos
+                    ORDER BY id
+                """
+            )
+        }
+        XCTAssertEqual(classifications.count, 3)
+        XCTAssertEqual(classifications.first { $0["id"] as String == "screenshot" }?["isScreenshot"] as Bool?, true)
+        XCTAssertEqual(classifications.first { $0["id"] as String == "document" }?["isDocumentImage"] as Bool?, true)
+        XCTAssertEqual(classifications.first { $0["id"] as String == "photo" }?["isScreenshot"] as Bool?, false)
+        XCTAssertEqual(classifications.first { $0["id"] as String == "photo" }?["isDocumentImage"] as Bool?, false)
+    }
+
     func testCombinedMediaReadsReturnPhotoAndVideoInOneSnapshot() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },
@@ -853,6 +956,47 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(SearchIndexLimits.maximumPhotoRows, 8_000)
         XCTAssertEqual(SearchIndexLimits.maximumVideoFrameRows, 40_000)
         XCTAssertEqual(SearchIndexLimits.maximumTotalRows, 40_000)
+    }
+
+    func testAdaptiveResidentSearchWindowScalesWithinSafeBounds() {
+        let fourGiB = UInt64(4) * 1_024 * 1_024 * 1_024
+        let eightGiB = UInt64(8) * 1_024 * 1_024 * 1_024
+        let smallDevice = SearchIndexLimits.adaptiveResidentMediaItems(physicalMemory: fourGiB)
+        let largeDevice = SearchIndexLimits.adaptiveResidentMediaItems(physicalMemory: eightGiB)
+
+        XCTAssertGreaterThanOrEqual(smallDevice, SearchIndexLimits.minimumResidentMediaItems)
+        XCTAssertGreaterThan(largeDevice, smallDevice)
+        XCTAssertLessThanOrEqual(largeDevice, SearchIndexLimits.maximumResidentMediaItems)
+    }
+
+    func testLocationBackfillBatchUpdatesMultiplePhotosInOneCall() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.insertPhotos(
+            [makePhoto(localIdentifier: "photo-a"), makePhoto(localIdentifier: "photo-b")],
+            completingRequiredRebuild: false
+        )
+
+        try database.updatePhotoLocations([
+            LocationBackfillUpdate(
+                localIdentifier: "photo-a",
+                location: LocationStrings(city: "Berlin", state: "Berlin", country: "Germany", name: "Mitte")
+            ),
+            LocationBackfillUpdate(
+                localIdentifier: "photo-b",
+                location: LocationStrings(city: "Paris", state: nil, country: "France", name: nil)
+            ),
+        ])
+
+        let page = try database.loadSearchMediaPage(after: nil, limit: 10)
+        let cities = Dictionary(uniqueKeysWithValues: zip(
+            page.photos.localIdentifiers,
+            page.photos.locationCities
+        ).map { ($0.0, $0.1) })
+        XCTAssertEqual(cities["photo-a"], "Berlin")
+        XCTAssertEqual(cities["photo-b"], "Paris")
     }
 
     func testDuplicateScanEmbeddingLoadAppliesDatabaseLimit() throws {
@@ -1625,11 +1769,24 @@ final class DatabaseTests: XCTestCase {
                 lastIndexedAt: Date(),
                 photoCount: 42
             ).insert(db)
-            try makePhoto(
-                localIdentifier: "migration-count-photo",
-                sourceId: sourceID,
-                filePath: "/tmp/migration-count/photo.jpg"
-            ).insert(db)
+            try db.execute(
+                sql: """
+                    INSERT INTO indexed_photos (
+                        id, localIdentifier, pixelWidth, pixelHeight, embedding,
+                        indexedAt, sourceId, filePath
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    UUID().uuidString,
+                    "migration-count-photo",
+                    100,
+                    100,
+                    floatVector(first: 1).toFloat16Data(),
+                    Date(timeIntervalSince1970: 200),
+                    sourceID,
+                    "/tmp/migration-count/photo.jpg",
+                ]
+            )
         }
 
         try AppDatabase.migrator.migrate(queue)
@@ -1732,6 +1889,7 @@ final class DatabaseTests: XCTestCase {
             Data([7, 8, 9])
         )
         XCTAssertEqual(try database.indexedCount(), 0)
+        XCTAssertTrue(try database.indexRebuildRequired())
         let preservedSource = try XCTUnwrap(database.listSources().first)
         XCTAssertEqual(preservedSource.photoCount, 0)
         XCTAssertNil(preservedSource.lastIndexedAt)
@@ -1900,9 +2058,7 @@ final class DatabaseTests: XCTestCase {
     func testFastFormatWipeUsesSameRequiredIndexRebuildState() throws {
         let queue = try DatabaseQueue()
         try AppDatabase.migrator.migrate(queue, upTo: "v4-photo-enrichment-state")
-        try queue.write { db in
-            try makePhoto(localIdentifier: "fast-format-photo").insert(db)
-        }
+        try insertLegacyPhoto(localIdentifier: "fast-format-photo", into: queue)
 
         let database = AppDatabase(
             openQueue: { queue },

@@ -12,6 +12,7 @@ struct IndexingSlideshowView: View {
     @State private var timerTask: Task<Void, Never>?
     @State private var initialLoadTask: Task<Void, Never>?
     @State private var shownIds: Set<String> = []
+    @State private var duplicateFilter = MemoryDuplicateFilter()
     @State private var imageLoadGeneration: UInt = 0
 
     var body: some View {
@@ -94,15 +95,32 @@ struct IndexingSlideshowView: View {
             MemoryPressureReleasePolicy.release(&currentImage)
             currentCaption = nil
             shownIds.removeAll(keepingCapacity: false)
+            duplicateFilter.reset()
         }
     }
 
     private func waitForIndexedPhotos() async {
         // Poll until we have at least 5 indexed photos
-        while (try? database.indexedCount()) ?? 0 < 5 {
+        while !Task.isCancelled {
+            let count: Int
+            do {
+                let db = database
+                count = try await CancellableDetachedOperation.run(priority: .utility) {
+                    try db.indexedCount()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                logger.error("[IndexingSlideshow] Failed to read indexed count: \(error.safeDiagnosticCode)")
+                return
+            }
+            guard count < 5 else { return }
             do {
                 try await Task.sleep(nanoseconds: 2_000_000_000)
+            } catch is CancellationError {
+                return
             } catch {
+                logger.error("[IndexingSlideshow] Poll delay failed: \(error.safeDiagnosticCode)")
                 return
             }
         }
@@ -111,7 +129,14 @@ struct IndexingSlideshowView: View {
     private func startCycling() {
         timerTask = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: 4_000_000_000)
+                } catch is CancellationError {
+                    break
+                } catch {
+                    logger.error("[IndexingSlideshow] Cycle delay failed: \(error.safeDiagnosticCode)")
+                    break
+                }
                 if Task.isCancelled { break }
                 await showNextPhoto()
             }
@@ -121,25 +146,15 @@ struct IndexingSlideshowView: View {
     private func showNextPhoto() async {
         imageLoadGeneration &+= 1
         let generation = imageLoadGeneration
-        // Get a random indexed photo from the database
-        guard let photo = await getRandomIndexedPhoto() else { return }
+        guard let (photo, loaded) = await loadNextEligiblePhoto(generation: generation) else {
+            return
+        }
 
         // Fade out current
         withAnimation { captionVisible = false }
         do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }
         withAnimation { isVisible = false }
         do { try await Task.sleep(nanoseconds: 400_000_000) } catch { return }
-        guard ImageLoadGenerationPolicy.acceptsCompletion(
-            startedGeneration: generation,
-            currentGeneration: imageLoadGeneration,
-            isCancelled: Task.isCancelled
-        ) else { return }
-
-        // Load thumbnail
-        guard let loaded = await PhotoLibrary.loadImage(
-            for: photo.searchResult,
-            targetSize: CGSize(width: 800, height: 800)
-        ) else { return }
         guard ImageLoadGenerationPolicy.acceptsCompletion(
             startedGeneration: generation,
             currentGeneration: imageLoadGeneration,
@@ -165,19 +180,64 @@ struct IndexingSlideshowView: View {
         withAnimation { captionVisible = true }
     }
 
+    private func loadNextEligiblePhoto(
+        generation: UInt
+    ) async -> (photo: SlideshowPhoto, image: UIImage)? {
+        for _ in 0..<5 {
+            guard let photo = await getRandomIndexedPhoto() else { return nil }
+            guard let image = await PhotoLibrary.loadImage(
+                for: photo.searchResult,
+                targetSize: CGSize(width: 800, height: 800)
+            ) else { continue }
+            guard ImageLoadGenerationPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: imageLoadGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return nil }
+            guard await MemoryPresentationValidator.isEligible(
+                image: image,
+                requiresValidation: photo.requiresContentValidation
+            ) else { continue }
+            guard ImageLoadGenerationPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: imageLoadGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return nil }
+            return (photo, image)
+        }
+        return nil
+    }
+
     private func getRandomIndexedPhoto() async -> SlideshowPhoto? {
+        let historyLimit = 50
+        if shownIds.count >= historyLimit {
+            shownIds.removeAll(keepingCapacity: true)
+        }
         let database = database
+        var candidateFilter = duplicateFilter
         let selection = await SlideshowSelectionPolicy.next(
             recentIDs: shownIds,
-            historyLimit: 50,
+            historyLimit: historyLimit,
+            maxAttempts: 20,
             fetch: {
-                try? await CancellableDetachedOperation.run {
-                    try database.fetchRandomPhoto(sharp: true)
+                do {
+                    return try await CancellableDetachedOperation.run {
+                        try database.fetchRandomPhoto(sharp: true)
+                    }
+                } catch is CancellationError {
+                    return nil
+                } catch {
+                    logger.error(
+                        "[IndexingSlideshow] Failed to fetch a photo: \(error.safeDiagnosticCode)"
+                    )
+                    return nil
                 }
             },
-            identifier: \.id
+            identifier: \.id,
+            accepts: { candidateFilter.accepts($0.embedding) }
         )
         guard let selection else { return nil }
+        duplicateFilter = candidateFilter
         shownIds = selection.recentIDs
         return selection.item
     }

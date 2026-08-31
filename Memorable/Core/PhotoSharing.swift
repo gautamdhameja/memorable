@@ -175,6 +175,13 @@ extension PhotoLibrary {
         guard !result.isVideo else { throw PhotoSharePreparationError.unsupportedMedia }
 
         if result.sourceId != PhotoSourceType.photokit.rawValue {
+            let isPro = await MainActor.run { ProManager.shared.isPro }
+            guard FolderResultAccessPolicy.allows(
+                sourceId: result.sourceId,
+                isPro: isPro
+            ) else {
+                throw PhotoSharePreparationError.sourceUnavailable
+            }
             guard let filePath = result.filePath else {
                 throw PhotoSharePreparationError.sourceUnavailable
             }

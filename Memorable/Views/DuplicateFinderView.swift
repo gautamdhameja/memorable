@@ -198,7 +198,11 @@ struct DuplicatePairRow: View {
             let task = Task { @MainActor in
                 imageLoadGeneration &+= 1
                 let generation = imageLoadGeneration
-                if let asset = PhotoLibrary.getAsset(by: pair.photo1LocalId) {
+                await PhotoLibrary.prefetchAssets(localIdentifiers: [
+                    pair.photo1LocalId,
+                    pair.photo2LocalId,
+                ])
+                if let asset = await PhotoLibrary.resolveAsset(by: pair.photo1LocalId) {
                     let loaded = await PhotoLibrary.loadThumbnail(for: asset)
                     guard ImageLoadGenerationPolicy.acceptsCompletion(
                         startedGeneration: generation,
@@ -207,7 +211,7 @@ struct DuplicatePairRow: View {
                     ) else { return }
                     image1 = loaded
                 }
-                if let asset = PhotoLibrary.getAsset(by: pair.photo2LocalId) {
+                if let asset = await PhotoLibrary.resolveAsset(by: pair.photo2LocalId) {
                     let loaded = await PhotoLibrary.loadThumbnail(for: asset)
                     guard ImageLoadGenerationPolicy.acceptsCompletion(
                         startedGeneration: generation,

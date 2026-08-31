@@ -388,10 +388,11 @@ def check_repository(repo: Path, base: str | None, signoff: str | None) -> list[
         raise MigrationGuardError(
             f"{BASELINE_PATH} contains entries not present in registered migrations"
         )
+    candidate_introduced = Counter(migration_deletes(current_source)) - Counter(approved)
     introduced = validate_against_approved_baseline(
         approved,
         current_source,
-        repository_view_sources(repo),
+        repository_view_sources(repo) if candidate_introduced else [],
         signoff,
     )
     missing_current_entries = Counter(introduced) - Counter(current_baseline)

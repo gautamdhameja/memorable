@@ -295,6 +295,20 @@ enum IndexingConfig {
     /// Surprise validation performs many searches, so it runs only after base
     /// search is usable and other indexing work is no longer in the critical path.
     static let surpriseValidationDelaySeconds: TimeInterval = 5
+
+    /// User-entered searches take priority over maintenance work that publishes
+    /// progress on the main actor or writes to the search database.
+    static let userSearchBackgroundWorkDelaySeconds: TimeInterval = 30
+
+    /// Bounds SwiftUI invalidations while cached reverse-geocoding results are
+    /// being persisted much faster than uncached network-backed results.
+    static let geocodingProgressPublishIntervalSeconds: TimeInterval = 1
+}
+
+enum GeocodingProgressPublicationPolicy {
+    static func shouldPublish(elapsed: TimeInterval) -> Bool {
+        elapsed >= IndexingConfig.geocodingProgressPublishIntervalSeconds
+    }
 }
 
 // MARK: - Timeouts

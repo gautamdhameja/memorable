@@ -180,6 +180,26 @@ final class SharedUtilitiesTests: XCTestCase {
         XCTAssertEqual(attempts.withLock { $0 }, 4)
     }
 
+    @MainActor
+    func testSlideshowSelectionNeverFallsBackToRejectedMemoryCandidate() async {
+        let attempts = OSAllocatedUnfairLock(initialState: 0)
+
+        let selection = await SlideshowSelectionPolicy.next(
+            recentIDs: [],
+            historyLimit: 50,
+            maxAttempts: 4,
+            fetch: {
+                attempts.withLock { $0 += 1 }
+                return "duplicate"
+            },
+            identifier: { $0 },
+            accepts: { _ in false }
+        )
+
+        XCTAssertNil(selection)
+        XCTAssertEqual(attempts.withLock { $0 }, 4)
+    }
+
     func testMemoryPressureGenerationInvalidatesEveryInFlightCompletion() {
         let completedBeforeWarning = [1, 2, 3].filter {
             ImageLoadGenerationPolicy.acceptsCompletion(

@@ -364,6 +364,41 @@ final class IndexingJobQueueTests: XCTestCase {
         XCTAssertEqual(events, ["geocode-start", "geocode-cancelled", "index"])
     }
 
+    func testUserInitiatedJobPreemptsSurpriseValidation() async {
+        let queue = IndexingJobQueue()
+        var events: [String] = []
+
+        queue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .validateSurpriseQueries,
+            priority: .maintenance
+        ) {
+            events.append("validation-start")
+            do {
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+            } catch is CancellationError {
+                events.append("validation-cancelled")
+                return .cancelled
+            } catch {
+                XCTFail("Unexpected validation wait error: \(error)")
+                return .cancelled
+            }
+            return .completed
+        })
+        await Task.yield()
+        queue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .indexPhotos,
+            priority: .userInitiated
+        ) {
+            events.append("index")
+            return .completed
+        })
+
+        await queue.waitUntilIdle()
+        XCTAssertEqual(events, ["validation-start", "validation-cancelled", "index"])
+    }
+
     func testBackgroundJobDoesNotPreemptUserIndexing() async {
         let queue = IndexingJobQueue()
         let gate = Gate()

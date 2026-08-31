@@ -70,9 +70,9 @@ final class ProManagerTests: XCTestCase {
     func testInjectedIndeterminateVerificationPreservesEntitlement() async {
         let manager = ProManager(
             productLoader: { _ in [] },
-            entitlementVerifier: { .indeterminate }
+            entitlementVerifier: { .indeterminate },
+            persistedEntitlement: true
         )
-        manager.isPro = true
 
         await manager.verifyEntitlement()
 
@@ -80,6 +80,25 @@ final class ProManagerTests: XCTestCase {
         #if DEBUG
         XCTAssertFalse(manager.isTransactionListenerRunning)
         #endif
+    }
+
+    func testConclusiveVerificationPersistsLastKnownEntitlement() async {
+        var persistedValues: [Bool] = []
+        let manager = ProManager(
+            productLoader: { _ in [] },
+            entitlementVerifier: { .entitled },
+            persistEntitlement: { persistedValues.append($0) }
+        )
+
+        await manager.verifyEntitlement()
+        let generation = await manager.beginEntitlementVerification()
+        await manager.reconcileEntitlementVerification(
+            .indeterminate,
+            generation: generation
+        )
+        await manager.reconcileVerifiedEntitlement(false)
+
+        XCTAssertEqual(persistedValues, [true, false])
     }
 
     func testProductLoadingIsDeferredAndConcurrentRequestsAreCoalesced() async {

@@ -110,19 +110,3 @@ struct CelestialHairline: View {
             .accessibilityHidden(true)
     }
 }
-
-struct FocusOrbit: View {
-    var compact = false
-
-    var body: some View {
-        ZStack {
-            Ellipse()
-                .stroke(Celestial.Colors.primaryDim.opacity(0.18), lineWidth: 1)
-            Circle()
-                .fill(Celestial.Colors.amber)
-                .frame(width: compact ? 4 : 6, height: compact ? 4 : 6)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        }
-        .accessibilityHidden(true)
-    }
-}

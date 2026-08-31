@@ -269,9 +269,7 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
     func clearIndexRebuildRequired() throws {}
     func insertVideo(_ video: IndexedVideo, _ frames: [IndexedVideoFrame], completingRequiredRebuild: Bool) throws -> Bool { false }
     func isVideoIndexed(localIdentifier: String) throws -> Bool { false }
-    func allIndexedVideoIdentifiers() throws -> Set<String> { [] }
     func deleteOrphanedVideos(localIdentifiers: Set<String>) throws {}
-    func trimToLimit(_ limit: Int) throws {}
     func reconcileFreeTier(_ limit: Int) throws -> FreeTierReconciliationResult {
         FreeTierReconciliationResult(
             retainedMediaCount: min(manifest.entries.count, max(0, limit)),

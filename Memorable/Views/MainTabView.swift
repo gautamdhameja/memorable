@@ -30,11 +30,19 @@ struct MainTabView: View {
                     .tag(0)
             }
 
-            OnThisDayView(captionService: captionService)
-                .tabItem {
-                    Label("Memories", systemImage: "calendar")
-                }
-                .tag(1)
+            if indexingService != nil, searchEngine != nil {
+                OnThisDayView(captionService: captionService)
+                    .tabItem {
+                        Label("Memories", systemImage: "calendar")
+                    }
+                    .tag(1)
+            } else {
+                SemanticWarmupView(semanticRuntime: semanticRuntime, retry: retrySemanticWarmup)
+                    .tabItem {
+                        Label("Memories", systemImage: "calendar")
+                    }
+                    .tag(1)
+            }
 
             if let indexingService, let searchEngine {
                 MoreView(indexingService: indexingService, searchEngine: searchEngine)

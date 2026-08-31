@@ -1,6 +1,22 @@
 import Foundation
 import Photos
 
+enum OnboardingModelPrewarmAction: Equatable {
+    case start
+    case cancel
+    case none
+}
+
+enum OnboardingModelPrewarmPolicy {
+    static func action(
+        onboardingComplete: Bool,
+        sceneIsActive: Bool
+    ) -> OnboardingModelPrewarmAction {
+        guard !onboardingComplete else { return .none }
+        return sceneIsActive ? .start : .cancel
+    }
+}
+
 enum PhotoAuthorizationRecoveryPolicy {
     static func shouldInitialize(
         authorizationStatus: PHAuthorizationStatus,

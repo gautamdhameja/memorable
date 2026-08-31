@@ -57,6 +57,11 @@ private struct UnsupportedDeviceView: View {
 
 @MainActor
 class AppState: ObservableObject {
+    private struct PrewarmedModels {
+        let imageEncoder: ImageEncoder
+        let textEncoder: TextEncoder
+    }
+
     @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
     @Published var readiness = AppReadiness()
     @Published var errorMessage: String?
@@ -73,12 +78,14 @@ class AppState: ObservableObject {
     private var isCoreWarmupRunning = false
     private var currentWarmupPriority: SemanticWarmupPriority = .postPaint
     private var captionPreparationTask: Task<Void, Never>?
+    private var modelPrewarmTask: Task<PrewarmedModels, Error>?
+    private var modelPrewarmGeneration: UInt64 = 0
     private let requestPhotoAuthorization: () async -> PHAuthorizationStatus
     private let currentPhotoAuthorization: () -> PHAuthorizationStatus
     private let deviceSupportProvider: () -> Bool
 
     init(
-        shareItemCleanup: () -> Void = { PhotoLibrary.cleanupShareItems() },
+        shareItemCleanup: @escaping @Sendable () -> Void = { PhotoLibrary.cleanupShareItems() },
         requestPhotoAuthorization: @escaping () async -> PHAuthorizationStatus = {
             await PhotoLibrary.requestAuthorization()
         },
@@ -89,12 +96,15 @@ class AppState: ObservableObject {
             DeviceCompatibility.isCurrentDeviceSupported
         }
     ) {
+        MainThreadResponsivenessMonitor.shared.start()
         self.requestPhotoAuthorization = requestPhotoAuthorization
         self.currentPhotoAuthorization = currentPhotoAuthorization
         self.deviceSupportProvider = isDeviceSupported
         self.isDeviceSupported = isDeviceSupported()
-        shareItemCleanup()
-        SurpriseQueryCache.migrateLegacyDefaults()
+        Task.detached(priority: .background) {
+            shareItemCleanup()
+            SurpriseQueryCache.migrateLegacyDefaults()
+        }
         semanticRuntime.setWarmupLoader { [weak self] priority in
             try await self?.warmCoreSearch(priority: priority)
         }
@@ -162,7 +172,9 @@ class AppState: ObservableObject {
 
     func handleMemoryWarning() {
         VideoPlaybackCoordinator.shared.cancelForMemoryPressure()
+        PhotoLibrary.clearAssetCache()
         semanticRuntime.cancelWarmupForMemoryPressure()
+        cancelModelPrewarm()
         captionPreparationTask?.cancel()
         captionPreparationTask = nil
         indexingService?.cancelAllWorkForMemoryPressure()
@@ -181,6 +193,64 @@ class AppState: ObservableObject {
     func retrySemanticWarmup() {
         errorMessage = nil
         semanticRuntime.startUserInitiatedWarmup()
+    }
+
+    /// Starts loading only the two bundled Core ML models. This intentionally
+    /// avoids Photos authorization, StoreKit, database access, and indexing so
+    /// it is safe to run behind the first onboarding screen.
+    func startOnboardingModelPrewarm() {
+        guard isDeviceSupported,
+              imageEncoder == nil,
+              textEncoder == nil,
+              modelPrewarmTask == nil else { return }
+
+        modelPrewarmGeneration &+= 1
+        let generation = modelPrewarmGeneration
+        let task = Task { @MainActor in
+            async let imageEncoder = ImageEncoder()
+            async let textEncoder = TextEncoder()
+            let models = try await (imageEncoder, textEncoder)
+            try Task.checkCancellation()
+            return PrewarmedModels(
+                imageEncoder: models.0,
+                textEncoder: models.1
+            )
+        }
+        modelPrewarmTask = task
+
+        Task { @MainActor [weak self] in
+            do {
+                let models = try await task.value
+                guard let self,
+                      self.modelPrewarmGeneration == generation,
+                      !Task.isCancelled else { return }
+                self.installPrewarmedModels(models)
+                self.modelPrewarmTask = nil
+                #if DEBUG
+                logger.info("[AppState] Onboarding model prewarm completed")
+                #endif
+            } catch is CancellationError {
+                guard let self, self.modelPrewarmGeneration == generation else { return }
+                self.modelPrewarmTask = nil
+                #if DEBUG
+                logger.info("[AppState] Onboarding model prewarm cancelled")
+                #endif
+            } catch {
+                guard let self, self.modelPrewarmGeneration == generation else { return }
+                self.modelPrewarmTask = nil
+                logger.error("[AppState] Onboarding model prewarm failed: \(error.safeDiagnosticCode)")
+            }
+        }
+    }
+
+    /// Called only while onboarding is incomplete. If prewarming already
+    /// finished, release those models as well so backgrounding first run does
+    /// not retain a large cache the user has not committed to using yet.
+    func cancelOnboardingModelPrewarm() {
+        guard searchEngine == nil, indexingService == nil else { return }
+        cancelModelPrewarm()
+        MemoryPressureReleasePolicy.release(&imageEncoder)
+        MemoryPressureReleasePolicy.release(&textEncoder)
     }
 
     private func warmCoreSearch(priority: SemanticWarmupPriority) async throws {
@@ -208,16 +278,20 @@ class AppState: ObservableObject {
                 loadingStatus = "Warming search..."
                 semanticRuntime.markSemanticModelWarming()
 
-                // Core ML's async loader cooperates with task cancellation.
-                // Avoid wrapping the synchronous initializer in a detached
-                // task: that work continues allocating after memory pressure.
-                let imgEncoder = try await ImageEncoder()
+                async let modelsTask = prewarmedModelsForSearch()
+                async let databaseTask = CancellableDetachedOperation.run(priority: .userInitiated) {
+                    AppDatabase.shared as any DatabaseProtocol
+                }
+                let (models, database) = try await (modelsTask, databaseTask)
                 try Task.checkCancellation()
-
-                let txtEncoder = try await TextEncoder()
-                try Task.checkCancellation()
-                search = SearchEngine(textEncoder: txtEncoder)
-                indexing = IndexingService(imageEncoder: imgEncoder, searchEngine: search)
+                let imgEncoder = models.imageEncoder
+                let txtEncoder = models.textEncoder
+                search = SearchEngine(textEncoder: txtEncoder, database: database)
+                indexing = IndexingService(
+                    imageEncoder: imgEncoder,
+                    searchEngine: search,
+                    database: database
+                )
 
                 imageEncoder = imgEncoder
                 textEncoder = txtEncoder
@@ -257,7 +331,7 @@ class AppState: ObservableObject {
 
             let loadedIndex = await indexing.checkAndLoadExistingIndex(
                 scheduleAutoResume: true,
-                cleanOrphans: effectivePriority != .userInitiatedSearch,
+                scheduleOrphanCleanup: effectivePriority != .userInitiatedSearch,
                 loadPriority: effectivePriority == .userInitiatedSearch ? .userInitiated : .utility
             )
             try Task.checkCancellation()
@@ -291,6 +365,30 @@ class AppState: ObservableObject {
 
     static func resumeExistingSearchForWarmup(_ searchEngine: SearchEngine) {
         searchEngine.resumeAfterMemoryPressure()
+    }
+
+    private func prewarmedModelsForSearch() async throws -> PrewarmedModels {
+        if let imageEncoder, let textEncoder {
+            return PrewarmedModels(imageEncoder: imageEncoder, textEncoder: textEncoder)
+        }
+
+        startOnboardingModelPrewarm()
+        guard let task = modelPrewarmTask else { throw CancellationError() }
+        let models = try await task.value
+        try Task.checkCancellation()
+        installPrewarmedModels(models)
+        return models
+    }
+
+    private func installPrewarmedModels(_ models: PrewarmedModels) {
+        imageEncoder = models.imageEncoder
+        textEncoder = models.textEncoder
+    }
+
+    private func cancelModelPrewarm() {
+        modelPrewarmGeneration &+= 1
+        modelPrewarmTask?.cancel()
+        modelPrewarmTask = nil
     }
 
     private func startCaptionPreparation(textEncoder: TextEncoder) {

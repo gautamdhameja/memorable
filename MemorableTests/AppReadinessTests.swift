@@ -4,6 +4,30 @@ import Photos
 
 final class AppReadinessTests: XCTestCase {
 
+    func testOnboardingPrewarmStartsOnlyWhileFirstRunIsActive() {
+        XCTAssertEqual(
+            OnboardingModelPrewarmPolicy.action(
+                onboardingComplete: false,
+                sceneIsActive: true
+            ),
+            .start
+        )
+        XCTAssertEqual(
+            OnboardingModelPrewarmPolicy.action(
+                onboardingComplete: false,
+                sceneIsActive: false
+            ),
+            .cancel
+        )
+        XCTAssertEqual(
+            OnboardingModelPrewarmPolicy.action(
+                onboardingComplete: true,
+                sceneIsActive: true
+            ),
+            .none
+        )
+    }
+
     func testDeviceCompatibilityAllowsSimulatorAndA14MetalFamily() {
         XCTAssertTrue(DeviceCompatibility.isSupported(
             isSimulator: true,

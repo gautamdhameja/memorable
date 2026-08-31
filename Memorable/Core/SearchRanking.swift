@@ -20,7 +20,6 @@ struct ScoredMedia {
 
 enum SearchCancellation {
     static let checkInterval = 256
-    @TaskLocal static var additionalCheck: (@Sendable () throws -> Void)?
 
     static func check(_ iteration: Int) throws {
         if iteration.isMultiple(of: checkInterval) {
@@ -30,7 +29,6 @@ enum SearchCancellation {
 
     static func checkNow() throws {
         try Task.checkCancellation()
-        try additionalCheck?()
     }
 }
 

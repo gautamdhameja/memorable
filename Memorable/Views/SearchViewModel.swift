@@ -22,13 +22,22 @@ enum SearchMediaFilter: String, CaseIterable {
     }
 }
 
+enum SearchSuggestionVisibilityPolicy {
+    static func shouldShow(
+        indexingProgress: IndexingProgress,
+        isReady: Bool
+    ) -> Bool {
+        !indexingProgress.isRunning && isReady
+    }
+}
+
 @MainActor
 final class SearchViewModel: ObservableObject {
     static let sortModeStorageKey = "searchSortMode"
     static let initialVisibleCount = 50
 
     struct Dependencies {
-        let deferEnrichmentForUserSearch: () -> Void
+        let prioritizeUserSearch: () -> Void
         let isSemanticSearchReady: () -> Bool
         let isIndexReady: () -> Bool
         let isIndexLoaded: () -> Bool
@@ -159,6 +168,10 @@ final class SearchViewModel: ObservableObject {
 
     func loadSearchHistory() {
         searchHistory = dependencies.loadHistory()
+    }
+
+    func setSearchHistory(_ history: [String]) {
+        searchHistory = history
     }
 
     func clearSearchHistory() {
@@ -310,7 +323,7 @@ final class SearchViewModel: ObservableObject {
         }
 
         do {
-            dependencies.deferEnrichmentForUserSearch()
+            dependencies.prioritizeUserSearch()
             if !dependencies.isSemanticSearchReady() || !dependencies.isIndexReady() {
                 try await dependencies.prepareForSearch()
             }

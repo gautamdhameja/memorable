@@ -116,6 +116,27 @@ struct ProRuntimePolicy: Equatable {
     #endif
 }
 
+enum FolderResultAccessPolicy {
+    static func allows(sourceId: String, isPro: Bool) -> Bool {
+        sourceId == PhotoSourceType.photokit.rawValue || isPro
+    }
+}
+
+enum FilteredResultSelectionPolicy {
+    static func index(
+        preserving currentResultID: String?,
+        previousIndex: Int,
+        remainingResultIDs: [String]
+    ) -> Int {
+        guard !remainingResultIDs.isEmpty else { return 0 }
+        if let currentResultID,
+           let retainedIndex = remainingResultIDs.firstIndex(of: currentResultID) {
+            return retainedIndex
+        }
+        return min(max(0, previousIndex), remainingResultIDs.count - 1)
+    }
+}
+
 @MainActor
 class ProManager: ObservableObject {
     typealias ProductLoader = @MainActor ([String]) async throws -> [Product]
@@ -127,12 +148,13 @@ class ProManager: ObservableObject {
     static let productId = "com.blockdeep.memorable.pro.v2"
     static let legacyProductId = "com.blockdeep.memorable.pro"
     private static let entitlementProductIds: Set<String> = [productId, legacyProductId]
+    private static let lastKnownEntitlementKey = "lastKnownVerifiedProEntitlement"
 
     static func isEntitlementProduct(_ productId: String) -> Bool {
         entitlementProductIds.contains(productId)
     }
 
-    @Published var isPro: Bool = ProRuntimePolicy.current.initiallyPro
+    @Published var isPro: Bool
     @Published var product: Product?
     @Published var purchaseError: String?
     @Published var isRestoring: Bool = false
@@ -147,6 +169,7 @@ class ProManager: ObservableObject {
     private let productLoader: ProductLoader
     private let retryDelay: RetryDelay
     private let entitlementVerifier: EntitlementVerifier
+    private let persistEntitlement: @MainActor (Bool) -> Void
     private let performsEntitlementVerification: Bool
     private let listensForTransactionUpdates: Bool
 
@@ -163,9 +186,15 @@ class ProManager: ObservableObject {
 
     private init() {
         let runtimePolicy = ProRuntimePolicy.current
+        isPro = runtimePolicy.initiallyPro || UserDefaults.standard.bool(
+            forKey: Self.lastKnownEntitlementKey
+        )
         productLoader = { try await Product.products(for: $0) }
         retryDelay = { try await Task.sleep(nanoseconds: 2_000_000_000) }
         entitlementVerifier = { await Self.readCurrentEntitlement() }
+        persistEntitlement = { entitled in
+            UserDefaults.standard.set(entitled, forKey: Self.lastKnownEntitlementKey)
+        }
         performsEntitlementVerification = runtimePolicy.performsEntitlementVerification
         listensForTransactionUpdates = runtimePolicy.listensForTransactionUpdates
     }
@@ -177,11 +206,15 @@ class ProManager: ObservableObject {
         retryDelay: @escaping RetryDelay = {
             try await Task.sleep(nanoseconds: 2_000_000_000)
         },
-        entitlementVerifier: @escaping EntitlementVerifier = { .indeterminate }
+        entitlementVerifier: @escaping EntitlementVerifier = { .indeterminate },
+        persistedEntitlement: Bool = false,
+        persistEntitlement: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
+        isPro = persistedEntitlement
         self.productLoader = productLoader
         self.retryDelay = retryDelay
         self.entitlementVerifier = entitlementVerifier
+        self.persistEntitlement = persistEntitlement
         performsEntitlementVerification = true
         listensForTransactionUpdates = false
     }
@@ -364,7 +397,7 @@ class ProManager: ObservableObject {
 
         switch result {
         case .entitled:
-            isPro = true
+            publishEntitlementState(true)
             return
         case .indeterminate:
             logger.error("StoreKit entitlement status is indeterminate; preserving local Pro state")
@@ -374,7 +407,7 @@ class ProManager: ObservableObject {
         }
 
         let wasPro = isPro
-        isPro = false
+        publishEntitlementState(false)
         if wasPro {
             logger.error("Pro entitlement revoked (refund or family sharing removed)")
         }
@@ -408,7 +441,12 @@ class ProManager: ObservableObject {
     private func publishVerifiedEntitlement() async {
         let generation = await beginEntitlementVerification()
         guard generation == entitlementGeneration else { return }
-        isPro = true
+        publishEntitlementState(true)
+    }
+
+    private func publishEntitlementState(_ entitled: Bool) {
+        persistEntitlement(entitled)
+        isPro = entitled
     }
 
     private func startListeningForTransactionsIfNeeded() {

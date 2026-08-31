@@ -3,6 +3,15 @@ import UIKit
 import Darwin
 import CryptoKit
 
+struct FolderIndexingImage {
+    let image: UIImage
+    let date: Date?
+    let latitude: Double?
+    let longitude: Double?
+    let width: Int
+    let height: Int
+}
+
 enum FolderBookmarkStore {
     struct DeletionToken: Equatable {
         let liveURL: URL
@@ -331,6 +340,25 @@ class FolderScanner {
         return isValidImageFile(URL(fileURLWithPath: filePath), within: folderURL)
     }
 
+    /// Validates several results under one security-scoped folder access.
+    static func accessibleBookmarkedImagePaths(
+        _ filePaths: [String],
+        sourceId: String
+    ) -> Set<String> {
+        guard sourceId != PhotoSourceType.photokit.rawValue,
+              let folderURL = resolveBookmark(forSourceId: sourceId) else {
+            return []
+        }
+        let hasAccess = folderURL.startAccessingSecurityScopedResource()
+        guard hasAccess else { return [] }
+        defer { folderURL.stopAccessingSecurityScopedResource() }
+
+        return Set(filePaths.filter {
+            !Task.isCancelled
+                && isValidImageFile(URL(fileURLWithPath: $0), within: folderURL)
+        })
+    }
+
     static func isValidImageFile(_ imageURL: URL, within folderURL: URL) -> Bool {
         withValidatedImageFileDescriptor(imageURL, within: folderURL) { _ in true } == true
     }
@@ -617,6 +645,44 @@ class FolderScanner {
         } ?? nil
     }
 
+    /// Loads all base-indexing data from one immutable, validated file snapshot.
+    static func loadIndexingImage(
+        from url: URL,
+        within folderURL: URL,
+        targetSize: CGSize = CGSize(width: 224, height: 224)
+    ) -> FolderIndexingImage? {
+        guard !Task.isCancelled,
+              targetSize.width.isFinite,
+              targetSize.height.isFinite,
+              targetSize.width > 0,
+              targetSize.height > 0 else {
+            return nil
+        }
+        return withValidatedImageSource(url, within: folderURL) { imageSource, modificationDate in
+            guard let image = decodeImage(from: imageSource, targetSize: targetSize),
+                  !Task.isCancelled,
+                  let properties = CGImageSourceCopyPropertiesAtIndex(
+                    imageSource,
+                    0,
+                    nil
+                  ) as? [CFString: Any] else {
+                return nil
+            }
+            let metadata = extractMetadata(
+                from: properties,
+                modificationDate: modificationDate
+            )
+            return FolderIndexingImage(
+                image: image,
+                date: metadata.date,
+                latitude: metadata.latitude,
+                longitude: metadata.longitude,
+                width: properties[kCGImagePropertyPixelWidth] as? Int ?? Int(image.size.width),
+                height: properties[kCGImagePropertyPixelHeight] as? Int ?? Int(image.size.height)
+            )
+        } ?? nil
+    }
+
     // Load a thumbnail from a file URL
     static func loadThumbnail(from url: URL, targetSize: CGSize = CGSize(width: 400, height: 400)) -> UIImage? {
         guard !Task.isCancelled,
@@ -765,6 +831,15 @@ class FolderScanner {
               ) as? [CFString: Any] else {
             return (nil, nil, nil)
         }
+
+        return extractMetadata(from: properties, modificationDate: modificationDate)
+    }
+
+    private static func extractMetadata(
+        from properties: [CFString: Any],
+        modificationDate: Date?
+    ) -> (date: Date?, latitude: Double?, longitude: Double?) {
+        guard !Task.isCancelled else { return (nil, nil, nil) }
 
         var date: Date?
         var latitude: Double?

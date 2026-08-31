@@ -62,6 +62,93 @@ enum FolderImageLoadOperation {
     }
 }
 
+/// Coalesces thumbnail asset lookups that arrive during the same render pass
+/// into one PhotoKit fetch, then retains a bounded cache for grids and taps.
+private final class PhotoKitAssetResolver: @unchecked Sendable {
+    private struct State {
+        var pending: [String: [CheckedContinuation<PHAsset?, Never>]] = [:]
+        var flushScheduled = false
+    }
+
+    private let cache = NSCache<NSString, PHAsset>()
+    private let state = OSAllocatedUnfairLock(uncheckedState: State())
+
+    init() {
+        cache.countLimit = 1_000
+    }
+
+    func cachedAsset(for identifier: String) -> PHAsset? {
+        cache.object(forKey: identifier as NSString)
+    }
+
+    func resolve(_ identifier: String) async -> PHAsset? {
+        if let cached = cachedAsset(for: identifier) { return cached }
+        return await withCheckedContinuation { continuation in
+            let shouldSchedule = state.withLockUnchecked { state in
+                state.pending[identifier, default: []].append(continuation)
+                guard !state.flushScheduled else { return false }
+                state.flushScheduled = true
+                return true
+            }
+            guard shouldSchedule else { return }
+            Task.detached(priority: .userInitiated) { [weak self] in
+                do {
+                    try await Task.sleep(nanoseconds: 8_000_000)
+                } catch is CancellationError {
+                    self?.flush()
+                    return
+                } catch {
+                    logger.error("[PhotoKitAssetResolver] Coalescing delay failed: \(error.safeDiagnosticCode)")
+                    self?.flush()
+                    return
+                }
+                self?.flush()
+            }
+        }
+    }
+
+    func prefetch(_ identifiers: [String]) async {
+        let missing = Array(Set(identifiers)).filter { cachedAsset(for: $0) == nil }
+        guard !missing.isEmpty else { return }
+        let task = Task.detached(priority: .utility) { [weak self] in
+            self?.fetchAndCache(missing)
+        }
+        _ = await task.value
+    }
+
+    func removeAll() {
+        cache.removeAllObjects()
+    }
+
+    private func flush() {
+        let pending = state.withLockUnchecked { state in
+            let pending = state.pending
+            state.pending.removeAll(keepingCapacity: true)
+            state.flushScheduled = false
+            return pending
+        }
+        guard !pending.isEmpty else { return }
+        let assets = fetchAndCache(Array(pending.keys))
+        for (identifier, continuations) in pending {
+            let asset = assets[identifier]
+            continuations.forEach { $0.resume(returning: asset) }
+        }
+    }
+
+    @discardableResult
+    private func fetchAndCache(_ identifiers: [String]) -> [String: PHAsset] {
+        guard !identifiers.isEmpty else { return [:] }
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+        var assets: [String: PHAsset] = [:]
+        assets.reserveCapacity(result.count)
+        result.enumerateObjects { [cache] asset, _, _ in
+            assets[asset.localIdentifier] = asset
+            cache.setObject(asset, forKey: asset.localIdentifier as NSString)
+        }
+        return assets
+    }
+}
+
 actor CancellablePermitPool {
     private struct Waiter {
         let id: UUID
@@ -255,6 +342,7 @@ final class PhotoKitRequestController<Value: Sendable>: Sendable {
 }
 
 class PhotoLibrary {
+    private static let assetResolver = PhotoKitAssetResolver()
     struct VideoFrame: Sendable {
         let position: Double
         let image: UIImage
@@ -379,6 +467,11 @@ class PhotoLibrary {
         targetSize: CGSize
     ) async -> UIImage? {
         if result.sourceId != PhotoSourceType.photokit.rawValue {
+            let isPro = await MainActor.run { ProManager.shared.isPro }
+            guard FolderResultAccessPolicy.allows(
+                sourceId: result.sourceId,
+                isPro: isPro
+            ) else { return nil }
             guard !result.isVideo, let filePath = result.filePath else { return nil }
             return await FolderImageLoadOperation.run {
                 FolderScanner.loadImageFromBookmarkedSource(
@@ -389,7 +482,7 @@ class PhotoLibrary {
             }
         }
 
-        guard let asset = getAsset(by: result.localIdentifier) else { return nil }
+        guard let asset = await resolveAsset(by: result.localIdentifier) else { return nil }
         if result.isVideo {
             return await VideoFrameExtractor.thumbnail(
                 from: asset,
@@ -491,8 +584,23 @@ class PhotoLibrary {
     }
 
     static func getAsset(by localIdentifier: String) -> PHAsset? {
+        if let cached = assetResolver.cachedAsset(for: localIdentifier) {
+            return cached
+        }
         let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
         return result.firstObject
+    }
+
+    static func resolveAsset(by localIdentifier: String) async -> PHAsset? {
+        await assetResolver.resolve(localIdentifier)
+    }
+
+    static func prefetchAssets(localIdentifiers: [String]) async {
+        await assetResolver.prefetch(localIdentifiers)
+    }
+
+    static func clearAssetCache() {
+        assetResolver.removeAll()
     }
 
     static func loadVideoFrames(

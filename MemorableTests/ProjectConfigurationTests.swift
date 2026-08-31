@@ -7,17 +7,20 @@ final class ProjectConfigurationTests: XCTestCase {
             .deletingLastPathComponent()
     }
 
-    func testSigningIsLocalAndUnsignedByDefault() throws {
+    func testDeviceSigningUsesOfficialTeamByDefault() throws {
         let projectYAML = try contents(of: "project.yml")
-        let buildConfig = try contents(of: "Config/Build.xcconfig")
-        let gitignore = try contents(of: ".gitignore")
+        let buildConfigURL = repositoryRoot.appendingPathComponent("Config/Build.xcconfig")
+        let buildConfig = if FileManager.default.fileExists(atPath: buildConfigURL.path) {
+            try String(contentsOf: buildConfigURL, encoding: .utf8)
+        } else {
+            ""
+        }
 
-        XCTAssertFalse(projectYAML.contains("DEVELOPMENT_TEAM:"))
-        XCTAssertFalse(projectYAML.contains("CODE_SIGN_IDENTITY: Apple Development"))
-        XCTAssertTrue(projectYAML.contains("Config/Build.xcconfig"))
-        XCTAssertTrue(buildConfig.contains("CODE_SIGNING_ALLOWED = NO"))
-        XCTAssertTrue(buildConfig.contains("#include? \"Local.xcconfig\""))
-        XCTAssertTrue(gitignore.contains("Config/Local.xcconfig"))
+        XCTAssertTrue(projectYAML.contains("CODE_SIGN_STYLE: Automatic"))
+        XCTAssertTrue(projectYAML.contains("DEVELOPMENT_TEAM: GHL726VCA6"))
+        XCTAssertFalse(projectYAML.contains("Config/Build.xcconfig"))
+        XCTAssertFalse(buildConfig.contains("CODE_SIGNING_ALLOWED = NO"))
+        XCTAssertFalse(buildConfig.contains("CODE_SIGNING_REQUIRED = NO"))
     }
 
     func testProjectRemainsIPhoneOnly() throws {
@@ -75,9 +78,9 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(viewer.contains(".sheet(item: $shareCoordinator.preparedItem)"))
         XCTAssertTrue(viewer.contains("shareCoordinator.requestShare(for: result)"))
         XCTAssertTrue(photoSharing.contains("cancelRequest: { manager.cancelDataRequest($0) }"))
-        XCTAssertGreaterThanOrEqual(
+        XCTAssertEqual(
             viewer.components(separatedBy: "Button(action: { shareCurrentPhoto() })").count - 1,
-            2
+            1
         )
         XCTAssertFalse(photoSharing.contains("renderMetadataStrippedShareItem"))
         XCTAssertFalse(sources.contains(".quickLookPreview"))

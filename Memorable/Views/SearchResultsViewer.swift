@@ -280,36 +280,21 @@ struct SearchResultsViewer: View {
 
                     if currentIndex < displayedResults.count {
                         let result = displayedResults[currentIndex]
-                        VStack(alignment: .leading, spacing: 0) {
-                            if let date = result.creationDate {
-                                Text(date.formatted(date: .long, time: .shortened))
-                                    .font(.body.weight(.semibold))
-                                    .foregroundStyle(.white.opacity(0.94))
-                            }
-
-                            HStack {
-                                if canShareCurrentPhoto {
-                                    Button(action: { shareCurrentPhoto() }) {
-                                        if shareCoordinator.isPreparing {
-                                            ProgressView()
-                                                .controlSize(.small)
-                                                .tint(.white)
-                                                .frame(width: 44, height: 44)
-                                        } else {
-                                            Image(systemName: "square.and.arrow.up")
-                                                .font(.title3)
-                                                .foregroundStyle(.white)
-                                                .frame(width: 44, height: 44)
-                                        }
-                                    }
-                                    .disabled(
-                                        shareCoordinator.isPreparing
-                                            || shareCoordinator.preparedItem != nil
-                                    )
-                                    .accessibilityLabel("Share photo")
+                        let showsFindSimilar = searchEngine != nil && result.supportsFindSimilar
+                        if result.creationDate != nil || showsFindSimilar {
+                            HStack(alignment: .center, spacing: 16) {
+                                if let date = result.creationDate {
+                                    Text(date.formatted(date: .long, time: .shortened))
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(.white.opacity(0.94))
+                                        .lineLimit(2)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .layoutPriority(1)
                                 }
-                                Spacer()
-                                if searchEngine != nil, result.supportsFindSimilar {
+
+                                Spacer(minLength: 12)
+
+                                if showsFindSimilar {
                                     Button(action: handleFindSimilar) {
                                         HStack(spacing: 8) {
                                             if isFindingSimilar {
@@ -323,12 +308,13 @@ struct SearchResultsViewer: View {
                                         }
                                         .frame(minHeight: 44)
                                     }
+                                    .fixedSize(horizontal: true, vertical: false)
                                 }
                             }
-                            .padding(.top, 12)
+                            .frame(minHeight: 44)
+                            .padding(.horizontal, 26)
+                            .padding(.bottom, 20)
                         }
-                        .padding(.horizontal, 26)
-                        .padding(.bottom, 20)
                     }
                 }
                 .transition(.opacity)
@@ -369,17 +355,25 @@ struct SearchResultsViewer: View {
             shareCoordinator.cancelPreparation()
         }
         .onAppear {
+            enforceFolderEntitlement()
             shareCoordinator.visibleResultDidChange(to: currentResultID)
         }
         .onChange(of: currentResultID) {
             shareCoordinator.visibleResultDidChange(to: currentResultID)
+        }
+        .onChange(of: proManager.isPro) {
+            enforceFolderEntitlement()
         }
     }
 
     private var canShareCurrentPhoto: Bool {
         guard currentIndex < displayedResults.count else { return false }
         let result = displayedResults[currentIndex]
-        return !result.isVideo && (
+        return !result.isVideo
+            && FolderResultAccessPolicy.allows(
+                sourceId: result.sourceId,
+                isPro: proManager.isPro
+            ) && (
             result.sourceId == PhotoSourceType.photokit.rawValue || result.filePath != nil
         )
     }
@@ -439,6 +433,28 @@ struct SearchResultsViewer: View {
         findSimilarTask?.cancel()
         findSimilarTask = nil
         isFindingSimilar = false
+    }
+
+    private func enforceFolderEntitlement() {
+        guard !proManager.isPro else { return }
+        let previouslyVisibleResultID = currentResultID
+        let entitledResults = displayedResults.filter {
+            FolderResultAccessPolicy.allows(sourceId: $0.sourceId, isPro: false)
+        }
+        guard entitledResults != displayedResults else { return }
+
+        cancelFindSimilar()
+        shareCoordinator.cancelAll()
+        guard !entitledResults.isEmpty else {
+            dismiss()
+            return
+        }
+        displayedResults = entitledResults
+        currentIndex = FilteredResultSelectionPolicy.index(
+            preserving: previouslyVisibleResultID,
+            previousIndex: currentIndex,
+            remainingResultIDs: entitledResults.map(\.id)
+        )
     }
 
 }

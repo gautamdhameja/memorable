@@ -61,10 +61,6 @@ targets:
         outputFiles:
           - "$(DERIVED_FILE_DIR)/memorable-packaged-models-verified"
         basedOnDependencyAnalysis: true
-    configFiles:
-      Debug: Config/Build.xcconfig
-      Release: Config/Build.xcconfig
-      ReleaseTest: Config/Build.xcconfig
     sources:
       - path: Memorable
         excludes:
@@ -93,6 +89,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: GHL726VCA6
         PROVISIONING_PROFILE_SPECIFIER: ""
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         SUPPORTS_MACCATALYST: "NO"
@@ -104,10 +101,6 @@ targets:
   MemorableTests:
     type: bundle.unit-test
     platform: iOS
-    configFiles:
-      Debug: Config/Build.xcconfig
-      Release: Config/Build.xcconfig
-      ReleaseTest: Config/Build.xcconfig
     sources:
       - path: MemorableTests
     dependencies:
@@ -122,9 +115,6 @@ targets:
   MemorableRelevanceTests:
     type: bundle.unit-test
     platform: iOS
-    configFiles:
-      Debug: Config/Build.xcconfig
-      Release: Config/Build.xcconfig
     sources:
       - path: MemorableRelevanceTests
     resources:
@@ -141,8 +131,6 @@ targets:
   MemorableReleaseTests:
     type: bundle.unit-test
     platform: iOS
-    configFiles:
-      ReleaseTest: Config/Build.xcconfig
     sources:
       - path: MemorableReleaseTests
     dependencies:

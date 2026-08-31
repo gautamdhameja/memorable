@@ -273,16 +273,9 @@ final class FolderIndexingWorker {
             guard Self.shouldPersistFolderWrite(isCancelled: Task.isCancelled) else {
                 throw CancellationError()
             }
-            let persistTask = Task.detached(priority: .utility) {
-                try Task.checkCancellation()
+            try await CancellableDetachedOperation.run(priority: .utility) {
                 _ = try db.insertPhotos(photos, completingRequiredRebuild: false)
             }
-            try await withTaskCancellationHandler {
-                try await persistTask.value
-            } onCancel: {
-                persistTask.cancel()
-            }
-            try Task.checkCancellation()
         }
         guard !Task.isCancelled else {
             await rollbackIncompleteSource()
@@ -294,7 +287,8 @@ final class FolderIndexingWorker {
             isRunning: true,
             searchableCount: callbacks.searchableCount()
         )
-        callbacks.setProgress(currentProgress)
+        var progressPublisher = IndexingProgressPublisher()
+        progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)
 
         var indexed = 0
         var failedFileCount = 0
@@ -326,52 +320,42 @@ final class FolderIndexingWorker {
                 successfullyHandledFileCount += 1
                 indexed += 1
                 currentProgress.completed = indexed
-                callbacks.setProgress(currentProgress)
+                progressPublisher.publish(currentProgress, using: callbacks.setProgress)
                 continue
             }
 
-            let loadedImage = await FolderImageLoadOperation.run {
-                FolderScanner.loadImage(from: imageURL, within: url)
-            }
+            let loadedImage = await FolderFileReadOperation.run {
+                FolderScanner.loadIndexingImage(from: imageURL, within: url)
+            } ?? nil
             guard !Task.isCancelled else { break }
-            guard let image = loadedImage else {
+            guard let loadedImage else {
                 failedFileCount += 1
                 indexed += 1
                 currentProgress.completed = indexed
-                callbacks.setProgress(currentProgress)
+                progressPublisher.publish(currentProgress, using: callbacks.setProgress)
                 continue
             }
 
             do {
                 let encoder = imageEncoder
-                let embedding = try await encoder.encodeCancellable(image: image)
-                try Task.checkCancellation()
-                let metadata = await FolderFileReadOperation.run {
-                    FolderScanner.extractMetadata(from: imageURL, within: url)
-                } ?? (date: nil, latitude: nil, longitude: nil)
-                try Task.checkCancellation()
-                var (originalWidth, originalHeight) = await FolderFileReadOperation.run {
-                    FolderScanner.imageDimensions(from: imageURL, within: url)
-                } ?? (width: 0, height: 0)
-                try Task.checkCancellation()
-                if originalWidth == 0 || originalHeight == 0 {
-                    if originalWidth == 0 { originalWidth = Int(image.size.width) }
-                    if originalHeight == 0 { originalHeight = Int(image.size.height) }
-                }
-
+                let embedding = try await encoder.encodeCancellable(image: loadedImage.image)
                 try Task.checkCancellation()
                 batch.append(IndexedPhoto(
                     id: UUID().uuidString,
                     localIdentifier: FolderScanner.localIdentifier(for: imageURL, within: url, sourceId: sourceId),
-                    creationDate: metadata.date,
-                    latitude: metadata.latitude,
-                    longitude: metadata.longitude,
-                    pixelWidth: originalWidth,
-                    pixelHeight: originalHeight,
+                    creationDate: loadedImage.date,
+                    latitude: loadedImage.latitude,
+                    longitude: loadedImage.longitude,
+                    pixelWidth: loadedImage.width,
+                    pixelHeight: loadedImage.height,
                     embedding: embedding.toFloat16Data(),
                     indexedAt: Date(),
                     sourceId: sourceId,
-                    filePath: imageURL.path
+                    filePath: imageURL.path,
+                    isScreenshot: MemoryContentPolicy.isLikelyScreenshotDimensions(
+                        width: loadedImage.width,
+                        height: loadedImage.height
+                    )
                 ))
                 successfullyHandledFileCount += 1
                 if batch.count >= batchSize {
@@ -396,7 +380,7 @@ final class FolderIndexingWorker {
 
             indexed += 1
             currentProgress.completed = indexed
-            callbacks.setProgress(currentProgress)
+            progressPublisher.publish(currentProgress, using: callbacks.setProgress)
             if indexed % 10 == 0 { await Task.yield() }
         }
 

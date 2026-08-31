@@ -29,9 +29,6 @@ Memorable/Models/*.mlmodelc/**
 ## SourceKit-LSP (xcode-build-server config, machine-specific absolute paths)
 buildServer.json
 
-## Local signing configuration
-Config/Local.xcconfig
-
 ## Obj-C/Swift specific
 *.hmap
 

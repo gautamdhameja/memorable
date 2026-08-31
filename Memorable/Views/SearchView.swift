@@ -54,7 +54,7 @@ struct SearchView: View {
         self.semanticRuntime = semanticRuntime
         self.captionService = captionService
         _viewModel = StateObject(wrappedValue: SearchViewModel(dependencies: .init(
-            deferEnrichmentForUserSearch: { indexingService.deferEnrichmentForUserSearch() },
+            prioritizeUserSearch: { indexingService.prioritizeUserSearch() },
             isSemanticSearchReady: { semanticRuntime.readiness.isSemanticSearchReady },
             isIndexReady: { indexingService.isReady },
             isIndexLoaded: { searchEngine.isIndexLoaded },
@@ -87,6 +87,7 @@ struct SearchView: View {
                 }
             },
             validResultIDs: { candidates in
+                let isPro = ProManager.shared.isPro
                 let task = Task.detached {
                     guard !Task.isCancelled else { return Set<String>() }
                     let photoKitCandidates = candidates.filter {
@@ -98,15 +99,33 @@ struct SearchView: View {
                     assets.enumerateObjects { asset, _, _ in
                         validIdentifiers.insert(asset.localIdentifier)
                     }
+                    let folderCandidates = candidates.filter {
+                        FolderResultAccessPolicy.allows(
+                            sourceId: $0.sourceId,
+                            isPro: isPro
+                        ) && $0.filePath != nil
+                    }
+                    var accessibleFolderResultIDs = Set<String>()
+                    for (sourceId, sourceCandidates) in Dictionary(
+                        grouping: folderCandidates,
+                        by: \SearchResult.sourceId
+                    ) {
+                        guard !Task.isCancelled else { return Set<String>() }
+                        let accessiblePaths = FolderScanner.accessibleBookmarkedImagePaths(
+                            sourceCandidates.compactMap(\.filePath),
+                            sourceId: sourceId
+                        )
+                        accessibleFolderResultIDs.formUnion(sourceCandidates.compactMap { result in
+                            guard let filePath = result.filePath,
+                                  accessiblePaths.contains(filePath) else { return nil }
+                            return result.id
+                        })
+                    }
                     return SearchResultForegroundValidator.validResultIDs(
                         candidates: candidates,
                         validPhotoKitIdentifiers: validIdentifiers,
                         isFolderResultAccessible: { result in
-                            guard let filePath = result.filePath else { return false }
-                            return FolderScanner.canAccessBookmarkedImage(
-                                filePath: filePath,
-                                sourceId: result.sourceId
-                            )
+                            accessibleFolderResultIDs.contains(result.id)
                         }
                     )
                 }
@@ -211,12 +230,15 @@ struct SearchView: View {
                             resultsGrid(results: viewModel.results, filteredResults: filteredSearchResults)
                         } else if !viewModel.lastResults.isEmpty {
                             lastResultsView
-                        } else if indexingService.progress.isRunning && viewModel.queryText.isEmpty && !indexingService.progress.photosComplete {
-                            // Slideshow while indexing
+                        } else if indexingService.progress.isRunning && viewModel.queryText.isEmpty {
+                            // Keep suggestions hidden through both photo and video indexing.
                             IndexingSlideshowView(captionService: captionService)
                                 .padding(.top, 8)
-                        } else if viewModel.results.isEmpty && viewModel.queryText.isEmpty && (!indexingService.progress.isRunning || indexingService.progress.photosComplete) {
-                            if indexingService.isReady {
+                        } else if viewModel.results.isEmpty && viewModel.queryText.isEmpty {
+                            if SearchSuggestionVisibilityPolicy.shouldShow(
+                                indexingProgress: indexingService.progress,
+                                isReady: indexingService.isReady
+                            ) {
                                 homeView
                             } else {
                                 emptyState
@@ -278,13 +300,16 @@ struct SearchView: View {
             .task {
                 // Load DB-backed data off the main thread's critical path so
                 // the search bar is tappable immediately on appear.
-                let albums = SmartAlbumStore.load()
-                viewModel.loadSearchHistory()
-                smartAlbums = albums
-
-                let count = await Task.detached {
+                async let savedData = Task.detached(priority: .utility) {
+                    (albums: SmartAlbumStore.load(), history: SearchHistory.load())
+                }.value
+                async let libraryCount = Task.detached(priority: .utility) {
                     PhotoLibrary.fetchAllMedia().count
                 }.value
+                let (data, count) = await (savedData, libraryCount)
+                guard !Task.isCancelled else { return }
+                smartAlbums = data.albums
+                viewModel.setSearchHistory(data.history)
                 totalLibraryCount = count
             }
             .onDisappear {
@@ -298,6 +323,22 @@ struct SearchView: View {
             }
             .onChange(of: sortModeRaw) { _, newValue in
                 viewModel.setSortMode(rawValue: newValue)
+            }
+            .onChange(of: proManager.isPro) { _, isPro in
+                guard !isPro else { return }
+                if let selectedPhoto,
+                   !FolderResultAccessPolicy.allows(
+                       sourceId: selectedPhoto.sourceId,
+                       isPro: false
+                   ) {
+                    self.selectedPhoto = nil
+                }
+                viewModel.validateVisibleResults(reason: "Pro entitlement changed")
+            }
+            .onChange(of: viewModel.results.map(\.localIdentifier)) { _, identifiers in
+                Task {
+                    await PhotoLibrary.prefetchAssets(localIdentifiers: identifiers)
+                }
             }
             .onChange(of: indexingService.isReady) { oldValue, newValue in
                 #if DEBUG
@@ -364,42 +405,34 @@ struct SearchView: View {
     }
 
     private var searchBar: some View {
-        ZStack {
-            if viewModel.queryText.isEmpty {
-                FocusOrbit(compact: true)
-                    .frame(height: 72)
-                    .padding(.horizontal, 4)
-            }
-
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(Celestial.Colors.primaryFixedDim)
-                    .accessibilityHidden(true)
-                TextField(searchPlaceholder, text: Binding(
-                    get: { viewModel.queryText },
-                    set: { viewModel.setQueryText($0) }
-                ))
-                    .font(.body)
-                    .foregroundStyle(Celestial.Colors.onSurface)
-                    .submitLabel(.search)
-                    .onSubmit {
-                        performSearch(saveToHistory: true)
-                    }
-                    .accessibilityLabel("Search photos")
-                if !viewModel.queryText.isEmpty {
-                    Button(action: { viewModel.setQueryText("") }) {
-                        Image(systemName: "xmark")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Celestial.Colors.outline)
-                            .frame(width: 28, height: 28)
-                    }
-                    .accessibilityLabel("Clear search")
+        HStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(Celestial.Colors.primaryFixedDim)
+                .accessibilityHidden(true)
+            TextField(searchPlaceholder, text: Binding(
+                get: { viewModel.queryText },
+                set: { viewModel.setQueryText($0) }
+            ))
+                .font(.body)
+                .foregroundStyle(Celestial.Colors.onSurface)
+                .submitLabel(.search)
+                .onSubmit {
+                    performSearch(saveToHistory: true)
                 }
+                .accessibilityLabel("Search photos")
+            if !viewModel.queryText.isEmpty {
+                Button(action: { viewModel.setQueryText("") }) {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Celestial.Colors.outline)
+                        .frame(width: 28, height: 28)
+                }
+                .accessibilityLabel("Clear search")
             }
-            .padding(.horizontal, 16)
-            .frame(height: 52)
-            .modifier(GlassSearchBarModifier(cornerRadius: 13))
         }
+        .padding(.horizontal, 16)
+        .frame(height: 52)
+        .modifier(GlassSearchBarModifier(cornerRadius: 13))
         .opacity(searchEngine.isIndexLoaded || !viewModel.queryText.isEmpty ? 1.0 : 0.85)
     }
 

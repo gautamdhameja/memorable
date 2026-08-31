@@ -158,7 +158,15 @@ final class PhotoLibraryIndexingWorker {
         async let videoFetch = Task.detached(priority: .userInitiated) {
             PhotoLibrary.fetchMedia(ofType: .video)
         }.value
-        let (photoAssets, videoAssets) = await (photoFetch, videoFetch)
+        let db = database
+        async let indexedCountFetch: Result<Int, Error> = Task.detached(priority: .userInitiated) {
+            Result { try db.indexedMediaCounts().total }
+        }.value
+        let (photoAssets, videoAssets, persistedIndexedMediaCount) = await (
+            photoFetch,
+            videoFetch,
+            indexedCountFetch
+        )
         let total = photoAssets.count + videoAssets.count
         callbacks.setHitFreeLimit(false)
 
@@ -168,12 +176,10 @@ final class PhotoLibraryIndexingWorker {
         let startedAt = CFAbsoluteTimeGetCurrent()
 
         let indexedMediaCount: Int
-        do {
-            let db = database
-            indexedMediaCount = try await Task.detached(priority: .userInitiated) {
-                try db.indexedMediaCounts().total
-            }.value
-        } catch {
+        switch persistedIndexedMediaCount {
+        case let .success(count):
+            indexedMediaCount = count
+        case let .failure(error):
             logger.error("Failed to load indexed media count: \(error.safeDiagnosticCode)")
             indexedMediaCount = ProManager.shared.isPro ? 0 : FreeTier.maxIndexedMedia
         }
@@ -198,7 +204,8 @@ final class PhotoLibraryIndexingWorker {
             phase: .photos,
             searchableCount: callbacks.searchableCount()
         )
-        callbacks.setProgress(currentProgress)
+        var progressPublisher = IndexingProgressPublisher()
+        progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)
 
         let checkpointInterval = searchableCheckpointInterval(forLibrarySize: total)
         var nextSearchableReloadCount = nextSearchableCheckpoint(
@@ -227,11 +234,19 @@ final class PhotoLibraryIndexingWorker {
             let selection = batchCursor.nextBatch(maxCount: remainingAllowed)
             guard !selection.isEmpty else { return [] }
             let identifiers = selection.map(\.localIdentifier)
+            let screenshotIdentifiers = Set(selection.compactMap { asset in
+                asset.mediaSubtypes.contains(.photoScreenshot) ? asset.localIdentifier : nil
+            })
             let existing: Set<String>
             do {
                 let db = database
+                let screenshots = screenshotIdentifiers
                 existing = try await Task.detached(priority: .utility) {
-                    try db.existingPhotoIdentifiers(in: identifiers)
+                    let existing = try db.existingPhotoIdentifiers(in: identifiers)
+                    try db.markPhotoScreenshots(
+                        localIdentifiers: screenshots.intersection(existing)
+                    )
+                    return existing
                 }.value
             } catch {
                 logger.error("Failed to check indexed photo batch: \(error.safeDiagnosticCode)")
@@ -243,7 +258,7 @@ final class PhotoLibraryIndexingWorker {
             if skippedCount > 0 {
                 indexed += skippedCount
                 currentProgress.completed = indexed
-                callbacks.setProgress(currentProgress)
+                progressPublisher.publish(currentProgress, using: callbacks.setProgress)
             }
             return assets
         }
@@ -251,7 +266,7 @@ final class PhotoLibraryIndexingWorker {
         let firstBatch = await makeBatch()
         currentProgress.rateBaselineCompleted = indexed
         currentProgress.phaseStartedAt = Date()
-        callbacks.setProgress(currentProgress)
+        progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)
         if !firstBatch.isEmpty {
             nextLoadTask = loadPhotoBatchTask(assets: firstBatch)
         }
@@ -292,7 +307,7 @@ final class PhotoLibraryIndexingWorker {
             guard !loadedImages.isEmpty else {
                 indexed += batchAssets.count
                 currentProgress.completed = indexed
-                callbacks.setProgress(currentProgress)
+                progressPublisher.publish(currentProgress, using: callbacks.setProgress)
                 continue
             }
 
@@ -375,14 +390,14 @@ final class PhotoLibraryIndexingWorker {
                     markIndexLimitReached(isPro: isPro)
                     indexed += batchAssets.count
                     currentProgress.completed = indexed
-                    callbacks.setProgress(currentProgress)
+                    progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)
                     break
                 }
             }
 
             indexed += batchAssets.count
             currentProgress.completed = indexed
-            callbacks.setProgress(currentProgress)
+            progressPublisher.publish(currentProgress, using: callbacks.setProgress)
             await Task.yield()
         }
 
@@ -399,7 +414,7 @@ final class PhotoLibraryIndexingWorker {
         _ = await callbacks.reloadSearchIndex()
         currentProgress.searchableCount = callbacks.searchableCount()
         currentProgress.photosComplete = true
-        callbacks.setProgress(currentProgress)
+        progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)
 
         #if DEBUG
         logger.info("[IndexingService] Photo indexing complete: \(populatedSession.indexedMediaCount) total indexed media")
@@ -410,6 +425,7 @@ final class PhotoLibraryIndexingWorker {
     func indexVideos(session: Session) async {
         var indexed = 0
         var currentProgress = callbacks.currentProgress()
+        var progressPublisher = IndexingProgressPublisher()
         if session.videoAssets.count > 0 && !Task.isCancelled && !session.hitFreeLimit {
             currentProgress = IndexingProgress(
                 total: session.videoAssets.count,
@@ -421,7 +437,7 @@ final class PhotoLibraryIndexingWorker {
                 rateBaselineCompleted: indexed,
                 phaseStartedAt: Date()
             )
-            callbacks.setProgress(currentProgress)
+            progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)
         }
 
         var existingVideos: Set<String> = []
@@ -451,7 +467,7 @@ final class PhotoLibraryIndexingWorker {
             if existingVideos.contains(asset.localIdentifier) {
                 indexed += 1
                 currentProgress.completed = indexed
-                callbacks.setProgress(currentProgress)
+                progressPublisher.publish(currentProgress, using: callbacks.setProgress)
                 continue
             }
             if !FreeTier.canIndexMore(indexedMediaCount: session.indexedMediaCount, isPro: session.isPro) {
@@ -469,7 +485,7 @@ final class PhotoLibraryIndexingWorker {
             )
             indexed += 1
             currentProgress.completed = indexed
-            callbacks.setProgress(currentProgress)
+            progressPublisher.publish(currentProgress, using: callbacks.setProgress)
             if indexed % 10 == 0 { await Task.yield() }
         }
 
@@ -480,7 +496,7 @@ final class PhotoLibraryIndexingWorker {
         guard Self.shouldFinalizeVideoPass(isCancelled: Task.isCancelled) else { return }
         currentProgress.searchableCount = callbacks.searchableCount()
         currentProgress.isRunning = false
-        callbacks.setProgress(currentProgress)
+        progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)
 
         #if DEBUG
         logger.info("[IndexingService] Indexing complete in \(String(format: "%.1f", CFAbsoluteTimeGetCurrent() - session.startedAt))s")
@@ -497,7 +513,12 @@ final class PhotoLibraryIndexingWorker {
             pixelWidth: asset.pixelWidth,
             pixelHeight: asset.pixelHeight,
             embedding: embedding.toFloat16Data(),
-            indexedAt: Date()
+            indexedAt: Date(),
+            isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot)
+                || MemoryContentPolicy.isLikelyScreenshotDimensions(
+                    width: asset.pixelWidth,
+                    height: asset.pixelHeight
+                )
         )
     }
 
@@ -541,20 +562,12 @@ final class PhotoLibraryIndexingWorker {
         try Task.checkCancellation()
         let db = database
         let shouldCompleteRequiredRebuild = callbacks.rebuildRequired()
-        let persistTask = Task.detached(priority: .utility) {
-            try Task.checkCancellation()
-            return try db.insertPhotos(
+        return try await CancellableDetachedOperation.run(priority: .utility) {
+            try db.insertPhotos(
                 photos,
                 completingRequiredRebuild: shouldCompleteRequiredRebuild
             )
         }
-        let completedRequiredRebuild = try await withTaskCancellationHandler {
-            try await persistTask.value
-        } onCancel: {
-            persistTask.cancel()
-        }
-        try Task.checkCancellation()
-        return completedRequiredRebuild
     }
 
     private func loadPhotoBatchTask(assets: [PHAsset]) -> Task<LoadedPhotoBatch, Never> {

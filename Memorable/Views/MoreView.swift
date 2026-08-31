@@ -436,6 +436,7 @@ struct SmartAlbumMasonryGrid: View {
 
 struct SurpriseExploreView: View {
     let searchEngine: SearchEngine
+    @Environment(\.database) private var database
     @State private var query: String = ""
     @State private var results: [SearchResult] = []
     @State private var isLoading = false
@@ -540,8 +541,13 @@ struct SurpriseExploreView: View {
                         featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro)
                     ).results.prefix(20))
                 }
+                let photoIDs = found.filter { !$0.isVideo }.map(\.id)
+                let database = database
+                let eligiblePhotoIDs = try await CancellableDetachedOperation.run {
+                    try database.distinctMemoryPhotoIDs(in: photoIDs)
+                }
                 guard !Task.isCancelled, generation == exploreGeneration else { return }
-                results = found
+                results = found.filter { $0.isVideo || eligiblePhotoIDs.contains($0.id) }
             } catch is CancellationError {
                 return
             } catch {

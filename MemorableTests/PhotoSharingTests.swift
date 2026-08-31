@@ -306,6 +306,57 @@ final class PhotoSharingTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
+    func testFolderResultAccessRequiresProButPhotoKitDoesNot() {
+        XCTAssertFalse(FolderResultAccessPolicy.allows(sourceId: "folder-source", isPro: false))
+        XCTAssertTrue(FolderResultAccessPolicy.allows(sourceId: "folder-source", isPro: true))
+        XCTAssertTrue(FolderResultAccessPolicy.allows(
+            sourceId: PhotoSourceType.photokit.rawValue,
+            isPro: false
+        ))
+    }
+
+    func testFilteredResultSelectionPreservesCurrentPhotoAfterEarlierFolderRemoval() {
+        XCTAssertEqual(
+            FilteredResultSelectionPolicy.index(
+                preserving: "current-photo",
+                previousIndex: 2,
+                remainingResultIDs: ["first-photo", "current-photo", "next-photo"]
+            ),
+            1
+        )
+    }
+
+    @MainActor
+    func testRevokedFolderResultCannotLoadOrShare() async {
+        let previouslyPro = ProManager.shared.isPro
+        ProManager.shared.isPro = false
+        defer { ProManager.shared.isPro = previouslyPro }
+
+        let result = SearchResult(
+            id: "revoked-folder-result",
+            score: 1,
+            localIdentifier: "folder:source:photo.jpg",
+            creationDate: nil,
+            isVideo: false,
+            bestFramePosition: nil,
+            sourceId: "folder-source",
+            filePath: "/tmp/photo.jpg"
+        )
+
+        let image = await PhotoLibrary.loadImage(
+            for: result,
+            targetSize: CGSize(width: 32, height: 32)
+        )
+        XCTAssertNil(image)
+
+        do {
+            _ = try await PhotoLibrary.prepareShareItem(for: result)
+            XCTFail("Expected a revoked folder result to fail closed")
+        } catch {
+            XCTAssertEqual(error as? PhotoSharePreparationError, .sourceUnavailable)
+        }
+    }
+
     func testShareItemCleanupRemovesOnlyDedicatedDirectoryContents() throws {
         let temporaryRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -327,12 +378,21 @@ final class PhotoSharingTests: XCTestCase {
     }
 
     @MainActor
-    func testAppStateInitializationRunsShareItemCleanup() {
-        var cleanupCount = 0
+    func testAppStateInitializationDefersShareItemCleanupOffMainThread() async {
+        let state = OSAllocatedUnfairLock(initialState: (count: 0, ranOnMain: true))
+        let cleanupFinished = expectation(description: "share cleanup finished")
 
-        _ = AppState(shareItemCleanup: { cleanupCount += 1 })
+        _ = AppState(shareItemCleanup: {
+            state.withLock {
+                $0.count += 1
+                $0.ranOnMain = Thread.isMainThread
+            }
+            cleanupFinished.fulfill()
+        })
+        await fulfillment(of: [cleanupFinished], timeout: 1)
 
-        XCTAssertEqual(cleanupCount, 1)
+        XCTAssertEqual(state.withLock { $0.count }, 1)
+        XCTAssertFalse(state.withLock { $0.ranOnMain })
     }
 
     func testValidatedFolderShareSnapshotPreservesExactBytes() throws {
@@ -583,5 +643,3 @@ private final class PhotoResourceRequestProbe: @unchecked Sendable {
         state.withLock { $0.cancelledRequestIDs.append(requestID) }
     }
 }
-
-

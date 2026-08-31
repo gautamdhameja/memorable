@@ -15,7 +15,7 @@ struct MemorySlideshowView: View {
     @State private var initialLoadTask: Task<Void, Never>?
     @State private var memoryRecoveryTask: Task<Void, Never>?
     @State private var shownIds: Set<String> = []
-    @State private var photoCount = 0
+    @State private var duplicateFilter = MemoryDuplicateFilter()
     @State private var imageLoadGeneration: UInt = 0
 
     var body: some View {
@@ -81,7 +81,7 @@ struct MemorySlideshowView: View {
                                 .clipShape(Circle())
                         }
                         Spacer()
-                        Text("\(photoCount) memories")
+                        Text("Memories")
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(.white.opacity(0.6))
                     }
@@ -100,7 +100,6 @@ struct MemorySlideshowView: View {
         }
         .task {
             let task = Task { @MainActor in
-                photoCount = (try? database.indexedCount()) ?? 0
                 await showNextPhoto()
                 guard !Task.isCancelled else { return }
                 startCycling()
@@ -145,6 +144,7 @@ struct MemorySlideshowView: View {
         imageLoadGeneration &+= 1
         currentCaption = nil
         shownIds.removeAll(keepingCapacity: false)
+        duplicateFilter.reset()
 
         switch MemoryPressureImageRecoveryPolicy.decision(
             hasImage: currentImage != nil,
@@ -176,24 +176,15 @@ struct MemorySlideshowView: View {
     private func showNextPhoto() async {
         imageLoadGeneration &+= 1
         let generation = imageLoadGeneration
-        guard let photo = await getRandomSharpPhoto() else { return }
+        guard let (photo, loaded) = await loadNextEligiblePhoto(generation: generation) else {
+            return
+        }
 
         // Fade out
         withAnimation { captionVisible = false }
         do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
         withAnimation { isVisible = false }
         do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
-        guard ImageLoadGenerationPolicy.acceptsCompletion(
-            startedGeneration: generation,
-            currentGeneration: imageLoadGeneration,
-            isCancelled: Task.isCancelled
-        ) else { return }
-
-        // Load thumbnail
-        guard let loaded = await PhotoLibrary.loadImage(
-            for: photo.searchResult,
-            targetSize: CGSize(width: 800, height: 800)
-        ) else { return }
         guard ImageLoadGenerationPolicy.acceptsCompletion(
             startedGeneration: generation,
             currentGeneration: imageLoadGeneration,
@@ -217,19 +208,64 @@ struct MemorySlideshowView: View {
         withAnimation { captionVisible = true }
     }
 
+    private func loadNextEligiblePhoto(
+        generation: UInt
+    ) async -> (photo: SlideshowPhoto, image: UIImage)? {
+        for _ in 0..<5 {
+            guard let photo = await getRandomSharpPhoto() else { return nil }
+            guard let image = await PhotoLibrary.loadImage(
+                for: photo.searchResult,
+                targetSize: CGSize(width: 800, height: 800)
+            ) else { continue }
+            guard ImageLoadGenerationPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: imageLoadGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return nil }
+            guard await MemoryPresentationValidator.isEligible(
+                image: image,
+                requiresValidation: photo.requiresContentValidation
+            ) else { continue }
+            guard ImageLoadGenerationPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: imageLoadGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return nil }
+            return (photo, image)
+        }
+        return nil
+    }
+
     private func getRandomSharpPhoto() async -> SlideshowPhoto? {
+        let historyLimit = 100
+        if shownIds.count >= historyLimit {
+            shownIds.removeAll(keepingCapacity: true)
+        }
         let database = database
+        var candidateFilter = duplicateFilter
         let selection = await SlideshowSelectionPolicy.next(
             recentIDs: shownIds,
-            historyLimit: 100,
+            historyLimit: historyLimit,
+            maxAttempts: 20,
             fetch: {
-                try? await CancellableDetachedOperation.run {
-                    try database.fetchRandomPhoto(sharp: true)
+                do {
+                    return try await CancellableDetachedOperation.run {
+                        try database.fetchRandomPhoto(sharp: true)
+                    }
+                } catch is CancellationError {
+                    return nil
+                } catch {
+                    logger.error(
+                        "[MemorySlideshow] Failed to fetch a photo: \(error.safeDiagnosticCode)"
+                    )
+                    return nil
                 }
             },
-            identifier: \.id
+            identifier: \.id,
+            accepts: { candidateFilter.accepts($0.embedding) }
         )
         guard let selection else { return nil }
+        duplicateFilter = candidateFilter
         shownIds = selection.recentIDs
         return selection.item
     }

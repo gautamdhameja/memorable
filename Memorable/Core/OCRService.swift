@@ -117,18 +117,6 @@ class OCRService {
     }
 
     static func isLikelyScreenshot(width: Int, height: Int) -> Bool {
-        let screenSizes: Set<String> = [
-            "1170x2532", "2532x1170",
-            "1179x2556", "2556x1179",
-            "1290x2796", "2796x1290",
-            "1284x2778", "2778x1284",
-            "1125x2436", "2436x1125",
-            "1242x2688", "2688x1242",
-            "1080x1920", "1920x1080",
-            "750x1334", "1334x750",
-            "1668x2388", "2388x1668",
-            "2048x2732", "2732x2048",
-        ]
-        return screenSizes.contains("\(width)x\(height)")
+        MemoryContentPolicy.isLikelyScreenshotDimensions(width: width, height: height)
     }
 }
