@@ -4,6 +4,24 @@ import os
 @testable import Memorable
 
 final class IndexingPolicyTests: XCTestCase {
+    func testDuplicateScanGenerationRejectsCancelledOrSupersededResults() {
+        XCTAssertTrue(DuplicateScanGenerationPolicy.acceptsCompletion(
+            startedGeneration: 4,
+            currentGeneration: 4,
+            isCancelled: false
+        ))
+        XCTAssertFalse(DuplicateScanGenerationPolicy.acceptsCompletion(
+            startedGeneration: 4,
+            currentGeneration: 5,
+            isCancelled: false
+        ))
+        XCTAssertFalse(DuplicateScanGenerationPolicy.acceptsCompletion(
+            startedGeneration: 4,
+            currentGeneration: 4,
+            isCancelled: true
+        ))
+    }
+
     func testIndexingProgressPublisherThrottlesIntermediateUpdatesButPublishesCompletion() {
         var publisher = IndexingProgressPublisher()
         var published: [Int] = []

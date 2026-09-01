@@ -1,13 +1,15 @@
 import SwiftUI
-import Photos
 
 struct DuplicateFinderView: View {
-    let searchEngine: SearchEngine
+    @ObservedObject var indexingService: IndexingService
     @Environment(\.database) private var database
     @State private var duplicates: [DuplicatePair] = []
     @State private var isScanning = false
     @State private var scanComplete = false
     @State private var scanTask: Task<Void, Never>?
+    @State private var scanGeneration: UInt = 0
+    @State private var deletionAlertTitle = "Couldn't delete photo"
+    @State private var deletionAlertMessage: String?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -39,8 +41,14 @@ struct DuplicateFinderView: View {
                         List {
                             Section {
                                 ForEach(duplicates) { pair in
-                                    DuplicatePairRow(pair: pair, searchEngine: searchEngine) { deletedPair in
-                                        duplicates.removeAll { $0.id == deletedPair.id }
+                                    DuplicatePairRow(
+                                        pair: pair,
+                                        indexingService: indexingService
+                                    ) { deletedIdentifier, result in
+                                        handleDeletionResult(
+                                            result,
+                                            localIdentifier: deletedIdentifier
+                                        )
                                     }
                                     .listRowBackground(Color.clear)
                                     .listRowSeparator(.hidden)
@@ -83,6 +91,7 @@ struct DuplicateFinderView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                         .foregroundStyle(Celestial.Colors.primaryDim)
+                        .disabled(indexingService.isDeletingDuplicatePhoto)
                 }
             }
             .preferredColorScheme(.dark)
@@ -93,10 +102,24 @@ struct DuplicateFinderView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
             cancelScan(clearResults: true)
         }
+        .interactiveDismissDisabled(indexingService.isDeletingDuplicatePhoto)
+        .alert(
+            deletionAlertTitle,
+            isPresented: Binding(
+                get: { deletionAlertMessage != nil },
+                set: { if !$0 { deletionAlertMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deletionAlertMessage ?? "Try again.")
+        }
     }
 
     private func startScan() {
         scanTask?.cancel()
+        scanGeneration &+= 1
+        let generation = scanGeneration
         isScanning = true
         let db = database
         scanTask = Task.detached(priority: .userInitiated) {
@@ -112,6 +135,11 @@ struct DuplicateFinderView: View {
                 )
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
+                    guard DuplicateScanGenerationPolicy.acceptsCompletion(
+                        startedGeneration: generation,
+                        currentGeneration: scanGeneration,
+                        isCancelled: Task.isCancelled
+                    ) else { return }
                     duplicates = found
                     isScanning = false
                     scanComplete = true
@@ -122,6 +150,11 @@ struct DuplicateFinderView: View {
                 guard !Task.isCancelled else { return }
                 logger.error("Duplicate scan failed: \(error.safeDiagnosticCode)")
                 await MainActor.run {
+                    guard DuplicateScanGenerationPolicy.acceptsCompletion(
+                        startedGeneration: generation,
+                        currentGeneration: scanGeneration,
+                        isCancelled: Task.isCancelled
+                    ) else { return }
                     isScanning = false
                     scanComplete = true
                     scanTask = nil
@@ -131,6 +164,7 @@ struct DuplicateFinderView: View {
     }
 
     private func cancelScan(clearResults: Bool) {
+        scanGeneration &+= 1
         scanTask?.cancel()
         scanTask = nil
         isScanning = false
@@ -139,13 +173,33 @@ struct DuplicateFinderView: View {
             duplicates.removeAll(keepingCapacity: false)
         }
     }
+
+    private func handleDeletionResult(
+        _ result: Result<DuplicatePhotoDeletionOutcome, Error>,
+        localIdentifier: String
+    ) {
+        switch result {
+        case .success(let outcome):
+            duplicates.removeAll {
+                $0.photo1LocalId == localIdentifier
+                    || $0.photo2LocalId == localIdentifier
+            }
+            if outcome == .indexRefreshPending {
+                deletionAlertTitle = "Photo deleted"
+                deletionAlertMessage = "Search is refreshing in the background."
+            }
+        case .failure(let error):
+            logger.error("Failed to delete duplicate photo: \(error.safeDiagnosticCode)")
+            deletionAlertTitle = "Couldn't delete photo"
+            deletionAlertMessage = error.localizedDescription
+        }
+    }
 }
 
 struct DuplicatePairRow: View {
     let pair: DuplicatePair
-    let searchEngine: SearchEngine
-    var onDelete: ((DuplicatePair) -> Void)?
-    @Environment(\.database) private var database
+    @ObservedObject var indexingService: IndexingService
+    var onDeletionComplete: ((String, Result<DuplicatePhotoDeletionOutcome, Error>) -> Void)?
     @State private var image1: UIImage?
     @State private var image2: UIImage?
     @State private var imageLoadGeneration: UInt = 0
@@ -180,7 +234,11 @@ struct DuplicatePairRow: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(CelestialSecondaryButtonStyle(tint: Celestial.Colors.error))
-                .disabled(isDeleting)
+                .disabled(
+                    isDeleting
+                        || indexingService.isDeletingDuplicatePhoto
+                        || indexingService.isThermallyPaused
+                )
 
                 Button {
                     deleteTarget = pair.photo2LocalId
@@ -190,7 +248,11 @@ struct DuplicatePairRow: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(CelestialSecondaryButtonStyle(tint: Celestial.Colors.error))
-                .disabled(isDeleting)
+                .disabled(
+                    isDeleting
+                        || indexingService.isDeletingDuplicatePhoto
+                        || indexingService.isThermallyPaused
+                )
             }
         }
         .padding(14)
@@ -279,30 +341,16 @@ struct DuplicatePairRow: View {
     }
 
     private func deletePhoto(localIdentifier: String) {
-        guard let asset = PhotoLibrary.getAsset(by: localIdentifier) else { return }
         isDeleting = true
-
-        PHPhotoLibrary.shared().performChanges {
-            PHAssetChangeRequest.deleteAssets([asset] as NSArray)
-        } completionHandler: { success, error in
-            DispatchQueue.main.async {
-                isDeleting = false
-                if success {
-                    let db = database
-                    let engine = searchEngine
-                    Task.detached(priority: .userInitiated) {
-                        do {
-                            try db.deletePhoto(localIdentifier: localIdentifier)
-                            try engine.loadIndex()
-                            await MainActor.run { onDelete?(pair) }
-                        } catch {
-                            logger.error("Failed to update duplicate index after deletion: \(error.safeDiagnosticCode)")
-                            await MainActor.run { onDelete?(pair) }
-                        }
-                    }
-                } else if let error {
-                    logger.error("Failed to delete photo: \(error.safeDiagnosticCode)")
-                }
+        Task { @MainActor in
+            defer { isDeleting = false }
+            do {
+                let outcome = try await indexingService.deleteDuplicatePhoto(
+                    localIdentifier: localIdentifier
+                )
+                onDeletionComplete?(localIdentifier, .success(outcome))
+            } catch {
+                onDeletionComplete?(localIdentifier, .failure(error))
             }
         }
     }

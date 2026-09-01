@@ -114,6 +114,16 @@ enum ProRevocationOperation {
     }
 }
 
+enum DuplicateScanGenerationPolicy {
+    static func acceptsCompletion(
+        startedGeneration: UInt,
+        currentGeneration: UInt,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && startedGeneration == currentGeneration
+    }
+}
+
 @MainActor
 enum IndexingStorageMutation {
     static func run(

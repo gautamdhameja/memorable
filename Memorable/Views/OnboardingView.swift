@@ -22,192 +22,208 @@ struct OnboardingView: View {
 
     private var searchByMemoryPage: some View {
         GeometryReader { proxy in
-            VStack(alignment: .leading, spacing: 0) {
-                MemoryReelHero()
-                    .frame(height: min(258, max(218, proxy.size.height * 0.31)))
-                    .padding(.top, max(22, proxy.safeAreaInsets.top + 10))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    MemoryReelHero()
+                        .frame(height: min(258, max(218, proxy.size.height * 0.31)))
+                        .padding(.top, max(22, proxy.safeAreaInsets.top + 10))
 
-                HStack(spacing: 11) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(Celestial.Colors.primaryDim)
-                    Text("sunset at the beach last summer")
-                        .font(.subheadline)
-                        .foregroundStyle(Celestial.Colors.onSurface)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 15)
-                .frame(height: 50)
-                .modifier(GlassSearchBarModifier(cornerRadius: 13))
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Example search: sunset at the beach last summer")
+                    HStack(spacing: 11) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(Celestial.Colors.primaryDim)
+                        Text("sunset at the beach last summer")
+                            .font(.subheadline)
+                            .foregroundStyle(Celestial.Colors.onSurface)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 15)
+                    .frame(height: 50)
+                    .modifier(GlassSearchBarModifier(cornerRadius: 13))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Example search: sunset at the beach last summer")
 
-                Spacer().frame(height: max(34, proxy.size.height * 0.055))
+                    Spacer().frame(height: max(34, proxy.size.height * 0.055))
 
-                VStack(alignment: .leading, spacing: -2) {
-                    Text("Search your photos")
-                        .foregroundStyle(Celestial.Colors.onSurface)
-                    Text("by what you remember")
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [Celestial.Colors.primary, Celestial.Colors.amber],
-                                startPoint: .leading,
-                                endPoint: .trailing
+                    VStack(alignment: .leading, spacing: -2) {
+                        Text("Search your photos")
+                            .foregroundStyle(Celestial.Colors.onSurface)
+                        Text("by what you remember")
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [Celestial.Colors.primary, Celestial.Colors.amber],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
                             )
-                        )
-                }
+                    }
                     .font(.largeTitle.bold())
                     .tracking(-0.8)
 
-                (Text("Describe the moment. ")
-                    .foregroundColor(Celestial.Colors.onSurfaceVariant)
-                    + Text("No tags or albums to maintain.")
-                    .foregroundColor(Celestial.Colors.primary.opacity(0.88)))
-                    .font(.body)
-                    .lineSpacing(5)
-                    .padding(.top, 16)
+                    (Text("Describe the moment. ")
+                        .foregroundColor(Celestial.Colors.onSurfaceVariant)
+                        + Text("No tags or albums to maintain.")
+                        .foregroundColor(Celestial.Colors.primary.opacity(0.88)))
+                        .font(.body)
+                        .lineSpacing(5)
+                        .padding(.top, 16)
 
-                Spacer()
+                    Spacer(minLength: 28)
 
-                pageFooter(primaryTitle: "Continue") {
-                    withAnimation(.easeInOut(duration: 0.25)) { currentPage = 1 }
+                    pageFooter(primaryTitle: "Continue") {
+                        withAnimation(.easeInOut(duration: 0.25)) { currentPage = 1 }
+                    }
                 }
+                .frame(minHeight: max(0, proxy.size.height - 10), alignment: .top)
+                .padding(.horizontal, 26)
+                .padding(.bottom, 10)
             }
-            .padding(.horizontal, 26)
-            .padding(.bottom, 10)
+            .scrollIndicators(.hidden)
         }
     }
 
     private var privacyPage: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Spacer().frame(height: 122)
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Spacer().frame(height: 122)
 
-            VStack(alignment: .leading, spacing: -2) {
-                Text("Your photos stay")
-                    .foregroundStyle(Celestial.Colors.onSurface)
-                Text("on this iPhone")
-                    .foregroundStyle(Celestial.Colors.primary)
+                    VStack(alignment: .leading, spacing: -2) {
+                        Text("Your photos stay")
+                            .foregroundStyle(Celestial.Colors.onSurface)
+                        Text("on this iPhone")
+                            .foregroundStyle(Celestial.Colors.primary)
+                    }
+                    .font(.largeTitle.bold())
+                    .tracking(-0.8)
+
+                    (Text("No developer account or tracking. ")
+                        .foregroundColor(Celestial.Colors.primary.opacity(0.88))
+                        + Text("No automatic photo uploads.")
+                        .foregroundColor(Celestial.Colors.onSurfaceVariant))
+                        .font(.body)
+                        .padding(.top, 16)
+
+                    VStack(spacing: 0) {
+                        privacyRow(number: "01", text: "Indexing and search run on this iPhone")
+                        privacyRow(number: "02", text: "Apple resolves photo coordinates into place names")
+                        privacyRow(number: "03", text: "Delete the index any time")
+                        CelestialHairline()
+                    }
+                    .padding(.horizontal, 16)
+                    .modifier(GlassPanelModifier(cornerRadius: 18))
+                    .padding(.top, 54)
+
+                    Text("Search works offline after place names have been resolved.")
+                        .font(.subheadline)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .lineSpacing(4)
+                        .padding(.top, 26)
+
+                    Spacer(minLength: 28)
+
+                    pageFooter(primaryTitle: "Continue") {
+                        withAnimation(.easeInOut(duration: 0.25)) { currentPage = 2 }
+                    }
+                }
+                .frame(minHeight: max(0, proxy.size.height - 10), alignment: .top)
+                .padding(.horizontal, 26)
+                .padding(.bottom, 10)
             }
-                .font(.largeTitle.bold())
-                .tracking(-0.8)
-
-            (Text("No developer account or tracking. ")
-                .foregroundColor(Celestial.Colors.primary.opacity(0.88))
-                + Text("No automatic photo uploads.")
-                .foregroundColor(Celestial.Colors.onSurfaceVariant))
-                .font(.body)
-                .padding(.top, 16)
-
-            VStack(spacing: 0) {
-                privacyRow(number: "01", text: "Indexing and search run on this iPhone")
-                privacyRow(number: "02", text: "Apple resolves photo coordinates into place names")
-                privacyRow(number: "03", text: "Delete the index any time")
-                CelestialHairline()
-            }
-            .padding(.horizontal, 16)
-            .modifier(GlassPanelModifier(cornerRadius: 18))
-            .padding(.top, 54)
-
-            Text("Search works offline after place names have been resolved.")
-                .font(.subheadline)
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .lineSpacing(4)
-                .padding(.top, 26)
-
-            Spacer()
-
-            pageFooter(primaryTitle: "Continue") {
-                withAnimation(.easeInOut(duration: 0.25)) { currentPage = 2 }
-            }
+            .scrollIndicators(.hidden)
         }
-        .padding(.horizontal, 26)
-        .padding(.bottom, 10)
     }
 
     private var setupPage: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack {
-                Circle()
-                    .stroke(Celestial.Colors.hairline, lineWidth: 1)
-                    .frame(width: 150, height: 150)
-                Circle()
-                    .stroke(
-                        Celestial.Colors.primaryDim.opacity(0.32),
-                        style: StrokeStyle(lineWidth: 1, dash: [2, 8])
-                    )
-                    .frame(width: 106, height: 106)
-                CelestialGlassIcon(
-                    systemName: "magnifyingglass",
-                    size: 64
-                )
-                Circle()
-                    .fill(Celestial.Colors.amber)
-                    .frame(width: 6, height: 6)
-                    .offset(x: 75)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 80)
-
-            VStack(alignment: .leading, spacing: -2) {
-                Text("Make local media")
-                    .foregroundStyle(Celestial.Colors.onSurface)
-                Text("searchable")
-                    .foregroundStyle(Celestial.Colors.amber)
-            }
-                .font(.title.bold())
-                .tracking(-0.7)
-                .padding(.top, 62)
-
-            (Text("Indexing runs on this iPhone. ")
-                .foregroundColor(Celestial.Colors.onSurfaceVariant)
-                + Text("Photos become searchable as it goes.")
-                .foregroundColor(Celestial.Colors.amber.opacity(0.90)))
-                .font(.body)
-                .lineSpacing(5)
-                .padding(.top, 16)
-
-            VStack(spacing: 0) {
-                setupRow(label: "Processing", value: "On device")
-                setupRow(label: "Search availability", value: "Progressive")
-                setupRow(label: "Free tier indexes", value: "First 500 items", accent: true)
-                CelestialHairline()
-            }
-            .padding(.horizontal, 16)
-            .modifier(GlassPanelModifier(cornerRadius: 18))
-            .padding(.top, 32)
-
-            Spacer()
-
-            Text("Photos and search text stay on this iPhone unless you choose Share")
-                .font(.caption)
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .frame(maxWidth: .infinity)
-                .padding(.bottom, 16)
-
-            Button {
-                startIndexAfterCompletion = true
-                completeOnboarding()
-            } label: {
-                Text("Build Search Index")
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ZStack {
+                        Circle()
+                            .stroke(Celestial.Colors.hairline, lineWidth: 1)
+                            .frame(width: 150, height: 150)
+                        Circle()
+                            .stroke(
+                                Celestial.Colors.primaryDim.opacity(0.32),
+                                style: StrokeStyle(lineWidth: 1, dash: [2, 8])
+                            )
+                            .frame(width: 106, height: 106)
+                        CelestialGlassIcon(
+                            systemName: "magnifyingglass",
+                            size: 64
+                        )
+                        Circle()
+                            .fill(Celestial.Colors.amber)
+                            .frame(width: 6, height: 6)
+                            .offset(x: 75)
+                    }
                     .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(
-                CelestialButtonStyle(
-                    tint: Celestial.Colors.amber,
-                    foreground: Celestial.Colors.surfaceDim
-                )
-            )
+                    .padding(.top, 80)
 
-            Button("Not now") {
-                startIndexAfterCompletion = false
-                completeOnboarding()
+                    VStack(alignment: .leading, spacing: -2) {
+                        Text("Make local media")
+                            .foregroundStyle(Celestial.Colors.onSurface)
+                        Text("searchable")
+                            .foregroundStyle(Celestial.Colors.amber)
+                    }
+                    .font(.title.bold())
+                    .tracking(-0.7)
+                    .padding(.top, 62)
+
+                    (Text("Indexing runs on this iPhone. ")
+                        .foregroundColor(Celestial.Colors.onSurfaceVariant)
+                        + Text("Photos become searchable as it goes.")
+                        .foregroundColor(Celestial.Colors.amber.opacity(0.90)))
+                        .font(.body)
+                        .lineSpacing(5)
+                        .padding(.top, 16)
+
+                    VStack(spacing: 0) {
+                        setupRow(label: "Processing", value: "On device")
+                        setupRow(label: "Search availability", value: "Progressive")
+                        setupRow(label: "Free tier indexes", value: "First 500 items", accent: true)
+                        CelestialHairline()
+                    }
+                    .padding(.horizontal, 16)
+                    .modifier(GlassPanelModifier(cornerRadius: 18))
+                    .padding(.top, 32)
+
+                    Spacer(minLength: 28)
+
+                    Text("Photos and search text stay on this iPhone unless you choose Share")
+                        .font(.caption)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, 16)
+
+                    Button {
+                        startIndexAfterCompletion = true
+                        completeOnboarding()
+                    } label: {
+                        Text("Build Search Index")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(
+                        CelestialButtonStyle(
+                            tint: Celestial.Colors.amber,
+                            foreground: Celestial.Colors.surfaceDim
+                        )
+                    )
+
+                    Button("Not now") {
+                        startIndexAfterCompletion = false
+                        completeOnboarding()
+                    }
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                }
+                .frame(minHeight: max(0, proxy.size.height - 10), alignment: .top)
+                .padding(.horizontal, 26)
+                .padding(.bottom, 10)
             }
-            .font(.body.weight(.medium))
-            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-            .frame(maxWidth: .infinity)
-            .frame(height: 46)
+            .scrollIndicators(.hidden)
         }
-        .padding(.horizontal, 26)
-        .padding(.bottom, 10)
     }
 
     private func privacyRow(number: String, text: String) -> some View {

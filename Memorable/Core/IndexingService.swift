@@ -28,6 +28,7 @@ class IndexingService: ObservableObject {
     @Published var newPhotosAvailable = false
     @Published private(set) var validatedSearchSuggestions: [String] = []
     @Published private(set) var indexRebuildRequired = false
+    @Published private(set) var isDeletingDuplicatePhoto = false
     @Published var indexVersion: Int = 0 {
         didSet {
             #if DEBUG
@@ -76,6 +77,8 @@ class IndexingService: ObservableObject {
     private var activeProReconciliationID: UUID?
     private var storageMutationTask: Task<Void, Error>?
     private var activeStorageMutationID: UUID?
+    private var duplicateDeletionTail: Task<Void, Never>?
+    private var duplicateDeletionTailID: UUID?
     private var proEntitlementObservation: AnyCancellable?
     private var scheduledSavedFolderSourceIDs: Set<String> = []
     private var thermalSafetyState = ThermalIndexingState()
@@ -380,6 +383,209 @@ class IndexingService: ObservableObject {
         endBackgroundTask()
         searchEngine.suspendForMemoryPressure()
         onIndexUnavailable?()
+    }
+
+    /// Deletes a confirmed duplicate from Photos, then updates every derived
+    /// search surface through the same lifecycle used by other index changes.
+    /// Once Photos accepts the deletion, the local reconciliation intentionally
+    /// runs to completion so dismissing the sheet cannot leave stale results.
+    func deleteDuplicatePhoto(
+        localIdentifier: String
+    ) async throws -> DuplicatePhotoDeletionOutcome {
+        let previousDeletion = duplicateDeletionTail
+        let operation = Task { @MainActor [weak self] in
+            if let previousDeletion {
+                await previousDeletion.value
+            }
+            guard let self else { throw CancellationError() }
+            return try await self.performDuplicatePhotoDeletion(
+                localIdentifier: localIdentifier
+            )
+        }
+        let operationID = UUID()
+        let tail = Task { @MainActor in
+            _ = try? await operation.value
+        }
+        duplicateDeletionTail = tail
+        duplicateDeletionTailID = operationID
+        defer {
+            if duplicateDeletionTailID == operationID {
+                duplicateDeletionTail = nil
+                duplicateDeletionTailID = nil
+            }
+        }
+        return try await operation.value
+    }
+
+    private func performDuplicatePhotoDeletion(
+        localIdentifier: String
+    ) async throws -> DuplicatePhotoDeletionOutcome {
+        isDeletingDuplicatePhoto = true
+        defer { isDeletingDuplicatePhoto = false }
+
+        guard !isThermallyPaused,
+              !ThermalSafetyPolicy.shouldPause(
+                for: ProcessInfo.processInfo.thermalState
+              ) else {
+            throw DuplicatePhotoDeletionError.deviceTooWarm
+        }
+        guard let asset = PhotoLibrary.getAsset(by: localIdentifier) else {
+            throw DuplicatePhotoDeletionError.assetUnavailable
+        }
+
+        try await Self.deletePhotoAsset(asset)
+        let suspendedWork = duplicateDeletionWorkSnapshot()
+        hideValidatedSearchSuggestions()
+        invalidateSearchIndexAfterDeletion()
+        stopIndexing(preserveThermalResume: true)
+        await jobQueue.waitUntilIdle()
+
+        let db = database
+        let remainingMediaCount: Int
+        do {
+            remainingMediaCount = try await CancellableDetachedOperation.run(
+                priority: .userInitiated
+            ) {
+                try db.deletePhoto(localIdentifier: localIdentifier)
+                return try db.indexedMediaCounts().total
+            }
+        } catch {
+            logger.error("Failed to reconcile deleted duplicate: \(error.safeDiagnosticCode)")
+            await resumeWorkAfterDuplicateDeletion(
+                suspendedWork,
+                needsIndexRecovery: true,
+                forceIndexReload: false
+            )
+            return .indexRefreshPending
+        }
+
+        if remainingMediaCount == 0 {
+            progress = IndexingProgress(total: 0, completed: 0, isRunning: false)
+            indexVersion += 1
+            await resumeWorkAfterDuplicateDeletion(suspendedWork)
+            return .completed
+        }
+
+        if ThermalSafetyPolicy.shouldPause(for: ProcessInfo.processInfo.thermalState) {
+            await resumeWorkAfterDuplicateDeletion(
+                suspendedWork,
+                needsIndexRecovery: true,
+                forceIndexReload: true
+            )
+            return .indexRefreshPending
+        }
+
+        let didReload = await reloadSearchIndex()
+        if didReload {
+            await resumeWorkAfterDuplicateDeletion(suspendedWork)
+            return .completed
+        }
+
+        await resumeWorkAfterDuplicateDeletion(
+            suspendedWork,
+            needsIndexRecovery: true,
+            forceIndexReload: true
+        )
+        return .indexRefreshPending
+    }
+
+    private static func deletePhotoAsset(_ asset: PHAsset) async throws {
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.deleteAssets([asset] as NSArray)
+            } completionHandler: { success, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if success {
+                    continuation.resume()
+                } else {
+                    continuation.resume(
+                        throwing: DuplicatePhotoDeletionError.photoLibraryRejected
+                    )
+                }
+            }
+        }
+    }
+
+    private struct DuplicateDeletionWorkSnapshot {
+        let libraryIndexing: Bool
+        let enrichment: Bool
+        let geocoding: Bool
+        let orphanCleanup: Bool
+        let folderIndexing: Bool
+    }
+
+    private func duplicateDeletionWorkSnapshot() -> DuplicateDeletionWorkSnapshot {
+        DuplicateDeletionWorkSnapshot(
+            libraryIndexing: jobQueue.contains(.indexPhotos)
+                || jobQueue.contains(.indexVideos),
+            enrichment: jobQueue.contains(.enrichPhotos),
+            geocoding: jobQueue.contains(.geocodeMedia),
+            orphanCleanup: jobQueue.contains(.cleanOrphans),
+            folderIndexing: jobQueue.contains(.indexFolder)
+        )
+    }
+
+    private func invalidateSearchIndexAfterDeletion() {
+        searchEngine.dropIndex()
+        isReady = false
+        progress.searchableCount = 0
+        onIndexUnavailable?()
+    }
+
+    private func resumeWorkAfterDuplicateDeletion(
+        _ suspendedWork: DuplicateDeletionWorkSnapshot,
+        needsIndexRecovery: Bool = false,
+        forceIndexReload: Bool = false
+    ) async {
+        if ThermalSafetyPolicy.shouldPause(for: ProcessInfo.processInfo.thermalState) {
+            thermalSafetyState = ThermalIndexingState(
+                isPaused: true,
+                resumeWhenCool: true
+            )
+            isThermallyPaused = true
+            if thermalResumeIntent == nil {
+                thermalResumeIntent = ThermalResumeIntent(
+                    id: UUID(),
+                    action: { [weak self] in self?.startIndexing() }
+                )
+            }
+            return
+        }
+        guard database.allowsIndexingWrites,
+              !searchEngine.isMemoryPressureSuspended else { return }
+
+        if suspendedWork.libraryIndexing {
+            enqueueLibraryIndexing(
+                isAutoResume: true,
+                enqueueLaunchEnrichment: true
+            )
+        } else if suspendedWork.enrichment {
+            enqueueEnrichment(workflowID: UUID())
+        }
+
+        if suspendedWork.geocoding {
+            enqueueGeocoding(
+                workflowID: UUID(),
+                replacingCancelledJob: true
+            )
+        }
+        if suspendedWork.orphanCleanup || needsIndexRecovery {
+            enqueueOrphanCleanup(
+                replacingCancelledJob: true,
+                forceIndexReload: forceIndexReload
+            )
+        }
+        if suspendedWork.folderIndexing {
+            await enqueueSavedFolderReindexingIfNeeded()
+        }
+        if !needsIndexRecovery, searchEngine.isIndexLoaded {
+            enqueueSurpriseQueryValidation(
+                workflowID: UUID(),
+                replacingCancelledJob: true
+            )
+        }
     }
 
     func indexFolder(url: URL, name: String) {
@@ -1151,7 +1357,8 @@ class IndexingService: ObservableObject {
 
     private func enqueueOrphanCleanup(
         delayAfterDependencies: TimeInterval = 0,
-        replacingCancelledJob: Bool = false
+        replacingCancelledJob: Bool = false,
+        forceIndexReload: Bool = false
     ) {
         guard replacingCancelledJob || !jobQueue.contains(.cleanOrphans) else { return }
         jobQueue.enqueue(IndexingJob(
@@ -1162,14 +1369,16 @@ class IndexingService: ObservableObject {
         ) { [weak self] in
             guard let self else { return .cancelled }
             let cleanup = await self.cleanOrphanedEmbeddings()
-            if cleanup.changedIndex {
+            if cleanup.changedIndex || forceIndexReload {
                 let reloaded = Task.isCancelled
                     ? await self.reloadSearchIndexInFreshTask()
                     : await self.reloadSearchIndex()
                 guard reloaded else { return .cancelled }
             }
             guard !Task.isCancelled else { return .cancelled }
-            guard cleanup.invalidatedSuggestions else { return .completed }
+            guard cleanup.invalidatedSuggestions || forceIndexReload else {
+                return .completed
+            }
             self.enqueueSurpriseQueryValidation(
                 workflowID: UUID(),
                 replacingCancelledJob: true
@@ -1652,4 +1861,26 @@ class IndexingService: ObservableObject {
         geocodingProgress = nil
     }
 
+}
+
+enum DuplicatePhotoDeletionError: LocalizedError {
+    case assetUnavailable
+    case photoLibraryRejected
+    case deviceTooWarm
+
+    var errorDescription: String? {
+        switch self {
+        case .assetUnavailable:
+            return "This photo is no longer available in your library."
+        case .photoLibraryRejected:
+            return "Photos could not move this item to Recently Deleted."
+        case .deviceTooWarm:
+            return "Let this iPhone cool down before deleting duplicates."
+        }
+    }
+}
+
+enum DuplicatePhotoDeletionOutcome: Equatable {
+    case completed
+    case indexRefreshPending
 }

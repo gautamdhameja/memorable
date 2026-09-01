@@ -88,6 +88,12 @@ struct MoreView: View {
                             Button(action: { showDuplicates = true }) {
                                 toolRow(icon: "square.on.square", title: "Find duplicates", subtitle: "Compare near-identical photos safely")
                             }
+                            .disabled(
+                                indexingService.progress.isRunning
+                                    || !indexingService.isReady
+                                    || indexingService.isThermallyPaused
+                                    || !database.allowsIndexingWrites
+                            )
 
                             Button(action: { showSources = true }) {
                                 toolRow(icon: "photo.stack", title: "Photo sources", subtitle: "Library and custom folders")
@@ -132,7 +138,7 @@ struct MoreView: View {
                 }
             }
             .sheet(isPresented: $showDuplicates) {
-                DuplicateFinderView(searchEngine: searchEngine)
+                DuplicateFinderView(indexingService: indexingService)
             }
             .sheet(isPresented: $showUpgrade) {
                 UpgradeView()
