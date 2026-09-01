@@ -2,6 +2,21 @@ import XCTest
 @testable import Memorable
 
 final class MainTabNavigationStateTests: XCTestCase {
+    func testDockUsesBalancedNativeIcons() {
+        XCTAssertEqual(MainTabDestination.search.systemImage, "magnifyingglass")
+        XCTAssertEqual(MainTabDestination.more.systemImage, "line.3.horizontal")
+        XCTAssertEqual(PrimaryDockMetrics.iconSize, 18)
+        XCTAssertEqual(PrimaryDockMetrics.iconFrame, 32)
+    }
+
+    func testDockIsCompactWithComfortableVerticalSpaceAndTouchTargets() {
+        XCTAssertLessThan(PrimaryDockMetrics.totalWidth, 240)
+        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.itemWidth, 44)
+        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.surpriseWidth, 44)
+        XCTAssertGreaterThan(PrimaryDockMetrics.height, 62)
+        XCTAssertLessThanOrEqual(PrimaryDockMetrics.itemSpacing, 4)
+    }
+
     func testUnavailableSurpriseIsNoOpFromMore() {
         var navigation = MainTabNavigationState(
             destination: .more,
@@ -272,13 +287,12 @@ final class ProjectConfigurationTests: XCTestCase {
         let searchView = try contents(of: "Memorable/Views/SearchView.swift")
         let moreView = try contents(of: "Memorable/Views/MoreView.swift")
         let memoriesView = try contents(of: "Memorable/Views/OnThisDayView.swift")
-        let mainTabView = try contents(of: "Memorable/Views/MainTabView.swift")
 
         XCTAssertFalse(searchView.contains("PhotoThumbnailView(result: result)\n            .onTapGesture"))
         XCTAssertFalse(moreView.contains("PhotoThumbnailView(result: result)\n                    .onTapGesture"))
         XCTAssertFalse(memoriesView.contains(".accessibilityAddTraits(.isButton)\n        .onTapGesture"))
         XCTAssertTrue(searchView.contains(".frame(minHeight: 52)"))
-        XCTAssertTrue(mainTabView.contains(".frame(minHeight: 62)"))
+        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.height, 62)
     }
 
     func testAppStoreTextFieldsMeetCurrentLimitsAndVersion() throws {

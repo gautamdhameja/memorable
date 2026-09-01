@@ -14,8 +14,22 @@ enum MainTabDestination: Int {
     var systemImage: String {
         switch self {
         case .search: return "magnifyingglass"
-        case .more: return "square.grid.2x2"
+        case .more: return "line.3.horizontal"
         }
+    }
+}
+
+enum PrimaryDockMetrics {
+    static let itemWidth: CGFloat = 68
+    static let surpriseWidth: CGFloat = 52
+    static let itemSpacing: CGFloat = 2
+    static let horizontalPadding: CGFloat = 8
+    static let height: CGFloat = 68
+    static let iconFrame: CGFloat = 32
+    static let iconSize: CGFloat = 18
+
+    static var totalWidth: CGFloat {
+        (itemWidth * 2) + surpriseWidth + (itemSpacing * 2) + (horizontalPadding * 2)
     }
 }
 
@@ -48,7 +62,6 @@ struct MainTabView: View {
     let retrySemanticWarmup: () -> Void
 
     @State private var navigation = MainTabNavigationState()
-    @Namespace private var dockGlassNamespace
 
     var body: some View {
         TabView(selection: $navigation.destination) {
@@ -89,7 +102,7 @@ struct MainTabView: View {
     private var bottomDock: some View {
         Group {
             if #available(iOS 26.0, *) {
-                GlassEffectContainer(spacing: 12) {
+                GlassEffectContainer(spacing: PrimaryDockMetrics.itemSpacing) {
                     dockContents
                         .glassEffect(
                             .regular.tint(Celestial.Colors.surfaceContainerLow.opacity(0.34)),
@@ -109,7 +122,7 @@ struct MainTabView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.top, 6)
+        .padding(.top, 8)
         .padding(.bottom, 2)
         .background(
             LinearGradient(
@@ -122,7 +135,7 @@ struct MainTabView: View {
     }
 
     private var dockContents: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: PrimaryDockMetrics.itemSpacing) {
             dockButton(.search)
 
             if let indexingService {
@@ -137,8 +150,8 @@ struct MainTabView: View {
 
             dockButton(.more)
         }
-        .frame(minHeight: 62)
-        .padding(.horizontal, 6)
+        .frame(height: PrimaryDockMetrics.height)
+        .padding(.horizontal, PrimaryDockMetrics.horizontalPadding)
     }
 
     private func requestSurpriseSearch() {
@@ -168,15 +181,19 @@ struct MainTabView: View {
                 navigation.destination = tab
             }
         } label: {
-            VStack(spacing: 2) {
+            VStack(spacing: 4) {
                 ZStack {
-                    if isSelected {
-                        selectedIconLens
-                    }
+                    dockIconLens(isSelected: isSelected)
 
                     Image(systemName: tab.systemImage)
-                        .font(.system(size: 17, weight: isSelected ? .semibold : .medium))
+                        .font(
+                            .system(
+                                size: PrimaryDockMetrics.iconSize,
+                                weight: isSelected ? .semibold : .medium
+                            )
+                        )
                         .symbolRenderingMode(.monochrome)
+                        .offset(y: tab == .more ? 2 : 0)
                         .overlay(alignment: .topTrailing) {
                             if hasNewPhotos {
                                 Circle()
@@ -186,7 +203,10 @@ struct MainTabView: View {
                             }
                         }
                 }
-                .frame(width: 32, height: 32)
+                .frame(
+                    width: PrimaryDockMetrics.iconFrame,
+                    height: PrimaryDockMetrics.iconFrame
+                )
 
                 Text(tab.title)
                     .font(
@@ -200,7 +220,8 @@ struct MainTabView: View {
                     ? Celestial.Colors.primary
                     : Celestial.Colors.onSurfaceVariant
             )
-            .frame(maxWidth: .infinity)
+            .frame(width: PrimaryDockMetrics.itemWidth)
+            .frame(minHeight: 56)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -210,26 +231,38 @@ struct MainTabView: View {
     }
 
     @ViewBuilder
-    private var selectedIconLens: some View {
+    private func dockIconLens(isSelected: Bool) -> some View {
         if #available(iOS 26.0, *) {
             Circle()
                 .fill(.clear)
                 .frame(width: 32, height: 32)
                 .glassEffect(
-                    .regular.tint(Celestial.Colors.primaryDim.opacity(0.22)).interactive(),
+                    .regular.tint(
+                        isSelected
+                            ? Celestial.Colors.primaryDim.opacity(0.22)
+                            : Celestial.Colors.surfaceContainerHigh.opacity(0.10)
+                    ).interactive(),
                     in: .circle
                 )
-                .glassEffectID("selected-tab", in: dockGlassNamespace)
         } else {
             Circle()
                 .fill(.ultraThinMaterial)
-                .background(Celestial.Colors.primaryDim.opacity(0.18), in: Circle())
+                .background(
+                    isSelected
+                        ? Celestial.Colors.primaryDim.opacity(0.18)
+                        : Celestial.Colors.surfaceContainerHigh.opacity(0.10),
+                    in: Circle()
+                )
                 .overlay(
                     Circle()
-                        .stroke(Celestial.Colors.primary.opacity(0.34), lineWidth: 0.75)
+                        .stroke(
+                            isSelected
+                                ? Celestial.Colors.primary.opacity(0.34)
+                                : Color.white.opacity(0.08),
+                            lineWidth: 0.75
+                        )
                 )
                 .frame(width: 32, height: 32)
-                .matchedGeometryEffect(id: "selected-tab", in: dockGlassNamespace)
         }
     }
 }
@@ -283,8 +316,11 @@ private struct SurpriseDockIcon: View {
                     interactive: isAvailable
                 )
             )
+            .frame(
+                width: PrimaryDockMetrics.surpriseWidth,
+                height: PrimaryDockMetrics.surpriseWidth
+            )
             .contentShape(Circle())
-            .frame(maxWidth: .infinity, minHeight: 44)
             .opacity(isAvailable ? 1 : 0.38)
     }
 }
