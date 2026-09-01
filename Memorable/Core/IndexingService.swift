@@ -63,6 +63,8 @@ class IndexingService: ObservableObject {
     private let imageEncoder: ImageEncoder
     let searchEngine: SearchEngine
     private let database: DatabaseProtocol
+    private let surpriseQueryCacheLoader: @Sendable () -> SurpriseQueryCache.State
+    private let searchIndexContentRevisionLoader: @Sendable () throws -> SearchIndexContentRevision
     private let changeObserver = PhotoChangeObserver()
     private let batchSize = IndexingConfig.batchInsertSize
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
@@ -129,10 +131,22 @@ class IndexingService: ObservableObject {
         )
     )
 
-    init(imageEncoder: ImageEncoder, searchEngine: SearchEngine, database: DatabaseProtocol = AppDatabase.shared) {
+    init(
+        imageEncoder: ImageEncoder,
+        searchEngine: SearchEngine,
+        database: DatabaseProtocol = AppDatabase.shared,
+        surpriseQueryCacheLoader: @escaping @Sendable () -> SurpriseQueryCache.State = {
+            SurpriseQueryCache.load()
+        },
+        searchIndexContentRevisionLoader: (@Sendable () throws -> SearchIndexContentRevision)? = nil
+    ) {
         self.imageEncoder = imageEncoder
         self.searchEngine = searchEngine
         self.database = database
+        self.surpriseQueryCacheLoader = surpriseQueryCacheLoader
+        self.searchIndexContentRevisionLoader = searchIndexContentRevisionLoader ?? {
+            try database.searchIndexContentRevision()
+        }
         self.geocodingWorker = GeocodingWorker(
             database: database,
             reverseGeocoder: ReverseGeocoder()
@@ -225,10 +239,27 @@ class IndexingService: ObservableObject {
                 logger.info("[IndexingService] Found \(photoCount) indexed photos and \(videoCount) indexed videos, loading index")
                 #endif
 
-                let didLoad = try await CancellableDetachedOperation.run(priority: loadPriority) { [searchEngine] in
+                async let cachedStateTask = CancellableDetachedOperation.run(
+                    priority: loadPriority
+                ) { [surpriseQueryCacheLoader] in
+                    surpriseQueryCacheLoader()
+                }
+                async let didLoadTask = CancellableDetachedOperation.run(priority: loadPriority) { [searchEngine] in
                     try searchEngine.loadIndex()
                     return searchEngine.isIndexLoaded
                 }
+                let cachedState = try await cachedStateTask
+                let cacheCouldMatch = cachedState.couldMatch(
+                    photoCount: photoCount,
+                    videoCount: videoCount
+                )
+                async let contentRevisionTask: SearchIndexContentRevision? = CancellableDetachedOperation.run(
+                    priority: loadPriority
+                ) { [searchIndexContentRevisionLoader] in
+                    guard cacheCouldMatch else { return nil }
+                    return try searchIndexContentRevisionLoader()
+                }
+                let didLoad = try await didLoadTask
                 guard didLoad else {
                     isReady = false
                     progress = IndexingProgress(total: 0, completed: 0, isRunning: false)
@@ -236,6 +267,28 @@ class IndexingService: ObservableObject {
                     return false
                 }
 
+                let cachedSuggestions: [String]
+                do {
+                    if let contentRevision = try await contentRevisionTask {
+                        cachedSuggestions = SurpriseQueries.cachedQueries(
+                            from: cachedState,
+                            matching: contentRevision
+                        )
+                    } else {
+                        cachedSuggestions = []
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    logger.error(
+                        "[SurpriseQueries] Cache hydration failed: \(error.safeDiagnosticCode)"
+                    )
+                    cachedSuggestions = []
+                }
+                guard !progress.isRunning else { return false }
+                if validatedSearchSuggestions != cachedSuggestions {
+                    validatedSearchSuggestions = cachedSuggestions
+                }
                 isReady = true
                 let loadedTotal = searchEngine.totalSize
                 progress = IndexingProgress(

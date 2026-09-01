@@ -1,5 +1,6 @@
 import XCTest
 import GRDB
+import CoreML
 import os
 @testable import Memorable
 
@@ -476,20 +477,7 @@ final class IndexingPolicyTests: XCTestCase {
     }
 
     func testSurpriseValidationReusesCacheWhenIndexRevisionIsUnchanged() {
-        let revision = SearchIndexContentRevision(
-            photoCount: 100,
-            videoCount: 5,
-            videoFrameCount: 15,
-            latestPhotoRowID: 100,
-            latestVideoRowID: 5,
-            latestVideoFrameRowID: 15,
-            latestPhotoID: "photo-100",
-            latestVideoID: "video-5",
-            latestVideoFrameID: "frame-15",
-            latestPhotoIndexedAt: Date(timeIntervalSince1970: 300),
-            latestVideoIndexedAt: Date(timeIntervalSince1970: 200),
-            latestVideoFrameIndexedAt: Date(timeIntervalSince1970: 200)
-        )
+        let revision = surpriseContentRevision(seed: 100)
         let cachedState = SurpriseQueryCache.State(
             validatedQueries: ["golden hour", "mountain view"],
             lastValidatedCount: 105,
@@ -504,6 +492,195 @@ final class IndexingPolicyTests: XCTestCase {
 
         XCTAssertTrue(plan.reusesUnchangedCache)
         XCTAssertTrue(plan.candidates.isEmpty)
+    }
+
+    func testSurpriseSuggestionsHydrateImmediatelyForCurrentIndexRevision() {
+        let revision = surpriseContentRevision(seed: 100)
+        let cachedState = SurpriseQueryCache.State(
+            validatedQueries: ["golden hour", "mountain view"],
+            lastValidatedCount: 100,
+            contentRevision: revision
+        )
+
+        XCTAssertEqual(
+            SurpriseQueries.cachedQueries(
+                from: cachedState,
+                matching: revision
+            ),
+            ["golden hour", "mountain view"]
+        )
+    }
+
+    func testSurpriseSuggestionsDoNotHydrateForStaleIndexRevision() {
+        let cachedState = SurpriseQueryCache.State(
+            validatedQueries: ["golden hour"],
+            lastValidatedCount: 100,
+            contentRevision: surpriseContentRevision(seed: 100)
+        )
+
+        XCTAssertTrue(
+            SurpriseQueries.cachedQueries(
+                from: cachedState,
+                matching: surpriseContentRevision(seed: 101)
+            ).isEmpty
+        )
+    }
+
+    @MainActor
+    func testExistingIndexPublishesCurrentSurpriseCacheBeforeReadyCallback() async throws {
+        let database = SearchFixtureDatabase(photos: [surpriseFixturePhoto()])
+        let revision = try database.searchIndexContentRevision()
+        let cachedState = SurpriseQueryCache.State(
+            validatedQueries: ["golden hour", "mountain view"],
+            lastValidatedCount: 1,
+            contentRevision: revision
+        )
+        let service = makeSurpriseLaunchService(
+            database: database,
+            cachedState: cachedState
+        )
+        var suggestionsAtReady: [String] = []
+        service.onIndexReady = {
+            suggestionsAtReady = service.validatedSearchSuggestions
+        }
+
+        let didLoad = await service.loadExistingIndexIfAvailable(
+            loadPriority: .userInitiated
+        )
+
+        XCTAssertTrue(didLoad)
+        XCTAssertTrue(service.isReady)
+        XCTAssertEqual(service.validatedSearchSuggestions, cachedState.validatedQueries)
+        XCTAssertEqual(suggestionsAtReady, cachedState.validatedQueries)
+    }
+
+    @MainActor
+    func testSurpriseCacheRevisionFailureDoesNotBlockExistingIndexReadiness() async throws {
+        let database = SearchFixtureDatabase(photos: [surpriseFixturePhoto()])
+        let cachedState = SurpriseQueryCache.State(
+            validatedQueries: ["golden hour"],
+            lastValidatedCount: 1,
+            contentRevision: try database.searchIndexContentRevision()
+        )
+        let service = makeSurpriseLaunchService(
+            database: database,
+            cachedState: cachedState,
+            searchIndexContentRevisionLoader: {
+                throw SurpriseLaunchTestError.revisionUnavailable
+            }
+        )
+
+        let didLoad = await service.loadExistingIndexIfAvailable(
+            loadPriority: .userInitiated
+        )
+
+        XCTAssertTrue(didLoad)
+        XCTAssertTrue(service.isReady)
+        XCTAssertTrue(service.validatedSearchSuggestions.isEmpty)
+    }
+
+    @MainActor
+    func testUnusableSurpriseCacheSkipsRevisionReadDuringIndexLoad() async {
+        let database = SearchFixtureDatabase(photos: [surpriseFixturePhoto()])
+        let revisionRead = ThreadObservation()
+        let mismatchedRevision = surpriseContentRevision(seed: 1)
+        let service = makeSurpriseLaunchService(
+            database: database,
+            cachedState: SurpriseQueryCache.State(
+                validatedQueries: ["golden hour"],
+                lastValidatedCount: 1,
+                contentRevision: mismatchedRevision
+            ),
+            searchIndexContentRevisionLoader: {
+                revisionRead.markCalled()
+                return mismatchedRevision
+            }
+        )
+
+        let didLoad = await service.loadExistingIndexIfAvailable(
+            loadPriority: .userInitiated
+        )
+
+        XCTAssertTrue(didLoad)
+        XCTAssertTrue(service.isReady)
+        XCTAssertFalse(revisionRead.wasCalled)
+        XCTAssertTrue(service.validatedSearchSuggestions.isEmpty)
+    }
+
+    @MainActor
+    func testExistingIndexDoesNotRestoreSurpriseCacheOverActiveIndexing() async throws {
+        let loadGate = ManualResetLoadGate()
+        let database = SearchFixtureDatabase(
+            photos: [surpriseFixturePhoto()],
+            photoLoadGate: loadGate
+        )
+        let cachedState = SurpriseQueryCache.State(
+            validatedQueries: ["golden hour"],
+            lastValidatedCount: 1,
+            contentRevision: try database.searchIndexContentRevision()
+        )
+        let service = makeSurpriseLaunchService(
+            database: database,
+            cachedState: cachedState
+        )
+        var didCallReady = false
+        service.onIndexReady = { didCallReady = true }
+        let loadTask = Task { @MainActor in
+            await service.loadExistingIndexIfAvailable(loadPriority: .userInitiated)
+        }
+
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                loadGate.started.wait()
+                continuation.resume()
+            }
+        }
+        service.progress = IndexingProgress(total: 1, completed: 0, isRunning: true)
+        loadGate.open()
+        let didLoad = await loadTask.value
+
+        XCTAssertFalse(didLoad)
+        XCTAssertTrue(service.progress.isRunning)
+        XCTAssertTrue(service.validatedSearchSuggestions.isEmpty)
+        XCTAssertFalse(didCallReady)
+    }
+
+    func testSurpriseCachePrefilterRejectsUnusableCacheWithoutARevisionQuery() {
+        let revision = surpriseContentRevision(seed: 100)
+        XCTAssertTrue(
+            SurpriseQueryCache.State(
+                validatedQueries: ["golden hour"],
+                lastValidatedCount: 100,
+                contentRevision: revision
+            ).couldMatch(photoCount: 100, videoCount: 5)
+        )
+        XCTAssertFalse(
+            SurpriseQueryCache.State(
+                validatedQueries: [],
+                lastValidatedCount: 100,
+                contentRevision: revision
+            ).couldMatch(photoCount: 100, videoCount: 5)
+        )
+        XCTAssertFalse(
+            SurpriseQueryCache.State(
+                validatedQueries: ["golden hour"],
+                lastValidatedCount: 100
+            ).couldMatch(photoCount: 100, videoCount: 5)
+        )
+        XCTAssertFalse(
+            SurpriseQueryCache.State(
+                validatedQueries: ["golden hour"],
+                lastValidatedCount: 100,
+                contentRevision: revision
+            ).couldMatch(photoCount: 101, videoCount: 5)
+        )
+        XCTAssertFalse(
+            SurpriseQueryCache.State(
+                validatedQueries: ["golden hour"],
+                lastValidatedCount: 100,
+                contentRevision: revision
+            ).couldMatch(photoCount: 100, videoCount: 6)
+        )
     }
 
     func testSurpriseValidationUsesFullCandidateSetAfterCumulativeGrowthThreshold() {
@@ -528,6 +705,51 @@ final class IndexingPolicyTests: XCTestCase {
         )
         XCTAssertEqual(updated.validatedQueries, ["sunset over water"])
         XCTAssertEqual(updated.lastValidatedCount, 110)
+    }
+
+    private func surpriseContentRevision(seed: Int) -> SearchIndexContentRevision {
+        SearchIndexContentRevision(
+            photoCount: seed,
+            videoCount: 5,
+            videoFrameCount: 15,
+            latestPhotoRowID: Int64(seed),
+            latestVideoRowID: 5,
+            latestVideoFrameRowID: 15,
+            latestPhotoID: "photo-\(seed)",
+            latestVideoID: "video-5",
+            latestVideoFrameID: "frame-15",
+            latestPhotoIndexedAt: Date(timeIntervalSince1970: TimeInterval(seed)),
+            latestVideoIndexedAt: Date(timeIntervalSince1970: 200),
+            latestVideoFrameIndexedAt: Date(timeIntervalSince1970: 200)
+        )
+    }
+
+    private func surpriseFixturePhoto() -> FixturePhoto {
+        FixturePhoto(
+            id: "photo-1",
+            localIdentifier: "local-photo-1",
+            date: Date(timeIntervalSince1970: 100),
+            embedding: float16Vector(first: 1)
+        )
+    }
+
+    @MainActor
+    private func makeSurpriseLaunchService(
+        database: SearchFixtureDatabase,
+        cachedState: SurpriseQueryCache.State,
+        searchIndexContentRevisionLoader: (@Sendable () throws -> SearchIndexContentRevision)? = nil
+    ) -> IndexingService {
+        let searchEngine = SearchEngine(
+            textEncoder: FakeTextEncoder([:]),
+            database: database
+        )
+        return IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: searchEngine,
+            database: database,
+            surpriseQueryCacheLoader: { cachedState },
+            searchIndexContentRevisionLoader: searchIndexContentRevisionLoader
+        )
     }
 
     @MainActor
@@ -961,6 +1183,27 @@ final class IndexingPolicyTests: XCTestCase {
             isReady: true,
             hasValidatedSuggestions: false
         ))
+    }
+}
+
+private enum SurpriseLaunchTestError: Error {
+    case revisionUnavailable
+}
+
+private final class UnusedImagePredictionModel: CoreMLModelPredicting {
+    private enum PredictionError: Error {
+        case unexpectedlyInvoked
+    }
+
+    func prediction(from input: MLFeatureProvider) throws -> MLFeatureProvider {
+        throw PredictionError.unexpectedlyInvoked
+    }
+
+    func predictions(
+        from inputBatch: MLBatchProvider,
+        options: MLPredictionOptions
+    ) throws -> MLBatchProvider {
+        throw PredictionError.unexpectedlyInvoked
     }
 }
 

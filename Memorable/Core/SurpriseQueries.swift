@@ -1,7 +1,7 @@
 import Foundation
 
 enum SurpriseQueryCache {
-    struct State: Codable, Equatable {
+    struct State: Codable, Equatable, Sendable {
         var validatedQueries: [String]
         var lastValidatedCount: Int
         var contentRevision: SearchIndexContentRevision?
@@ -14,6 +14,16 @@ enum SurpriseQueryCache {
             self.validatedQueries = validatedQueries
             self.lastValidatedCount = lastValidatedCount
             self.contentRevision = contentRevision
+        }
+
+        func matches(_ revision: SearchIndexContentRevision) -> Bool {
+            contentRevision == revision
+        }
+
+        func couldMatch(photoCount: Int, videoCount: Int) -> Bool {
+            guard !validatedQueries.isEmpty, let contentRevision else { return false }
+            return contentRevision.photoCount == photoCount
+                && contentRevision.videoCount == videoCount
         }
     }
 
@@ -172,8 +182,7 @@ class SurpriseQueries {
         currentSize: Int,
         currentRevision: SearchIndexContentRevision? = nil
     ) -> ValidationPlan {
-        if let currentRevision,
-           cachedState.contentRevision == currentRevision {
+        if let currentRevision, cachedState.matches(currentRevision) {
             return ValidationPlan(
                 candidates: [],
                 persistedCount: cachedState.lastValidatedCount,
@@ -224,6 +233,14 @@ class SurpriseQueries {
             lastValidatedCount: plan.persistedCount,
             contentRevision: currentRevision
         )
+    }
+
+    static func cachedQueries(
+        from cachedState: SurpriseQueryCache.State,
+        matching contentRevision: SearchIndexContentRevision
+    ) -> [String] {
+        guard cachedState.matches(contentRevision) else { return [] }
+        return cachedState.validatedQueries
     }
 
     /// Run all candidate queries against the search engine and keep only those
