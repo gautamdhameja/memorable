@@ -25,7 +25,7 @@ struct IndexingSlideshowView: View {
                         VStack(spacing: 6) {
                             if let caption = currentCaption {
                                 Text(caption)
-                                    .font(.system(.subheadline, design: .rounded, weight: .medium))
+                                    .font(Celestial.Typography.compactMemoryCaption)
                                     .italic()
                                     .foregroundStyle(.white)
                                     .multilineTextAlignment(.center)

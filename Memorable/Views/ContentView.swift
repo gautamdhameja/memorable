@@ -63,10 +63,10 @@ struct ContentView: View {
                 size: 64
             )
             Text("Photo access is required")
-                .font(.title.bold())
+                .font(Celestial.Typography.title)
                 .foregroundStyle(Celestial.Colors.onSurface)
             Text("Memorable processes photo and search content on your device. If a photo includes GPS coordinates, Apple may receive those coordinates to return a place name.")
-                .font(.body)
+                .font(Celestial.Typography.body)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -88,10 +88,10 @@ struct ContentView: View {
                 size: 64
             )
             Text("Something went wrong")
-                .font(.title.bold())
+                .font(Celestial.Typography.title)
                 .foregroundStyle(Celestial.Colors.onSurface)
             Text(message)
-                .font(.body)
+                .font(Celestial.Typography.body)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             Button("Try Again") {
                 appState.errorMessage = nil
@@ -132,7 +132,7 @@ struct ContentView: View {
             )
 
             Text("Memorable")
-                .font(.largeTitle.bold())
+                .font(Celestial.Typography.display)
                 .foregroundStyle(Celestial.Colors.onSurface)
 
             Spacer()

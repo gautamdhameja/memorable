@@ -64,6 +64,30 @@ enum Celestial {
         static let hairline = Color.white.opacity(0.09)
     }
 
+    // MARK: - Typography
+
+    // New York gives memories and major moments an editorial voice. SF Pro
+    // remains the interface face so controls and supporting copy stay native
+    // and highly legible. All roles use text styles to preserve Dynamic Type.
+    enum Typography {
+        static let display = Font.system(.largeTitle, design: .serif, weight: .semibold)
+        static let title = Font.system(.title, design: .serif, weight: .semibold)
+        static let title2 = Font.system(.title2, design: .serif, weight: .semibold)
+        static let title3 = Font.system(.title3, design: .serif, weight: .semibold)
+        static let brand = Font.system(.title2, design: .serif, weight: .semibold)
+
+        static let memoryCaption = Font.system(.title3, design: .serif, weight: .medium)
+        static let compactMemoryCaption = Font.system(.subheadline, design: .serif, weight: .medium)
+
+        static let body = Font.system(.body, design: .default, weight: .regular)
+        static let bodyEmphasized = Font.system(.body, design: .default, weight: .medium)
+        static let supporting = Font.system(.subheadline, design: .default, weight: .regular)
+        static let button = Font.system(.subheadline, design: .default, weight: .semibold)
+        static let eyebrow = Font.system(.caption, design: .default, weight: .medium)
+        static let caption = Font.system(.caption, design: .default, weight: .regular)
+        static let technical = Font.system(.caption, design: .monospaced, weight: .medium)
+    }
+
     // MARK: - Shared Geometry
 
     static let sharedCornerRadius: CGFloat = 12

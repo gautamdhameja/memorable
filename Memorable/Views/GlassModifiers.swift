@@ -96,7 +96,7 @@ struct CelestialButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(.subheadline, design: .rounded, weight: .semibold))
+            .font(Celestial.Typography.button)
             .foregroundStyle(foreground)
             .padding(.horizontal, 24)
             .padding(.vertical, 14)
@@ -117,7 +117,7 @@ struct CelestialSecondaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(.subheadline, design: .rounded, weight: .semibold))
+            .font(Celestial.Typography.button)
             .foregroundStyle(tint)
             .padding(.horizontal, 18)
             .padding(.vertical, 11)

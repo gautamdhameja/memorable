@@ -56,12 +56,11 @@ struct OnThisDayView: View {
 
                                 VStack(alignment: .leading, spacing: 0) {
                                     Text("ON THIS DAY")
-                                        .font(.caption.weight(.medium))
+                                        .font(Celestial.Typography.eyebrow)
                                         .tracking(1.4)
                                         .foregroundStyle(Celestial.Colors.amber)
                                     Text(Date.now.formatted(.dateTime.month(.wide).day()))
-                                        .font(.system(.largeTitle, design: .rounded, weight: .semibold))
-                                        .tracking(-1)
+                                        .font(Celestial.Typography.display)
                                         .foregroundStyle(Celestial.Colors.onSurface)
                                         .padding(.top, 10)
                                     Text("\(yearGroups.reduce(0) { $0 + $1.photos.count }) photos across \(yearGroups.count) years")
@@ -89,8 +88,7 @@ struct OnThisDayView: View {
                                     VStack(spacing: 12) {
                                         HStack(alignment: .firstTextBaseline) {
                                             Text("\(String(group.year))")
-                                                .font(.system(.title2, design: .rounded, weight: .semibold))
-                                                .tracking(-0.6)
+                                                .font(Celestial.Typography.title2)
                                                 .foregroundStyle(Celestial.Colors.onSurface)
                                             Spacer()
                                             Text("\(group.photos.count) photos")

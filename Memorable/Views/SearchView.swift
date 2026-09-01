@@ -373,8 +373,7 @@ struct SearchView: View {
     private var searchHeader: some View {
         HStack(alignment: .center) {
             Text("Memorable")
-                .font(.title2.bold())
-                .tracking(-0.5)
+                .font(Celestial.Typography.brand)
                 .foregroundStyle(Celestial.Colors.onSurface)
                 .layoutPriority(1)
             Spacer()
@@ -532,7 +531,7 @@ struct SearchView: View {
     private var validatedSuggestionsView: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("MATCHED IN YOUR LIBRARY")
-                .font(.caption.weight(.medium))
+                .font(Celestial.Typography.eyebrow)
                 .tracking(0.6)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .padding(.horizontal, 14)
@@ -628,7 +627,7 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("SMART ALBUMS")
-                    .font(.caption.weight(.medium))
+                    .font(Celestial.Typography.eyebrow)
                     .tracking(0.6)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 Spacer()
@@ -697,7 +696,7 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("RECENT SEARCHES")
-                    .font(.caption.weight(.medium))
+                    .font(Celestial.Typography.eyebrow)
                     .tracking(0.6)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 Spacer()
@@ -815,8 +814,7 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let summary = viewModel.filterSummary {
                 Text("Nothing matches all of that")
-                    .font(.title2.weight(.semibold))
-                    .tracking(-0.4)
+                    .font(Celestial.Typography.title2)
                     .foregroundStyle(Celestial.Colors.onSurface)
 
                 Text(noResultsExplanation(summary))
@@ -849,7 +847,7 @@ struct SearchView: View {
                 if !viewModel.fallbackResults.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("CLOSE TO WHAT YOU DESCRIBED")
-                            .font(.caption.weight(.medium))
+                            .font(Celestial.Typography.eyebrow)
                             .tracking(0.6)
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             .padding(.top, 32)
@@ -875,7 +873,7 @@ struct SearchView: View {
                 }
             } else {
                 Text("No matching photos")
-                    .font(.title2.weight(.semibold))
+                    .font(Celestial.Typography.title2)
                     .foregroundStyle(Celestial.Colors.onSurface)
                 Text("Try a broader description or remove a detail.")
                     .font(.body)
@@ -997,12 +995,12 @@ struct SearchView: View {
                 if indexingService.hitFreeLimit
                     && totalLibraryCount > searchEngine.totalSize {
                     Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
-                        .font(.title3.weight(.semibold))
+                        .font(Celestial.Typography.title3)
                         .foregroundStyle(Celestial.Colors.onSurface)
                     resumeIndexingButton
                 } else {
                     Text("Search your \(searchEngine.totalSize) photos & videos")
-                        .font(.title3.weight(.semibold))
+                        .font(Celestial.Typography.title3)
                         .foregroundStyle(Celestial.Colors.onSurface)
                 }
                 Text("Describe what you're looking for")
@@ -1019,7 +1017,7 @@ struct SearchView: View {
             } else {
                 if indexingService.indexRebuildRequired {
                     Text("Update the search index")
-                        .font(.title.bold())
+                        .font(Celestial.Typography.title)
                         .foregroundStyle(Celestial.Colors.onSurface)
                     Text("Memorable improved how it understands image orientation. Rebuild once to keep search results accurate.")
                         .font(.body)
@@ -1036,7 +1034,7 @@ struct SearchView: View {
                     .disabled(!database.allowsIndexingWrites)
                 } else {
                     Text("Make your library searchable")
-                        .font(.title.bold())
+                        .font(Celestial.Typography.title)
                         .foregroundStyle(Celestial.Colors.onSurface)
                     Text("A one-time scan runs on this iPhone. Photos become searchable as it goes.")
                         .font(.body)
@@ -1177,7 +1175,7 @@ struct SearchView: View {
                 ForEach(groups) { group in
                     HStack {
                         Text(group.label.uppercased())
-                            .font(.caption.weight(.medium))
+                            .font(Celestial.Typography.eyebrow)
                             .tracking(1.5)
                             .foregroundStyle(Celestial.Colors.amber)
                         Spacer()

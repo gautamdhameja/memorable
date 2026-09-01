@@ -32,7 +32,7 @@ struct MemorySlideshowView: View {
                         VStack(spacing: 8) {
                             if let caption = currentCaption {
                                 Text(caption)
-                                    .font(.system(.title3, design: .rounded, weight: .medium))
+                                    .font(Celestial.Typography.memoryCaption)
                                     .italic()
                                     .foregroundStyle(.white)
                                     .multilineTextAlignment(.center)

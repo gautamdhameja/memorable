@@ -17,19 +17,18 @@ struct UpgradeView: View {
                         .padding(.top, 10)
 
                     Text("MEMORABLE PRO")
-                        .font(.caption.weight(.medium))
+                        .font(Celestial.Typography.eyebrow)
                         .tracking(1.4)
                         .foregroundStyle(Celestial.Colors.amber)
                         .padding(.top, 34)
 
                     Text("Search more local\nphotos and videos")
-                        .font(.title.bold())
-                        .tracking(-0.7)
+                        .font(Celestial.Typography.title)
                         .foregroundStyle(Celestial.Colors.onSurface)
                         .padding(.top, 16)
 
                     Text("Move beyond the free 500-item index and search all photos and videos that are locally available to Memorable.")
-                        .font(.body)
+                        .font(Celestial.Typography.body)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         .lineSpacing(5)
                         .padding(.top, 14)
@@ -52,7 +51,7 @@ struct UpgradeView: View {
                     .padding(.top, 30)
 
                     Text("One-time purchase. No subscription.")
-                        .font(.caption)
+                        .font(Celestial.Typography.caption)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 30)
@@ -88,7 +87,7 @@ struct UpgradeView: View {
 
                     if proManager.product == nil && !proManager.isLoadingProduct {
                         Text("Unable to connect to the App Store. Please check your connection and try again.")
-                            .font(.caption)
+                            .font(Celestial.Typography.caption)
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 8)
@@ -110,19 +109,19 @@ struct UpgradeView: View {
 
                     if let message = proManager.restoreMessage {
                         Text(message)
-                            .font(.caption)
+                            .font(Celestial.Typography.caption)
                             .foregroundStyle(message.contains("success") ? Celestial.Colors.primaryDim : Celestial.Colors.onSurfaceVariant)
                     }
 
                     if let error = proManager.purchaseError {
                         Text(error)
-                            .font(.caption)
+                            .font(Celestial.Typography.caption)
                             .foregroundStyle(Celestial.Colors.error)
                             .multilineTextAlignment(.center)
                     }
 
                     Button("Not now") { dismiss() }
-                        .font(.subheadline.weight(.medium))
+                        .font(Celestial.Typography.supporting)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
@@ -154,10 +153,10 @@ struct UpgradeView: View {
     private func proFeature(_ title: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.body.weight(.medium))
+                .font(Celestial.Typography.bodyEmphasized)
                 .foregroundStyle(Celestial.Colors.onSurface)
             Text(detail)
-                .font(.caption)
+                .font(Celestial.Typography.caption)
                 .foregroundStyle(Celestial.Colors.outline)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

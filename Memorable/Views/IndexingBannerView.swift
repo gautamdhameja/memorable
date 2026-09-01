@@ -30,7 +30,7 @@ struct IndexingBannerView: View {
         VStack(spacing: 0) {
             if indexingService.isThermallyPaused {
                 Text("INDEXING PAUSED")
-                    .font(.caption.weight(.medium))
+                    .font(Celestial.Typography.eyebrow)
                     .tracking(1.2)
                     .foregroundStyle(Celestial.Colors.amber)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -41,12 +41,12 @@ struct IndexingBannerView: View {
                     .padding(.top, 42)
 
                 Text("Let this iPhone cool down")
-                    .font(.title2.weight(.semibold))
+                    .font(Celestial.Typography.title2)
                     .foregroundStyle(Celestial.Colors.onSurface)
                     .padding(.top, 18)
 
                 Text("Memorable stopped background indexing at a serious thermal level. Indexing resumes automatically after the iPhone cools down.")
-                    .font(.subheadline)
+                    .font(Celestial.Typography.supporting)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .lineSpacing(4)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -60,7 +60,7 @@ struct IndexingBannerView: View {
                 .padding(.top, 26)
             } else if indexingService.progress.isRunning {
                 Text("SEARCH INDEX")
-                    .font(.caption.weight(.medium))
+                    .font(Celestial.Typography.eyebrow)
                     .tracking(1.2)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -81,13 +81,13 @@ struct IndexingBannerView: View {
                     VStack(spacing: 10) {
                         HStack(alignment: .firstTextBaseline, spacing: 1) {
                             Text("\(Int(indexingService.progress.percentage))")
-                                .font(.system(size: percentageSize, weight: .medium, design: .rounded))
+                                .font(.system(size: percentageSize, weight: .medium, design: .default))
                                 .tracking(-2)
                             Text("%")
-                                .font(.system(size: percentageSuffixSize, weight: .medium, design: .rounded))
+                                .font(.system(size: percentageSuffixSize, weight: .medium, design: .default))
                         }
                         Text(phaseLabel)
-                            .font(.subheadline)
+                            .font(Celestial.Typography.supporting)
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     }
                 }
@@ -114,7 +114,7 @@ struct IndexingBannerView: View {
                 }
 
                 Text("Pauses on its own if the iPhone gets warm. You can search what is ready and leave the app.")
-                    .font(.subheadline)
+                    .font(Celestial.Typography.supporting)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .lineSpacing(4)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -146,11 +146,11 @@ struct IndexingBannerView: View {
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             Spacer()
             Text(value)
-                .font(.system(.subheadline, design: .rounded, weight: .medium))
+                .font(.system(.subheadline, design: .default, weight: .medium))
                 .foregroundStyle(accent ? Celestial.Colors.amber : Celestial.Colors.onSurface)
                 .multilineTextAlignment(.trailing)
         }
-        .font(.subheadline)
+        .font(Celestial.Typography.supporting)
         .padding(.vertical, 15)
         .overlay(alignment: .top) { CelestialHairline() }
     }

@@ -32,7 +32,7 @@ struct OnboardingView: View {
                         Image(systemName: "magnifyingglass")
                             .foregroundStyle(Celestial.Colors.primaryDim)
                         Text("sunset at the beach last summer")
-                            .font(.subheadline)
+                            .font(Celestial.Typography.supporting)
                             .foregroundStyle(Celestial.Colors.onSurface)
                             .lineLimit(1)
                     }
@@ -56,14 +56,13 @@ struct OnboardingView: View {
                                 )
                             )
                     }
-                    .font(.largeTitle.bold())
-                    .tracking(-0.8)
+                    .font(Celestial.Typography.title)
 
                     (Text("Describe the moment. ")
                         .foregroundColor(Celestial.Colors.onSurfaceVariant)
                         + Text("No tags or albums to maintain.")
                         .foregroundColor(Celestial.Colors.primary.opacity(0.88)))
-                        .font(.body)
+                        .font(Celestial.Typography.body)
                         .lineSpacing(5)
                         .padding(.top, 16)
 
@@ -93,14 +92,13 @@ struct OnboardingView: View {
                         Text("on this iPhone")
                             .foregroundStyle(Celestial.Colors.primary)
                     }
-                    .font(.largeTitle.bold())
-                    .tracking(-0.8)
+                    .font(Celestial.Typography.title)
 
                     (Text("No developer account or tracking. ")
                         .foregroundColor(Celestial.Colors.primary.opacity(0.88))
                         + Text("No automatic photo uploads.")
                         .foregroundColor(Celestial.Colors.onSurfaceVariant))
-                        .font(.body)
+                        .font(Celestial.Typography.body)
                         .padding(.top, 16)
 
                     VStack(spacing: 0) {
@@ -114,7 +112,7 @@ struct OnboardingView: View {
                     .padding(.top, 54)
 
                     Text("Search works offline after place names have been resolved.")
-                        .font(.subheadline)
+                        .font(Celestial.Typography.supporting)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         .lineSpacing(4)
                         .padding(.top, 26)
@@ -165,15 +163,14 @@ struct OnboardingView: View {
                         Text("searchable")
                             .foregroundStyle(Celestial.Colors.amber)
                     }
-                    .font(.title.bold())
-                    .tracking(-0.7)
+                    .font(Celestial.Typography.title)
                     .padding(.top, 62)
 
                     (Text("Indexing runs on this iPhone. ")
                         .foregroundColor(Celestial.Colors.onSurfaceVariant)
                         + Text("Photos become searchable as it goes.")
                         .foregroundColor(Celestial.Colors.amber.opacity(0.90)))
-                        .font(.body)
+                        .font(Celestial.Typography.body)
                         .lineSpacing(5)
                         .padding(.top, 16)
 
@@ -190,7 +187,7 @@ struct OnboardingView: View {
                     Spacer(minLength: 28)
 
                     Text("Photos and search text stay on this iPhone unless you choose Share")
-                        .font(.caption)
+                        .font(Celestial.Typography.caption)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         .frame(maxWidth: .infinity)
                         .padding(.bottom, 16)
@@ -213,7 +210,7 @@ struct OnboardingView: View {
                         startIndexAfterCompletion = false
                         completeOnboarding()
                     }
-                    .font(.body.weight(.medium))
+                    .font(Celestial.Typography.bodyEmphasized)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .frame(maxWidth: .infinity)
                     .frame(height: 46)
@@ -229,10 +226,10 @@ struct OnboardingView: View {
     private func privacyRow(number: String, text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
             Text(number)
-                .font(.system(.caption, design: .monospaced, weight: .medium))
+                .font(Celestial.Typography.technical)
                 .foregroundStyle(Celestial.Colors.primaryDim)
             Text(text)
-                .font(.body)
+                .font(Celestial.Typography.body)
                 .foregroundStyle(Celestial.Colors.onSurface)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -249,7 +246,7 @@ struct OnboardingView: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(accent ? Celestial.Colors.amber : Celestial.Colors.onSurface)
         }
-        .font(.subheadline)
+        .font(Celestial.Typography.supporting)
         .padding(.vertical, 15)
         .overlay(alignment: .top) { CelestialHairline() }
     }
@@ -481,7 +478,7 @@ private struct AbstractMemoryCard: View {
                                 .fill(Celestial.Colors.amber)
                                 .frame(width: 5, height: 5)
                             Text("MATCH")
-                                .font(.system(size: 8, weight: .bold, design: .rounded))
+                                .font(.system(size: 8, weight: .semibold, design: .default))
                                 .tracking(0.8)
                                 .foregroundStyle(.white.opacity(0.90))
                         }
