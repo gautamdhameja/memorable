@@ -20,6 +20,14 @@ final class AppConstantsTests: XCTestCase {
         // Key must never change — existing users depend on it
         XCTAssertEqual(AppKeys.onboardingComplete, "onboarding_complete")
         XCTAssertEqual(AppKeys.startIndexAfterOnboarding, "start_index_after_onboarding")
+        XCTAssertEqual(
+            AppKeys.initialIndexingExperiencePending,
+            "indexing.initialExperiencePending"
+        )
+        XCTAssertEqual(
+            AppKeys.initialIndexingExperienceCompleted,
+            "indexing.initialExperienceCompleted"
+        )
     }
 
     // MARK: - IndexingConfig

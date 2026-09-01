@@ -146,11 +146,14 @@ struct SearchView: View {
                 VStack(spacing: 0) {
                     searchHeader
 
-                    // Search bar pinned at top
-                    searchBar
-                        .padding(.horizontal, 22)
-                        .padding(.top, 20)
-                        .padding(.bottom, 18)
+                    if !indexingService.shouldShowInitialIndexingExperience {
+                        // Search stays out of the first indexing experience so
+                        // the unfinished index never looks ready for use.
+                        searchBar
+                            .padding(.horizontal, 22)
+                            .padding(.top, 20)
+                            .padding(.bottom, 18)
+                    }
 
                     // Database warning
                     if AppDatabase.isInMemoryFallback {
@@ -181,63 +184,78 @@ struct SearchView: View {
                     }
 
                     // Sticky controls panel (above scroll)
-                    if !viewModel.queryText.isEmpty && !viewModel.results.isEmpty && !viewModel.isSearching {
+                    if !indexingService.shouldShowInitialIndexingExperience,
+                       !viewModel.queryText.isEmpty,
+                       !viewModel.results.isEmpty,
+                       !viewModel.isSearching {
                         controlsPanel(filteredCount: filteredSearchResults.count)
                     }
 
                     ScrollView {
-                    VStack(spacing: 0) {
-                        // Indexing banners
-                        if indexingService.progress.isRunning {
-                            IndexingBannerView(indexingService: indexingService)
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 12)
-                        }
+                        if indexingService.shouldShowInitialIndexingExperience {
+                            initialIndexingExperience
+                        } else {
+                            VStack(spacing: 0) {
+                                // Indexing banners
+                                if indexingService.progress.isRunning {
+                                    IndexingBannerView(indexingService: indexingService)
+                                        .padding(.horizontal, 16)
+                                        .padding(.bottom, 12)
+                                }
 
-                        // Memory warning
-                        if searchEngine.isLargeLibrary {
-                            HStack(spacing: 6) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(Celestial.Colors.error)
-                                    .font(Celestial.Typography.footnote)
-                                Text("Large library (\(searchEngine.indexSize) photos)")
-                                    .font(Celestial.Typography.footnote)
-                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                // Memory warning
+                                if searchEngine.isLargeLibrary {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundStyle(Celestial.Colors.error)
+                                            .font(Celestial.Typography.footnote)
+                                        Text("Large library (\(searchEngine.indexSize) photos)")
+                                            .font(Celestial.Typography.footnote)
+                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.bottom, 8)
+                                }
+
+                                // Background reverse-geocoding progress
+                                if let geo = indexingService.geocodingProgress,
+                                   !indexingService.progress.isRunning {
+                                    geocodingProgressStrip(completed: geo.completed, total: geo.total)
+                                }
+
+                                // Content
+                                if semanticRuntime.isCheckingIndexAvailability {
+                                    indexReadinessCheckingState
+                                } else if viewModel.isSearching {
+                                    searchingState
+                                } else if let error = viewModel.searchError {
+                                    errorState(error)
+                                } else if viewModel.hasNoResultsForCurrentQuery {
+                                    noResultsState
+                                } else if !viewModel.queryText.isEmpty {
+                                    resultsGrid(
+                                        results: viewModel.results,
+                                        filteredResults: filteredSearchResults
+                                    )
+                                } else if !viewModel.lastResults.isEmpty {
+                                    lastResultsView
+                                } else if indexingService.progress.isRunning,
+                                          viewModel.queryText.isEmpty {
+                                    // Keep suggestions hidden through later indexing runs too.
+                                    IndexingSlideshowView(captionService: captionService)
+                                        .padding(.top, 8)
+                                } else if viewModel.results.isEmpty,
+                                          viewModel.queryText.isEmpty {
+                                    if hasHomeContent {
+                                        homeView
+                                    } else {
+                                        emptyState
+                                    }
+                                }
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 8)
-                        }
-
-                        // Background reverse-geocoding progress
-                        if let geo = indexingService.geocodingProgress, !indexingService.progress.isRunning {
-                            geocodingProgressStrip(completed: geo.completed, total: geo.total)
-                        }
-
-                        // Content
-                        if viewModel.isSearching {
-                            searchingState
-                        } else if let error = viewModel.searchError {
-                            errorState(error)
-                        } else if viewModel.hasNoResultsForCurrentQuery {
-                            noResultsState
-                        } else if !viewModel.queryText.isEmpty {
-                            resultsGrid(results: viewModel.results, filteredResults: filteredSearchResults)
-                        } else if !viewModel.lastResults.isEmpty {
-                            lastResultsView
-                        } else if indexingService.progress.isRunning && viewModel.queryText.isEmpty {
-                            // Keep suggestions hidden through both photo and video indexing.
-                            IndexingSlideshowView(captionService: captionService)
-                                .padding(.top, 8)
-                        } else if viewModel.results.isEmpty && viewModel.queryText.isEmpty {
-                            if hasHomeContent {
-                                homeView
-                            } else {
-                                emptyState
-                            }
+                            .padding(.bottom, 40)
                         }
                     }
-                    .padding(.bottom, 40)
-                }
                 } // VStack
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -386,6 +404,7 @@ struct SearchView: View {
         }
         .padding(.horizontal, 26)
         .padding(.top, 8)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var searchBar: some View {
@@ -418,6 +437,33 @@ struct SearchView: View {
         .frame(minHeight: 52)
         .modifier(GlassSearchBarModifier(cornerRadius: 13))
         .opacity(searchEngine.isIndexLoaded || !viewModel.queryText.isEmpty ? 1.0 : 0.85)
+    }
+
+    private var initialIndexingExperience: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("YOUR LIBRARY IS COMING TO LIFE")
+                .font(Celestial.Typography.eyebrow)
+                .tracking(1.2)
+                .foregroundStyle(Celestial.Colors.amber)
+
+            Text("While we build your search, revisit a few moments.")
+                .font(Celestial.Typography.compactMemoryCaption)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .lineSpacing(3)
+                .padding(.top, 8)
+
+            IndexingSlideshowView(
+                captionService: captionService,
+                presentation: .initialIndexing
+            )
+            .padding(.top, 20)
+
+            InitialIndexingProgressView(indexingService: indexingService)
+                .padding(.top, 16)
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 18)
+        .padding(.bottom, 40)
     }
 
     private var searchPlaceholder: String {
@@ -467,8 +513,7 @@ struct SearchView: View {
         .modifier(
             GlassPanelModifier(
                 cornerRadius: 12,
-                tint: Celestial.Colors.amber.opacity(0.09),
-                interactive: true
+                tint: Celestial.Colors.amber.opacity(0.09)
             )
         )
         .padding(.horizontal, 16)
@@ -482,14 +527,14 @@ struct SearchView: View {
 
     private var hasHomeContent: Bool {
         guard !indexingService.progress.isRunning, indexingService.isReady else { return false }
-        return canShowValidatedSuggestions
+        return (canShowValidatedSuggestions && viewModel.shouldShowDiscoverySuggestions)
             || !smartAlbums.isEmpty
             || !viewModel.searchHistory.isEmpty
     }
 
     private var homeView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if canShowValidatedSuggestions {
+            if canShowValidatedSuggestions && viewModel.shouldShowDiscoverySuggestions {
                 validatedSuggestionsView
             }
             if !smartAlbums.isEmpty {
@@ -601,7 +646,7 @@ struct SearchView: View {
                 Label("Index remaining media", systemImage: "arrow.clockwise")
                     .font(Celestial.Typography.supportingEmphasized)
             }
-            .buttonStyle(CelestialSecondaryButtonStyle())
+            .celestialSecondaryButtonStyle()
             .padding(.top, 10)
             .frame(maxWidth: .infinity)
             .accessibilityHint("Resumes indexing media that was skipped before the Pro upgrade")
@@ -655,14 +700,11 @@ struct SearchView: View {
                                     .frame(width: 108, alignment: .leading)
                             }
                             .padding(8)
-                            .modifier(
-                                GlassPanelModifier(
-                                    cornerRadius: 14,
-                                    tint: Celestial.Colors.primaryDim.opacity(0.08),
-                                    interactive: true
-                                )
-                            )
                         }
+                        .celestialGlassCardButtonStyle(
+                            cornerRadius: 14,
+                            tint: Celestial.Colors.primaryDim.opacity(0.08)
+                        )
                         .accessibilityLabel("Search smart album, \(album.name)")
                         .accessibilityHint("Runs the saved search: \(album.query)")
                         .contextMenu {
@@ -963,6 +1005,19 @@ struct SearchView: View {
         }
     }
 
+    private var indexReadinessCheckingState: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .tint(Celestial.Colors.primaryDim)
+            Text("Loading your library…")
+                .font(Celestial.Typography.supporting)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 52)
+        .accessibilityElement(children: .combine)
+    }
+
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
@@ -1014,7 +1069,7 @@ struct SearchView: View {
                         Label("Rebuild Search Index", systemImage: "arrow.triangle.2.circlepath")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(CelestialButtonStyle())
+                    .celestialPrimaryButtonStyle()
                     .padding(.top, 24)
                     .accessibilityHint("Clears the incompatible search index and rebuilds it on this device")
                     .disabled(!database.allowsIndexingWrites)
@@ -1031,7 +1086,7 @@ struct SearchView: View {
                         Text("Build Search Index")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(CelestialButtonStyle())
+                    .celestialPrimaryButtonStyle()
                     .padding(.top, 24)
                     .accessibilityHint("Scans your photo library and builds a searchable index")
                     .disabled(!database.allowsIndexingWrites)
@@ -1046,30 +1101,50 @@ struct SearchView: View {
     // MARK: - Results Grid (Masonry Layout)
 
     private func controlsPanel(filteredCount: Int) -> some View {
-        VStack(spacing: 0) {
-            if let summary = viewModel.filterSummary {
-                VStack(alignment: .leading, spacing: 10) {
-                    structuredQuerySentence(summary)
-                        .font(Celestial.Typography.body)
-                        .lineSpacing(6)
-                    Text("Search details understood from your description")
-                        .font(Celestial.Typography.caption)
-                        .foregroundStyle(Celestial.Colors.outline)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, 16)
-            }
-
+        VStack(alignment: .leading, spacing: 12) {
             if !proManager.isPro && indexingService.hitFreeLimit && viewModel.hasCompletedFirstSearch && !viewModel.upgradeBannerDismissed {
                 upgradeBanner
-                    .padding(.bottom, 14)
             }
 
-            HStack {
+            HStack(spacing: 10) {
                 Text("\(filteredCount) \(filteredCount == 1 ? "result" : "results")")
-                    .font(Celestial.Typography.supporting)
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                Spacer()
+                    .font(Celestial.Typography.supportingEmphasized)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Menu {
+                    ForEach(SearchMediaFilter.allCases, id: \.self) { filter in
+                        Button {
+                            Haptics.selection()
+                            viewModel.setMediaFilter(filter)
+                        } label: {
+                            if viewModel.mediaFilter == filter {
+                                Label(filter.label, systemImage: "checkmark")
+                            } else {
+                                Text(filter.label)
+                            }
+                        }
+                    }
+                } label: {
+                    ViewThatFits(in: .horizontal) {
+                        Label(
+                            viewModel.mediaFilter.label,
+                            systemImage: "line.3.horizontal.decrease"
+                        )
+                        Image(systemName: "line.3.horizontal.decrease")
+                    }
+                    .font(Celestial.Typography.captionStrong)
+                }
+                .celestialGlassCapsuleButtonStyle(
+                    tint: Celestial.Colors.surfaceContainerHigh.opacity(0.22),
+                    foreground: Celestial.Colors.onSurfaceVariant
+                )
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Filter results by media type: \(viewModel.mediaFilter.label)")
 
                 Menu {
                     Button("Relevance") {
@@ -1081,71 +1156,108 @@ struct SearchView: View {
                         sortModeRaw = SearchSortMode.recent.rawValue
                     }
                 } label: {
-                    Text(viewModel.sortMode == .relevance ? "Relevance" : "Recent")
-                        .font(Celestial.Typography.supportingEmphasized)
-                        .foregroundStyle(Celestial.Colors.primaryDim)
+                    ViewThatFits(in: .horizontal) {
+                        Label(
+                            viewModel.sortMode == .relevance ? "Relevance" : "Recent",
+                            systemImage: "arrow.up.arrow.down"
+                        )
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .font(Celestial.Typography.captionStrong)
                 }
+                .celestialGlassCapsuleButtonStyle(
+                    tint: Celestial.Colors.primaryDim.opacity(0.14),
+                    foreground: Celestial.Colors.primaryDim
+                )
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel(
+                    "Sort results by \(viewModel.sortMode == .relevance ? "relevance" : "recent")"
+                )
 
                 if !smartAlbums.contains(where: { $0.query.lowercased() == viewModel.queryText.lowercased() }) {
-                    Button("Save album") {
+                    Button {
                         albumName = viewModel.queryText
                         showSaveAlbum = true
+                    } label: {
+                        Image(systemName: "bookmark")
+                            .font(.system(size: 15, weight: .semibold))
                     }
-                    .font(Celestial.Typography.supportingEmphasized)
-                    .foregroundStyle(Celestial.Colors.amber)
-                }
-            }
-            .padding(.bottom, 14)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 20) {
-                    ForEach(SearchMediaFilter.allCases, id: \.self) { filter in
-                        let isActive = viewModel.mediaFilter == filter
-                        Button {
-                            Haptics.selection()
-                            viewModel.setMediaFilter(filter)
-                        } label: {
-                            Text(filter.label)
-                                .font(Celestial.Typography.supportingEmphasized)
-                                .foregroundStyle(isActive ? Celestial.Colors.onSurface : Celestial.Colors.outline)
-                                .padding(.bottom, 10)
-                                .overlay(alignment: .bottom) {
-                                    if isActive {
-                                        Rectangle()
-                                            .fill(Celestial.Colors.primaryDim)
-                                            .frame(height: 2)
-                                    }
-                                }
-                        }
-                    }
+                    .celestialGlassCircleButtonStyle(
+                        tint: Celestial.Colors.amber.opacity(0.16),
+                        foreground: Celestial.Colors.amber
+                    )
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Circle())
+                    .accessibilityLabel("Save search as an album")
                 }
             }
 
-            CelestialHairline()
+            if let summary = viewModel.filterSummary {
+                interpretedQueryFacets(summary)
+            }
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 12)
-        .padding(.bottom, 6)
-        .modifier(GlassPanelModifier(cornerRadius: 18))
-        .padding(.horizontal, 12)
+        .padding(14)
+        .modifier(
+            GlassPanelModifier(
+                cornerRadius: 16,
+                tint: Celestial.Colors.surfaceContainerLow.opacity(0.30)
+            )
+        )
+        .padding(.horizontal, 14)
         .padding(.bottom, 8)
     }
 
-    private func structuredQuerySentence(_ summary: FilterSummary) -> Text {
-        var text = Text("Showing ").foregroundColor(Celestial.Colors.onSurfaceVariant)
-        text = text + Text(summary.visualQuery.isEmpty ? "matching" : summary.visualQuery)
-            .foregroundColor(Celestial.Colors.onSurface)
-            .bold()
-        text = text + Text(" photos").foregroundColor(Celestial.Colors.onSurfaceVariant)
-        if let location = summary.locationDescription {
-            text = text + Text(" near ").foregroundColor(Celestial.Colors.onSurfaceVariant)
-            text = text + Text(location).foregroundColor(Celestial.Colors.primary)
+    private func interpretedQueryFacets(_ summary: FilterSummary) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if !summary.visualQuery.isEmpty {
+                    queryFacet(
+                        summary.visualQuery,
+                        systemImage: "photo",
+                        accent: Celestial.Colors.primaryDim
+                    )
+                }
+                if let location = summary.locationDescription {
+                    queryFacet(
+                        location,
+                        systemImage: "location.fill",
+                        accent: Celestial.Colors.emerald
+                    )
+                }
+                if let date = summary.dateDescription {
+                    queryFacet(
+                        date,
+                        systemImage: "calendar",
+                        accent: Celestial.Colors.amber
+                    )
+                }
+            }
         }
-        if let date = summary.dateDescription {
-            text = text + Text(" from ").foregroundColor(Celestial.Colors.onSurfaceVariant)
-            text = text + Text(date).foregroundColor(Celestial.Colors.primary)
+        .accessibilityLabel("Search details")
+    }
+
+    private func queryFacet(
+        _ label: String,
+        systemImage: String,
+        accent: Color
+    ) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .foregroundStyle(accent)
+                .accessibilityHidden(true)
+            Text(label)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .lineLimit(1)
         }
-        return text + Text(".").foregroundColor(Celestial.Colors.onSurfaceVariant)
+        .font(Celestial.Typography.caption)
+        .padding(.horizontal, 10)
+        .frame(minHeight: 32)
+        .modifier(
+            GlassCapsuleModifier(
+                tint: accent.opacity(0.10)
+            )
+        )
     }
 
     private func resultsGrid(

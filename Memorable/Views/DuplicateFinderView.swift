@@ -79,7 +79,7 @@ struct DuplicateFinderView: View {
                                 Haptics.medium()
                                 startScan()
                             }
-                            .buttonStyle(CelestialButtonStyle())
+                            .celestialPrimaryButtonStyle()
                         }
                     }
                 }
@@ -231,7 +231,7 @@ struct DuplicatePairRow: View {
                     Label("Delete Left", systemImage: "trash")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(CelestialSecondaryButtonStyle(tint: Celestial.Colors.error))
+                .celestialSecondaryButtonStyle(tint: Celestial.Colors.error)
                 .disabled(
                     isDeleting
                         || indexingService.isDeletingDuplicatePhoto
@@ -245,7 +245,7 @@ struct DuplicatePairRow: View {
                     Label("Delete Right", systemImage: "trash")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(CelestialSecondaryButtonStyle(tint: Celestial.Colors.error))
+                .celestialSecondaryButtonStyle(tint: Celestial.Colors.error)
                 .disabled(
                     isDeleting
                         || indexingService.isDeletingDuplicatePhoto

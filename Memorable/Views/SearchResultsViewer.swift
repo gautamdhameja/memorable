@@ -243,15 +243,11 @@ struct SearchResultsViewer: View {
                         Button(action: { dismiss() }) {
                             Label("Results", systemImage: "chevron.left")
                                 .font(Celestial.Typography.body)
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .frame(minHeight: 40)
-                                .modifier(
-                                    GlassCapsuleModifier(
-                                        tint: Color.black.opacity(0.16)
-                                    )
-                                )
                         }
+                        .celestialGlassCapsuleButtonStyle(
+                            tint: Color.black.opacity(0.16),
+                            foreground: .white
+                        )
                         .accessibilityLabel("Back to results")
                         Spacer()
                         if displayedResults.count > 1 {
@@ -262,8 +258,7 @@ struct SearchResultsViewer: View {
                                 .frame(minHeight: 34)
                                 .modifier(
                                     GlassCapsuleModifier(
-                                        tint: Color.black.opacity(0.12),
-                                        interactive: false
+                                        tint: Color.black.opacity(0.12)
                                     )
                                 )
                         }
@@ -278,16 +273,13 @@ struct SearchResultsViewer: View {
                                     } else {
                                         Image(systemName: "square.and.arrow.up")
                                             .font(Celestial.Typography.bodyStrong)
-                                            .foregroundStyle(.white)
                                     }
                                 }
-                                .frame(width: 40, height: 40)
-                                .modifier(
-                                    GlassCircleModifier(
-                                        tint: Color.black.opacity(0.16)
-                                    )
-                                )
                             }
+                            .celestialGlassCircleButtonStyle(
+                                tint: Color.black.opacity(0.16),
+                                foreground: .white
+                            )
                             .disabled(shareCoordinator.isPreparing || shareCoordinator.preparedItem != nil)
                             .accessibilityLabel("Share photo")
                         } else {

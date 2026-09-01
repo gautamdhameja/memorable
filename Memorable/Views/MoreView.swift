@@ -274,8 +274,7 @@ struct MoreView: View {
         .modifier(
             GlassPanelModifier(
                 cornerRadius: 20,
-                tint: Celestial.Colors.amber.opacity(0.10),
-                interactive: !proManager.isPro
+                tint: Celestial.Colors.amber.opacity(0.10)
             )
         )
     }
@@ -394,7 +393,10 @@ struct LicensesView: View {
                         .padding(.vertical, 8)
                     }
                     .padding(12)
-                    .modifier(GlassPanelModifier(cornerRadius: 16, interactive: true))
+                    .celestialGlassCardButtonStyle(
+                        cornerRadius: 16,
+                        tint: Celestial.Colors.surfaceContainerLow.opacity(0.30)
+                    )
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))

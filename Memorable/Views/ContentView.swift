@@ -73,7 +73,7 @@ struct ContentView: View {
                     UIApplication.shared.open(url)
                 }
             }
-            .buttonStyle(CelestialButtonStyle())
+            .celestialPrimaryButtonStyle()
             Spacer()
         }
         .padding(.horizontal, 26)
@@ -97,7 +97,7 @@ struct ContentView: View {
                 appState.errorMessage = nil
                 Task { await initializeIfNeeded() }
             }
-            .buttonStyle(CelestialButtonStyle())
+            .celestialPrimaryButtonStyle()
             Spacer()
         }
         .padding(.horizontal, 26)
@@ -126,8 +126,7 @@ struct ContentView: View {
             }
             .modifier(
                 GlassCircleModifier(
-                    tint: Celestial.Colors.primaryDim.opacity(0.08),
-                    interactive: false
+                    tint: Celestial.Colors.primaryDim.opacity(0.08)
                 )
             )
 

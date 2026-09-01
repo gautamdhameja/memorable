@@ -11,6 +11,55 @@ enum SearchSuggestionVisibilityPolicy {
     }
 }
 
+enum InitialIndexingExperienceStore {
+    static func isPending(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: AppKeys.initialIndexingExperiencePending)
+    }
+
+    static func begin(in defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: AppKeys.initialIndexingExperiencePending)
+    }
+
+    static func isCompleted(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: AppKeys.initialIndexingExperienceCompleted)
+    }
+
+    static func complete(in defaults: UserDefaults = .standard) {
+        defaults.set(false, forKey: AppKeys.initialIndexingExperiencePending)
+        defaults.set(true, forKey: AppKeys.initialIndexingExperienceCompleted)
+    }
+}
+
+enum InitialIndexingExperiencePolicy {
+    static func shouldBegin(
+        hasKnownExistingIndex: Bool,
+        hasCompletedInitialExperience: Bool,
+        isReady: Bool,
+        searchableCount: Int
+    ) -> Bool {
+        !hasCompletedInitialExperience
+            && !hasKnownExistingIndex
+            && !isReady
+            && searchableCount == 0
+    }
+
+    static func shouldShow(
+        isInitialLibraryWorkflowActive: Bool,
+        isIndexing: Bool,
+        isThermallyPaused: Bool
+    ) -> Bool {
+        isInitialLibraryWorkflowActive && (isIndexing || isThermallyPaused)
+    }
+
+    static func shouldResumePendingRun(
+        scheduleAutoResume: Bool,
+        didLoadIndex: Bool,
+        isPending: Bool
+    ) -> Bool {
+        scheduleAutoResume && !didLoadIndex && isPending
+    }
+}
+
 struct IndexingProgressPublisher {
     static let minimumInterval: TimeInterval = 0.25
 

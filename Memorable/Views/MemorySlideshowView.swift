@@ -83,14 +83,11 @@ struct MemorySlideshowView: View {
                         Button(action: { dismiss() }) {
                             Image(systemName: "xmark")
                                 .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 40, height: 40)
-                                .modifier(
-                                    GlassCircleModifier(
-                                        tint: Color.black.opacity(0.16)
-                                    )
-                                )
                         }
+                        .celestialGlassCircleButtonStyle(
+                            tint: Color.black.opacity(0.16),
+                            foreground: .white
+                        )
                         .accessibilityLabel("Close memories")
                         Spacer()
                         Text("Memories")
@@ -100,8 +97,7 @@ struct MemorySlideshowView: View {
                             .frame(minHeight: 34)
                             .modifier(
                                 GlassCapsuleModifier(
-                                    tint: Color.black.opacity(0.12),
-                                    interactive: false
+                                    tint: Color.black.opacity(0.12)
                                 )
                             )
                     }

@@ -10,11 +10,12 @@ final class MainTabNavigationStateTests: XCTestCase {
     }
 
     func testDockIsCompactWithComfortableVerticalSpaceAndTouchTargets() {
-        XCTAssertLessThan(PrimaryDockMetrics.totalWidth, 240)
-        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.itemWidth, 44)
-        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.surpriseWidth, 44)
+        XCTAssertLessThan(PrimaryDockMetrics.totalWidth, 280)
+        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.itemWidth, 72)
+        XCTAssertEqual(PrimaryDockMetrics.surpriseWidth, PrimaryDockMetrics.itemWidth)
         XCTAssertGreaterThan(PrimaryDockMetrics.height, 62)
         XCTAssertLessThanOrEqual(PrimaryDockMetrics.itemSpacing, 4)
+        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.horizontalPadding, 12)
     }
 
     func testUnavailableSurpriseIsNoOpFromMore() {
@@ -184,6 +185,53 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertFalse(infoPlist.contains("NSLocationWhenInUseUsageDescription"))
     }
 
+    func testInteractiveGlassButtonsDelegateToNativeButtonStyles() throws {
+        let glassModifiers = try contents(of: "Memorable/Views/GlassModifiers.swift")
+        let appSources = try allAppSourceText()
+        let primary = try sourceSection(
+            in: glassModifiers,
+            from: "private struct CelestialPrimaryButtonModifier",
+            to: "private struct CelestialSecondaryButtonModifier"
+        )
+        let secondary = try sourceSection(
+            in: glassModifiers,
+            from: "private struct CelestialSecondaryButtonModifier",
+            to: "private struct CelestialGlassCircleButtonModifier"
+        )
+        let circle = try sourceSection(
+            in: glassModifiers,
+            from: "private struct CelestialGlassCircleButtonModifier",
+            to: "private struct CelestialGlassCapsuleButtonModifier"
+        )
+        let capsule = try sourceSection(
+            in: glassModifiers,
+            from: "private struct CelestialGlassCapsuleButtonModifier",
+            to: "private struct CelestialGlassCardButtonModifier"
+        )
+        let card = try sourceSection(
+            in: glassModifiers,
+            from: "private struct CelestialGlassCardButtonModifier",
+            to: "extension View"
+        )
+
+        XCTAssertTrue(glassModifiers.contains("func celestialPrimaryButtonStyle("))
+        XCTAssertTrue(glassModifiers.contains("func celestialSecondaryButtonStyle("))
+        XCTAssertTrue(glassModifiers.contains("func celestialGlassCardButtonStyle("))
+        XCTAssertTrue(primary.contains(".buttonStyle(.glassProminent)"))
+        XCTAssertTrue(primary.contains(".buttonBorderShape(.roundedRectangle(radius: 13))"))
+        XCTAssertTrue(secondary.contains(".buttonStyle(.glass)"))
+        XCTAssertTrue(secondary.contains(".buttonBorderShape(.capsule)"))
+        XCTAssertTrue(circle.contains(".buttonStyle(.glass)"))
+        XCTAssertTrue(circle.contains(".buttonBorderShape(.circle)"))
+        XCTAssertTrue(capsule.contains(".buttonStyle(.glass)"))
+        XCTAssertTrue(capsule.contains(".buttonBorderShape(.capsule)"))
+        XCTAssertTrue(card.contains(".buttonStyle(.glass)"))
+        XCTAssertTrue(card.contains(".buttonBorderShape(.roundedRectangle(radius: cornerRadius))"))
+        XCTAssertFalse(glassModifiers.contains("PrimitiveButtonStyle"))
+        XCTAssertFalse(appSources.contains("interactive:"))
+        XCTAssertFalse(appSources.contains(".interactive("))
+    }
+
     func testUpgradeViewRequestsDeferredProductLoading() throws {
         let upgradeView = try contents(of: "Memorable/Views/UpgradeView.swift")
 
@@ -219,6 +267,7 @@ final class ProjectConfigurationTests: XCTestCase {
 
         XCTAssertLessThan(searchDock.lowerBound, surpriseDock.lowerBound)
         XCTAssertLessThan(surpriseDock.lowerBound, moreDock.lowerBound)
+        XCTAssertTrue(mainTabView.contains("Text(\"Surprise me\")"))
         XCTAssertFalse(mainTabView.contains("case memories"))
         XCTAssertTrue(moreView.contains("OnThisDayView(captionService: captionService)"))
         XCTAssertFalse(moreView.contains("SurpriseExploreView"))
@@ -266,6 +315,96 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(theme.contains("static let brand = Font.system(.title, design: .serif"))
         XCTAssertTrue(theme.contains("static let screenTitle = Font.system(.title2, design: .default"))
         XCTAssertTrue(moreView.contains(".font(Celestial.Typography.screenTitle)"))
+    }
+
+    func testInitialIndexingUsesMemoryFirstHierarchyWithoutSearch() throws {
+        let searchView = try contents(of: "Memorable/Views/SearchView.swift")
+        let initialVisibilitySection = try sourceSection(
+            in: searchView,
+            from: "if !indexingService.shouldShowInitialIndexingExperience",
+            to: "// Database warning"
+        )
+
+        XCTAssertTrue(initialVisibilitySection.contains("searchBar"))
+        XCTAssertEqual(searchView.components(separatedBy: "searchBar\n").count - 1, 1)
+        XCTAssertTrue(searchView.contains("YOUR LIBRARY IS COMING TO LIFE"))
+        XCTAssertTrue(searchView.contains(
+            "While we build your search, revisit a few moments."
+        ))
+        XCTAssertTrue(searchView.contains(
+            ".font(Celestial.Typography.compactMemoryCaption)"
+        ))
+        XCTAssertTrue(searchView.contains(
+            "InitialIndexingProgressView(indexingService: indexingService)"
+        ))
+        XCTAssertTrue(searchView.contains("presentation: .initialIndexing"))
+        let indexingBanner = try contents(of: "Memorable/Views/IndexingBannerView.swift")
+        let initialProgress = try sourceSection(
+            in: indexingBanner,
+            from: "struct InitialIndexingProgressView",
+            to: ".accessibilityElement(children: .contain)"
+        )
+        XCTAssertTrue(initialProgress.contains(".frame(minWidth: 44, minHeight: 44)"))
+    }
+
+    func testSearchResultsToolbarUsesConciseHierarchy() throws {
+        let searchView = try contents(of: "Memorable/Views/SearchView.swift")
+        let toolbar = try sourceSection(
+            in: searchView,
+            from: "private func controlsPanel(filteredCount: Int)",
+            to: "private func interpretedQueryFacets"
+        )
+
+        XCTAssertFalse(toolbar.contains("Search details understood from your description"))
+        XCTAssertFalse(toolbar.contains("structuredQuerySentence"))
+        XCTAssertTrue(toolbar.contains("systemImage: \"arrow.up.arrow.down\""))
+        XCTAssertTrue(toolbar.contains("Image(systemName: \"bookmark\")"))
+        XCTAssertTrue(toolbar.contains("ForEach(SearchMediaFilter.allCases"))
+        XCTAssertTrue(toolbar.contains(".frame(minHeight: 44)"))
+        XCTAssertTrue(toolbar.contains(".celestialGlassCapsuleButtonStyle("))
+        XCTAssertTrue(toolbar.contains(".celestialGlassCircleButtonStyle("))
+
+        let facets = try sourceSection(
+            in: searchView,
+            from: "private func queryFacet(",
+            to: "private func resultsGrid("
+        )
+        XCTAssertTrue(facets.contains("GlassCapsuleModifier("))
+    }
+
+    func testValidatedSuggestionsAreExclusiveWithSearchHistory() throws {
+        let searchView = try contents(of: "Memorable/Views/SearchView.swift")
+        let homeView = try sourceSection(
+            in: searchView,
+            from: "private var homeView: some View",
+            to: "private var validatedSuggestionsView: some View"
+        )
+
+        XCTAssertTrue(homeView.contains(
+            "canShowValidatedSuggestions && viewModel.shouldShowDiscoverySuggestions"
+        ))
+    }
+
+    func testStartupChecksExistingIndexInsideHomeScreen() throws {
+        let appState = try contents(of: "Memorable/MemorableApp.swift")
+        let searchView = try contents(of: "Memorable/Views/SearchView.swift")
+        let mainTabView = try contents(of: "Memorable/Views/MainTabView.swift")
+        let warmup = try sourceSection(
+            in: appState,
+            from: "private func warmCoreSearch(priority:",
+            to: "static func resumeExistingSearchForWarmup"
+        )
+
+        XCTAssertTrue(appState.contains(
+            "@Published private(set) var indexingService: IndexingService?"
+        ))
+        XCTAssertTrue(searchView.contains("semanticRuntime.isCheckingIndexAvailability"))
+        XCTAssertTrue(searchView.contains("Loading your library…"))
+        XCTAssertFalse(mainTabView.contains("Ready to index your photos"))
+
+        let markChecking = try XCTUnwrap(warmup.range(of: "semanticRuntime.markIndexWarming"))
+        let verifyEntitlement = try XCTUnwrap(warmup.range(of: "await ProManager.shared.verifyEntitlement()"))
+        XCTAssertLessThan(markChecking.lowerBound, verifyEntitlement.lowerBound)
     }
 
     func testViewsUseSemanticTypographyRoles() throws {
@@ -325,6 +464,18 @@ final class ProjectConfigurationTests: XCTestCase {
             contentsOf: repositoryRoot.appendingPathComponent(relativePath),
             encoding: .utf8
         )
+    }
+
+    private func sourceSection(
+        in source: String,
+        from startMarker: String,
+        to endMarker: String
+    ) throws -> Substring {
+        let start = try XCTUnwrap(source.range(of: startMarker))
+        let end = try XCTUnwrap(
+            source.range(of: endMarker, range: start.upperBound..<source.endIndex)
+        )
+        return source[start.lowerBound..<end.lowerBound]
     }
 
     private func metadataValue(prefix: String, in metadata: String) throws -> String {

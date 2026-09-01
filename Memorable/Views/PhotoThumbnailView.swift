@@ -36,8 +36,7 @@ struct PhotoThumbnailView: View {
                                 .frame(width: 28, height: 28)
                                 .modifier(
                                     GlassCircleModifier(
-                                        tint: Color.black.opacity(0.18),
-                                        interactive: false
+                                        tint: Color.black.opacity(0.18)
                                     )
                                 )
                                 .padding(7)

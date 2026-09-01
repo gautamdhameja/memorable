@@ -199,11 +199,9 @@ struct OnboardingView: View {
                         Text("Build Search Index")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(
-                        CelestialButtonStyle(
-                            tint: Celestial.Colors.amber,
-                            foreground: Celestial.Colors.surfaceDim
-                        )
+                    .celestialPrimaryButtonStyle(
+                        tint: Celestial.Colors.amber,
+                        foreground: Celestial.Colors.surfaceDim
                     )
 
                     Button("Not now") {
@@ -269,7 +267,7 @@ struct OnboardingView: View {
                 Text(primaryTitle)
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(CelestialButtonStyle())
+            .celestialPrimaryButtonStyle()
         }
     }
 
@@ -486,8 +484,7 @@ private struct AbstractMemoryCard: View {
                         .frame(height: 24)
                         .modifier(
                             GlassCapsuleModifier(
-                                tint: Color.black.opacity(0.12),
-                                interactive: false
+                                tint: Color.black.opacity(0.12)
                             )
                         )
                         .padding(.bottom, 9)

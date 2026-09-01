@@ -33,6 +33,10 @@ final class SemanticSearchRuntime: ObservableObject {
     private var warmupLoader: ((SemanticWarmupPriority) async throws -> Void)?
     private var promotionHandler: (() -> Void)?
 
+    var isCheckingIndexAvailability: Bool {
+        readiness.index == .warming
+    }
+
     func setWarmupLoader(_ loader: @escaping (SemanticWarmupPriority) async throws -> Void) {
         warmupLoader = loader
     }

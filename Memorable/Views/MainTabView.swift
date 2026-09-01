@@ -20,10 +20,10 @@ enum MainTabDestination: Int {
 }
 
 enum PrimaryDockMetrics {
-    static let itemWidth: CGFloat = 68
-    static let surpriseWidth: CGFloat = 52
+    static let itemWidth: CGFloat = 76
+    static let surpriseWidth: CGFloat = itemWidth
     static let itemSpacing: CGFloat = 2
-    static let horizontalPadding: CGFloat = 8
+    static let horizontalPadding: CGFloat = 14
     static let height: CGFloat = 68
     static let iconFrame: CGFloat = 32
     static let iconSize: CGFloat = 18
@@ -241,7 +241,7 @@ struct MainTabView: View {
                         isSelected
                             ? Celestial.Colors.primaryDim.opacity(0.22)
                             : Celestial.Colors.surfaceContainerHigh.opacity(0.10)
-                    ).interactive(),
+                    ),
                     in: .circle
                 )
         } else {
@@ -278,7 +278,7 @@ private struct SurpriseDockButton: View {
 
     var body: some View {
         Button(action: action) {
-            SurpriseDockIcon(isAvailable: isAvailable)
+            SurpriseDockLabel(isAvailable: isAvailable)
         }
         .buttonStyle(.plain)
         .disabled(!isAvailable)
@@ -294,7 +294,7 @@ private struct SurpriseDockButton: View {
 
 private struct SurpriseDockPlaceholder: View {
     var body: some View {
-        SurpriseDockIcon(isAvailable: false)
+        SurpriseDockLabel(isAvailable: false)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Surprise me with a photo search")
             .accessibilityValue("Unavailable")
@@ -302,26 +302,40 @@ private struct SurpriseDockPlaceholder: View {
     }
 }
 
-private struct SurpriseDockIcon: View {
+private struct SurpriseDockLabel: View {
     let isAvailable: Bool
 
     var body: some View {
-        Image(systemName: "wand.and.stars")
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(Celestial.Colors.amber)
-            .frame(width: 42, height: 42)
-            .modifier(
-                GlassCircleModifier(
-                    tint: Celestial.Colors.amber.opacity(0.16),
-                    interactive: isAvailable
+        VStack(spacing: 4) {
+            SurpriseDockIcon()
+                .frame(
+                    width: PrimaryDockMetrics.iconFrame,
+                    height: PrimaryDockMetrics.iconFrame
                 )
-            )
-            .frame(
-                width: PrimaryDockMetrics.surpriseWidth,
-                height: PrimaryDockMetrics.surpriseWidth
-            )
-            .contentShape(Circle())
-            .opacity(isAvailable ? 1 : 0.38)
+                .modifier(
+                    GlassCircleModifier(
+                        tint: Celestial.Colors.amber.opacity(0.16)
+                    )
+                )
+
+            Text("Surprise me")
+                .font(Celestial.Typography.microEmphasized)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
+        .foregroundStyle(
+            Celestial.Colors.amber.opacity(isAvailable ? 1 : 0.38)
+        )
+        .frame(width: PrimaryDockMetrics.surpriseWidth)
+        .frame(minHeight: 56)
+        .contentShape(Rectangle())
+    }
+}
+
+private struct SurpriseDockIcon: View {
+    var body: some View {
+        Image(systemName: "wand.and.stars")
+            .font(.system(size: PrimaryDockMetrics.iconSize, weight: .semibold))
     }
 }
 
@@ -348,7 +362,7 @@ private struct SemanticWarmupView: View {
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     if case .failed = semanticRuntime.phase {
                         Button("Try Again", action: retry)
-                            .buttonStyle(CelestialButtonStyle())
+                            .celestialPrimaryButtonStyle()
                     }
                 }
                 .padding(.horizontal, 24)
@@ -364,7 +378,7 @@ private struct SemanticWarmupView: View {
         case .warmingCore(let promoted):
             return promoted ? "Prioritizing search..." : "Warming search..."
         case .waitingForIndex:
-            return "Ready to index your photos"
+            return "Loading your library…"
         case .ready:
             return "Search is ready"
         case .failed(let message):

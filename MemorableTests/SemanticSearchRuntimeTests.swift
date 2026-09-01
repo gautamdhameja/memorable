@@ -96,6 +96,25 @@ final class SemanticSearchRuntimeTests: XCTestCase {
     }
 
     @MainActor
+    func testIndexAvailabilityCheckIsDistinctFromMissingIndex() {
+        let runtime = SemanticSearchRuntime()
+
+        runtime.markSemanticModelReady()
+        XCTAssertFalse(runtime.isCheckingIndexAvailability)
+
+        runtime.markIndexWarming()
+        XCTAssertTrue(runtime.isCheckingIndexAvailability)
+
+        runtime.markIndexReady()
+        XCTAssertFalse(runtime.isCheckingIndexAvailability)
+
+        runtime.markIndexWarming()
+        runtime.markIndexUnavailable()
+        XCTAssertFalse(runtime.isCheckingIndexAvailability)
+        XCTAssertEqual(runtime.phase, .waitingForIndex)
+    }
+
+    @MainActor
     func testMemoryPressureCancellationStopsAnInitialWarmup() async {
         let runtime = SemanticSearchRuntime()
         var started = false

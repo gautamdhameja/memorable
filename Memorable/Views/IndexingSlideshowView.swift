@@ -1,7 +1,34 @@
 import SwiftUI
 
 struct IndexingSlideshowView: View {
+    enum Presentation {
+        case standard
+        case initialIndexing
+
+        var horizontalPadding: CGFloat {
+            switch self {
+            case .standard: return 32
+            case .initialIndexing: return 0
+            }
+        }
+
+        var maximumHeight: CGFloat {
+            switch self {
+            case .standard: return 400
+            case .initialIndexing: return 430
+            }
+        }
+
+        var placeholderText: String {
+            switch self {
+            case .standard: return "Relive your memories..."
+            case .initialIndexing: return "Finding your first memories..."
+            }
+        }
+    }
+
     let captionService: PhotoCaptionService
+    var presentation: Presentation = .standard
     @Environment(\.database) private var database
 
     @State private var currentImage: UIImage?
@@ -60,7 +87,8 @@ struct IndexingSlideshowView: View {
                         .animation(.easeInOut(duration: 0.6), value: captionVisible)
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .frame(maxWidth: .infinity, maxHeight: 400)
+                    .frame(maxWidth: .infinity, maxHeight: presentation.maximumHeight)
+                    .opacity(isVisible ? 1 : 0)
             } else {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(Celestial.Colors.surfaceContainer)
@@ -69,14 +97,14 @@ struct IndexingSlideshowView: View {
                         VStack(spacing: 8) {
                             ProgressView()
                                 .tint(Celestial.Colors.outlineVariant)
-                            Text("Relive your memories...")
+                            Text(presentation.placeholderText)
                                 .font(Celestial.Typography.caption)
                                 .foregroundStyle(Celestial.Colors.outline)
                         }
                     }
             }
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, presentation.horizontalPadding)
         .task {
             let task = Task { @MainActor in
                 await waitForIndexedPhotos()

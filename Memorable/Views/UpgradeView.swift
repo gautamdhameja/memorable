@@ -76,11 +76,9 @@ struct UpgradeView: View {
                         .frame(maxWidth: .infinity)
                         .opacity(proManager.product == nil ? 0.5 : 1.0)
                     }
-                    .buttonStyle(
-                        CelestialButtonStyle(
-                            tint: Celestial.Colors.amber,
-                            foreground: Celestial.Colors.surfaceDim
-                        )
+                    .celestialPrimaryButtonStyle(
+                        tint: Celestial.Colors.amber,
+                        foreground: Celestial.Colors.surfaceDim
                     )
                     .disabled(proManager.product == nil)
                     .padding(.top, 14)
@@ -104,7 +102,7 @@ struct UpgradeView: View {
                             Text("Restore Purchase")
                         }
                     }
-                    .buttonStyle(CelestialSecondaryButtonStyle())
+                    .celestialSecondaryButtonStyle()
                     .disabled(proManager.isRestoring)
 
                     if let message = proManager.restoreMessage {
@@ -130,12 +128,11 @@ struct UpgradeView: View {
             Button(action: { dismiss() }) {
                 Image(systemName: "xmark")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                    .frame(width: 38, height: 38)
-                    .modifier(GlassCircleModifier())
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
             }
+            .celestialGlassCircleButtonStyle(
+                tint: Celestial.Colors.surfaceContainerLow.opacity(0.30),
+                foreground: Celestial.Colors.onSurfaceVariant
+            )
             .accessibilityLabel("Close")
             .padding(16)
         }

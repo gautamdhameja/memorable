@@ -163,6 +163,26 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testDiscoverySuggestionsRequireLoadedEmptyHistory() {
+        let model = makeModel(search: { _ in Self.response(ids: []) })
+
+        XCTAssertFalse(model.shouldShowDiscoverySuggestions)
+
+        model.setSearchHistory([])
+        XCTAssertTrue(model.shouldShowDiscoverySuggestions)
+
+        model.setSearchHistory(["cats"])
+        XCTAssertFalse(model.shouldShowDiscoverySuggestions)
+
+        model.clearSearchHistory()
+        XCTAssertTrue(model.shouldShowDiscoverySuggestions)
+
+        model.setSearchHistory(["dogs"])
+        model.removeSearchHistory(at: 0)
+        XCTAssertTrue(model.shouldShowDiscoverySuggestions)
+    }
+
+    @MainActor
     func testSubmittedSearchPrioritizesUserWorkBeforeSearching() async {
         var events: [String] = []
         let model = makeModel(

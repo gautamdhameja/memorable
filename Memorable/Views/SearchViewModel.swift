@@ -56,6 +56,7 @@ final class SearchViewModel: ObservableObject {
     @Published private(set) var visibleCount = SearchViewModel.initialVisibleCount
     @Published private(set) var searchTimeMs = 0
     @Published private(set) var searchHistory: [String] = []
+    @Published private(set) var isSearchHistoryLoaded = false
     @Published private(set) var lastQuery = ""
     @Published private(set) var lastResults: [SearchResult] = []
     @Published private(set) var hasCompletedFirstSearch = false
@@ -91,6 +92,10 @@ final class SearchViewModel: ObservableObject {
         if !results.isEmpty { return results }
         if !lastResults.isEmpty { return lastResults }
         return []
+    }
+
+    var shouldShowDiscoverySuggestions: Bool {
+        isSearchHistoryLoaded && searchHistory.isEmpty
     }
 
     func setQueryText(_ value: String) {
@@ -158,22 +163,23 @@ final class SearchViewModel: ObservableObject {
     }
 
     func loadSearchHistory() {
-        searchHistory = dependencies.loadHistory()
+        setSearchHistory(dependencies.loadHistory())
     }
 
     func setSearchHistory(_ history: [String]) {
         searchHistory = history
+        isSearchHistoryLoaded = true
     }
 
     func clearSearchHistory() {
         dependencies.clearHistory()
-        searchHistory = []
+        setSearchHistory([])
         dismissLastResults()
     }
 
     func removeSearchHistory(at index: Int) {
         dependencies.removeHistory(index)
-        searchHistory = dependencies.loadHistory()
+        setSearchHistory(dependencies.loadHistory())
     }
 
     func dismissLastResults() {
@@ -341,7 +347,7 @@ final class SearchViewModel: ObservableObject {
             if !response.results.isEmpty {
                 if saveToHistory {
                     dependencies.addHistory(query)
-                    searchHistory = dependencies.loadHistory()
+                    setSearchHistory(dependencies.loadHistory())
                 }
                 lastQuery = query
                 lastResults = response.results

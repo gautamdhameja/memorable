@@ -71,7 +71,7 @@ class AppState: ObservableObject {
     var imageEncoder: ImageEncoder?
     var textEncoder: TextEncoder?
     var searchEngine: SearchEngine?
-    var indexingService: IndexingService?
+    @Published private(set) var indexingService: IndexingService?
     let semanticRuntime = SemanticSearchRuntime()
     let captionService = PhotoCaptionService()
     private var isInitializing = false
@@ -317,6 +317,9 @@ class AppState: ObservableObject {
                 indexingService = indexing
                 wireIndexingCallbacks(indexing)
                 semanticRuntime.markSemanticModelReady()
+                semanticRuntime.markIndexWarming(
+                    promoted: currentWarmupPriority == .userInitiatedSearch
+                )
 
                 // Reconcile local Pro-only state on every verified free-tier
                 // launch, including refunds processed while the app was not

@@ -38,7 +38,7 @@ struct SourceManagerView: View {
                             Button("Index") {
                                 indexingService.startIndexing()
                             }
-                            .buttonStyle(CelestialButtonStyle())
+                            .celestialPrimaryButtonStyle()
                             .disabled(!database.allowsIndexingWrites)
                         } else {
                             Image(systemName: "checkmark.circle.fill")
@@ -125,7 +125,7 @@ struct SourceManagerView: View {
                     }) {
                         Label(proManager.isPro ? "Add Folder" : "Add Folder (Pro)", systemImage: "plus.circle")
                     }
-                    .buttonStyle(CelestialSecondaryButtonStyle())
+                    .celestialSecondaryButtonStyle()
                     .listRowBackground(Color.clear)
                     .disabled(!database.allowsIndexingWrites)
                 } header: {

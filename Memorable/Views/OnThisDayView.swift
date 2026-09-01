@@ -70,11 +70,9 @@ struct OnThisDayView: View {
                                 Button(action: { showSlideshow = true }) {
                                     Label("Relive your memories", systemImage: "play.fill")
                                 }
-                                .buttonStyle(
-                                    CelestialButtonStyle(
-                                        tint: Celestial.Colors.onSurface,
-                                        foreground: Celestial.Colors.surfaceDim
-                                    )
+                                .celestialPrimaryButtonStyle(
+                                    tint: Celestial.Colors.onSurface,
+                                    foreground: Celestial.Colors.surfaceDim
                                 )
                                 .padding(.top, 22)
                             }

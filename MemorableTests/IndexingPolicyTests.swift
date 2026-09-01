@@ -737,7 +737,8 @@ final class IndexingPolicyTests: XCTestCase {
     private func makeSurpriseLaunchService(
         database: SearchFixtureDatabase,
         cachedState: SurpriseQueryCache.State,
-        searchIndexContentRevisionLoader: (@Sendable () throws -> SearchIndexContentRevision)? = nil
+        searchIndexContentRevisionLoader: (@Sendable () throws -> SearchIndexContentRevision)? = nil,
+        initialIndexingDefaults: UserDefaults = .standard
     ) -> IndexingService {
         let searchEngine = SearchEngine(
             textEncoder: FakeTextEncoder([:]),
@@ -748,8 +749,110 @@ final class IndexingPolicyTests: XCTestCase {
             searchEngine: searchEngine,
             database: database,
             surpriseQueryCacheLoader: { cachedState },
-            searchIndexContentRevisionLoader: searchIndexContentRevisionLoader
+            searchIndexContentRevisionLoader: searchIndexContentRevisionLoader,
+            initialIndexingDefaults: initialIndexingDefaults
         )
+    }
+
+    @MainActor
+    func testPendingZeroRowInitialIndexResumesThroughServiceAndStopDismissesIt() async {
+        let suiteName = "InitialIndexingServiceResumeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        InitialIndexingExperienceStore.begin(in: defaults)
+        let service = makeSurpriseLaunchService(
+            database: SearchFixtureDatabase(),
+            cachedState: SurpriseQueryCache.State(
+                validatedQueries: [],
+                lastValidatedCount: 0
+            ),
+            initialIndexingDefaults: defaults
+        )
+
+        let loaded = await service.checkAndLoadExistingIndex(
+            scheduleAutoResume: true,
+            scheduleOrphanCleanup: false
+        )
+
+        XCTAssertFalse(loaded)
+        XCTAssertTrue(service.progress.isRunning)
+        XCTAssertTrue(service.isInitialLibraryIndexingActive)
+        XCTAssertTrue(service.shouldShowInitialIndexingExperience)
+
+        service.stopIndexing()
+        XCTAssertFalse(service.isInitialIndexingExperiencePending)
+        XCTAssertFalse(service.isInitialLibraryIndexingActive)
+        XCTAssertTrue(InitialIndexingExperienceStore.isCompleted(in: defaults))
+    }
+
+    @MainActor
+    func testPendingStateCannotMakeUnrelatedIndexingLookInitial() {
+        let suiteName = "InitialIndexingServiceIsolationTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        InitialIndexingExperienceStore.begin(in: defaults)
+        let service = makeSurpriseLaunchService(
+            database: SearchFixtureDatabase(),
+            cachedState: SurpriseQueryCache.State(
+                validatedQueries: [],
+                lastValidatedCount: 0
+            ),
+            initialIndexingDefaults: defaults
+        )
+
+        service.progress.isRunning = true
+
+        XCTAssertFalse(service.isInitialLibraryIndexingActive)
+        XCTAssertFalse(service.shouldShowInitialIndexingExperience)
+        service.stopIndexing()
+    }
+
+    @MainActor
+    func testBackgroundInterruptionKeepsResumeIntentButDeactivatesInitialUI() {
+        let suiteName = "InitialIndexingServiceInterruptionTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let service = makeSurpriseLaunchService(
+            database: SearchFixtureDatabase(),
+            cachedState: SurpriseQueryCache.State(
+                validatedQueries: [],
+                lastValidatedCount: 0
+            ),
+            initialIndexingDefaults: defaults
+        )
+        service.startIndexing()
+        XCTAssertTrue(service.isInitialLibraryIndexingActive)
+
+        service.handleBackgroundTaskExpiration()
+
+        XCTAssertTrue(service.isInitialIndexingExperiencePending)
+        XCTAssertFalse(service.isInitialLibraryIndexingActive)
+        service.progress.isRunning = true
+        XCTAssertFalse(service.shouldShowInitialIndexingExperience)
+        service.stopIndexing()
+    }
+
+    @MainActor
+    func testCompletedEmptyInitialExperienceKeepsLaterIndexingInNormalUI() {
+        let suiteName = "InitialIndexingServiceCompletedTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        InitialIndexingExperienceStore.complete(in: defaults)
+        let service = makeSurpriseLaunchService(
+            database: SearchFixtureDatabase(),
+            cachedState: SurpriseQueryCache.State(
+                validatedQueries: [],
+                lastValidatedCount: 0
+            ),
+            initialIndexingDefaults: defaults
+        )
+
+        service.startIndexing()
+
+        XCTAssertTrue(service.progress.isRunning)
+        XCTAssertFalse(service.isInitialLibraryIndexingActive)
+        XCTAssertFalse(service.shouldShowInitialIndexingExperience)
+        service.stopIndexing()
     }
 
     @MainActor
@@ -1182,6 +1285,94 @@ final class IndexingPolicyTests: XCTestCase {
             indexingProgress: idleProgress,
             isReady: true,
             hasValidatedSuggestions: false
+        ))
+    }
+
+    func testInitialIndexingExperienceBeginsOnlyWithoutAKnownIndex() {
+        XCTAssertTrue(InitialIndexingExperiencePolicy.shouldBegin(
+            hasKnownExistingIndex: false,
+            hasCompletedInitialExperience: false,
+            isReady: false,
+            searchableCount: 0
+        ))
+        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldBegin(
+            hasKnownExistingIndex: true,
+            hasCompletedInitialExperience: false,
+            isReady: false,
+            searchableCount: 0
+        ))
+        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldBegin(
+            hasKnownExistingIndex: false,
+            hasCompletedInitialExperience: false,
+            isReady: true,
+            searchableCount: 1
+        ))
+        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldBegin(
+            hasKnownExistingIndex: false,
+            hasCompletedInitialExperience: true,
+            isReady: false,
+            searchableCount: 0
+        ))
+    }
+
+    func testInitialIndexingExperienceShowsOnlyWhileInitialWorkIsActive() {
+        XCTAssertTrue(InitialIndexingExperiencePolicy.shouldShow(
+            isInitialLibraryWorkflowActive: true,
+            isIndexing: true,
+            isThermallyPaused: false
+        ))
+        XCTAssertTrue(InitialIndexingExperiencePolicy.shouldShow(
+            isInitialLibraryWorkflowActive: true,
+            isIndexing: false,
+            isThermallyPaused: true
+        ))
+        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldShow(
+            isInitialLibraryWorkflowActive: false,
+            isIndexing: true,
+            isThermallyPaused: false
+        ))
+        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldShow(
+            isInitialLibraryWorkflowActive: true,
+            isIndexing: false,
+            isThermallyPaused: false
+        ))
+        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldShow(
+            isInitialLibraryWorkflowActive: false,
+            isIndexing: false,
+            isThermallyPaused: true
+        ))
+    }
+
+    func testInitialIndexingExperienceStorePersistsPendingAndCompletionState() {
+        let suiteName = "InitialIndexingExperienceStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertFalse(InitialIndexingExperienceStore.isPending(in: defaults))
+        XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+        InitialIndexingExperienceStore.begin(in: defaults)
+        XCTAssertTrue(InitialIndexingExperienceStore.isPending(in: defaults))
+        XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+        InitialIndexingExperienceStore.complete(in: defaults)
+        XCTAssertFalse(InitialIndexingExperienceStore.isPending(in: defaults))
+        XCTAssertTrue(InitialIndexingExperienceStore.isCompleted(in: defaults))
+    }
+
+    func testPendingInitialIndexWithoutPersistedRowsRequiresLaunchResume() {
+        XCTAssertTrue(InitialIndexingExperiencePolicy.shouldResumePendingRun(
+            scheduleAutoResume: true,
+            didLoadIndex: false,
+            isPending: true
+        ))
+        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldResumePendingRun(
+            scheduleAutoResume: true,
+            didLoadIndex: true,
+            isPending: true
+        ))
+        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldResumePendingRun(
+            scheduleAutoResume: false,
+            didLoadIndex: false,
+            isPending: true
         ))
     }
 }
