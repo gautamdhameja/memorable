@@ -22,6 +22,20 @@ final class PerformanceMetricsTests: XCTestCase {
         XCTAssertTrue(metrics.completed.isEmpty)
     }
 
+    func testLatestDurationReturnsNewestCompletedValue() {
+        let metrics = PerformanceMetrics()
+
+        metrics.record(PerformancePhase.indexLoad, durationSeconds: 0.4)
+        metrics.record(PerformancePhase.indexLoad, durationSeconds: 0.2)
+
+        XCTAssertEqual(
+            metrics.latestDuration(for: PerformancePhase.indexLoad) ?? 0,
+            0.2,
+            accuracy: 0.001
+        )
+        XCTAssertNil(metrics.latestDuration(for: "missing"))
+    }
+
     func testRecorderDistinguishesSearchAndIndexPhases() {
         let metrics = PerformanceMetrics()
 

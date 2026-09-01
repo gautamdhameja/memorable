@@ -97,6 +97,9 @@ class AppState: ObservableObject {
         }
     ) {
         MainThreadResponsivenessMonitor.shared.start()
+        #if DEBUG
+        PerformanceMetrics.shared.start(PerformancePhase.launchToShell)
+        #endif
         self.requestPhotoAuthorization = requestPhotoAuthorization
         self.currentPhotoAuthorization = currentPhotoAuthorization
         self.deviceSupportProvider = isDeviceSupported
@@ -138,8 +141,8 @@ class AppState: ObservableObject {
         isInitializing = true
         defer { isInitializing = false }
         #if DEBUG
-        PerformanceMetrics.shared.start(PerformancePhase.launchToShell)
         logger.info("[AppState] initialize() started")
+        PerformanceMetrics.shared.start(PerformancePhase.photoAuthorization)
         #endif
 
         if let knownAuthorizationStatus {
@@ -147,6 +150,10 @@ class AppState: ObservableObject {
         } else {
             authorizationStatus = await requestPhotoAuthorization()
         }
+
+        #if DEBUG
+        PerformanceMetrics.shared.end(PerformancePhase.photoAuthorization)
+        #endif
 
         #if DEBUG
         logger.info("[AppState] Photo auth status: \(String(describing: self.authorizationStatus))")
@@ -280,7 +287,17 @@ class AppState: ObservableObject {
 
                 async let modelsTask = prewarmedModelsForSearch()
                 async let databaseTask = CancellableDetachedOperation.run(priority: .userInitiated) {
-                    AppDatabase.shared as any DatabaseProtocol
+                    #if DEBUG
+                    let startedAt = CFAbsoluteTimeGetCurrent()
+                    #endif
+                    let database = AppDatabase.shared as any DatabaseProtocol
+                    #if DEBUG
+                    PerformanceMetrics.shared.record(
+                        PerformancePhase.databaseOpen,
+                        durationSeconds: CFAbsoluteTimeGetCurrent() - startedAt
+                    )
+                    #endif
+                    return database
                 }
                 let (models, database) = try await (modelsTask, databaseTask)
                 try Task.checkCancellation()
@@ -309,7 +326,16 @@ class AppState: ObservableObject {
 
                 // Verify after wiring the callback so a refunded user always
                 // has an oversized local index trimmed to the free-tier limit.
+                #if DEBUG
+                let entitlementStartedAt = CFAbsoluteTimeGetCurrent()
+                #endif
                 await ProManager.shared.verifyEntitlement()
+                #if DEBUG
+                PerformanceMetrics.shared.record(
+                    PerformancePhase.entitlementVerification,
+                    durationSeconds: CFAbsoluteTimeGetCurrent() - entitlementStartedAt
+                )
+                #endif
                 try Task.checkCancellation()
             }
 
@@ -349,6 +375,14 @@ class AppState: ObservableObject {
 
             #if DEBUG
             PerformanceMetrics.shared.end(PerformancePhase.semanticWarmup)
+            let semanticSearchReady = loadedIndex
+            Task.detached(priority: .background) {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                PerformanceMetrics.shared.emitStartupSnapshot(
+                    semanticSearchReady: semanticSearchReady
+                )
+            }
             #endif
         } catch is CancellationError {
             #if DEBUG

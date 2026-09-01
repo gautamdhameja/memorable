@@ -61,6 +61,37 @@ final class PerformanceMetrics: @unchecked Sendable {
         }
     }
 
+    func latestDuration(for name: String) -> TimeInterval? {
+        state.withLock { state in
+            state.completed.last(where: { $0.name == name })?.durationSeconds
+        }
+    }
+
+    /// Emits one delayed, parseable summary after semantic warmup. Xcode's
+    /// simulator log capture can attach after very fast warm launches, so the
+    /// summary intentionally repeats the already-recorded values rather than
+    /// relying on every individual timing line being captured.
+    func emitStartupSnapshot(semanticSearchReady: Bool) {
+        let value: (String) -> TimeInterval = { [self] name in
+            latestDuration(for: name) ?? -1
+        }
+        let line = [
+            "app_launch_completed=1",
+            "semantic_search_ready=\(semanticSearchReady ? 1 : 0)",
+            "semantic_warmup_seconds=\(Self.format(value(PerformancePhase.semanticWarmup)))",
+            "launch_to_shell_seconds=\(Self.format(value(PerformancePhase.launchToShell)))",
+            "photo_authorization_seconds=\(Self.format(value(PerformancePhase.photoAuthorization)))",
+            "image_model_load_seconds=\(Self.format(value(PerformancePhase.imageModelLoad)))",
+            "text_model_load_seconds=\(Self.format(value(PerformancePhase.textModelLoad)))",
+            "tokenizer_load_seconds=\(Self.format(value(PerformancePhase.tokenizerLoad)))",
+            "database_open_seconds=\(Self.format(value(PerformancePhase.databaseOpen)))",
+            "entitlement_verification_seconds=\(Self.format(value(PerformancePhase.entitlementVerification)))",
+            "index_load_seconds=\(Self.format(value(PerformancePhase.indexLoad)))",
+            "main_thread_stall_seconds=\(Self.format(max(0, value(PerformancePhase.mainThreadResponsiveness))))",
+        ].joined(separator: " ")
+        logger.info("[StartupSnapshot] \(line, privacy: .public)")
+    }
+
     private static func append(
         _ metric: PerformanceMetric,
         to state: inout State
@@ -71,11 +102,21 @@ final class PerformanceMetrics: @unchecked Sendable {
         }
         return metric
     }
+
+    private static func format(_ value: TimeInterval) -> String {
+        String(format: "%.6f", value)
+    }
 }
 
 enum PerformancePhase {
     static let launchToShell = "launch.to_shell"
     static let semanticWarmup = "semantic.warmup"
+    static let photoAuthorization = "startup.photo_authorization"
+    static let imageModelLoad = "startup.image_model_load"
+    static let textModelLoad = "startup.text_model_load"
+    static let tokenizerLoad = "startup.tokenizer_load"
+    static let databaseOpen = "startup.database_open"
+    static let entitlementVerification = "startup.entitlement_verification"
     static let firstQuery = "search.first_query"
     static let warmQuery = "search.warm_query"
     static let queryParsing = "search.query_parsing"

@@ -87,3 +87,4 @@ fastlane/test_output
 
 # Downloaded COCO relevance fixtures and derived real-model embeddings.
 .relevance-cache/
+.context/

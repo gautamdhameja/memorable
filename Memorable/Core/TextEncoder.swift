@@ -23,13 +23,32 @@ final class TextEncoder: TextEmbeddingEncoding, Sendable {
     init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) async throws {
         try Task.checkCancellation()
         let modelURL = try resourceManager.url(for: .textEncoder)
+        #if DEBUG
+        let modelStartedAt = CFAbsoluteTimeGetCurrent()
+        #endif
         let loadedModel = try await MLModel.load(
             contentsOf: modelURL,
             configuration: Self.modelConfiguration()
         )
+        #if DEBUG
+        PerformanceMetrics.shared.record(
+            PerformancePhase.textModelLoad,
+            durationSeconds: CFAbsoluteTimeGetCurrent() - modelStartedAt
+        )
+        #endif
         try Task.checkCancellation()
         self.model = OSAllocatedUnfairLock(initialState: loadedModel)
-        self.tokenizer = try CLIPTokenizer(contextLength: contextLength)
+        #if DEBUG
+        let tokenizerStartedAt = CFAbsoluteTimeGetCurrent()
+        #endif
+        let tokenizer = try CLIPTokenizer(contextLength: contextLength)
+        #if DEBUG
+        PerformanceMetrics.shared.record(
+            PerformancePhase.tokenizerLoad,
+            durationSeconds: CFAbsoluteTimeGetCurrent() - tokenizerStartedAt
+        )
+        #endif
+        self.tokenizer = tokenizer
     }
 
     init(
