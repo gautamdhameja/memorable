@@ -524,6 +524,7 @@ struct LicensesView: View {
                     .padding(12)
                     .modifier(GlassPanelModifier(cornerRadius: 16, interactive: true))
                     .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 }
             }
