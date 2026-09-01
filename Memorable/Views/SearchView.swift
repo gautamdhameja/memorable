@@ -380,21 +380,18 @@ struct SearchView: View {
             Spacer()
             if canShowValidatedSuggestions {
                 Button(action: performSurpriseSearch) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "wand.and.stars")
-                            .font(.caption.weight(.bold))
-                        Text("Surprise me")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .foregroundStyle(Celestial.Colors.amber)
-                    .padding(.horizontal, 13)
-                    .frame(height: 38)
-                    .modifier(
-                        GlassCapsuleModifier(
-                            tint: Celestial.Colors.amber.opacity(0.14)
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Celestial.Colors.amber)
+                        .frame(width: 38, height: 38)
+                        .modifier(
+                            GlassCircleModifier(
+                                tint: Celestial.Colors.amber.opacity(0.14)
+                            )
                         )
-                    )
-                    .contentShape(Capsule())
+                        .contentShape(Circle())
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Surprise me with a photo search")
