@@ -120,14 +120,9 @@ struct UpgradeView: View {
                             .multilineTextAlignment(.center)
                     }
 
-                    Button("Not now") { dismiss() }
-                        .font(Celestial.Typography.supporting)
-                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 44)
-                        .padding(.bottom, 24)
                 }
                 .padding(.horizontal, 26)
+                .padding(.bottom, 24)
             }
         }
         .preferredColorScheme(.dark)
@@ -138,6 +133,8 @@ struct UpgradeView: View {
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .frame(width: 38, height: 38)
                     .modifier(GlassCircleModifier())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Close")
             .padding(16)

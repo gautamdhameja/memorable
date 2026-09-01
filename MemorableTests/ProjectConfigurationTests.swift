@@ -31,6 +31,15 @@ final class MainTabNavigationStateTests: XCTestCase {
     }
 }
 
+final class MoreNavigationPolicyTests: XCTestCase {
+    func testReindexShortcutAppearsOnlyForAReadyIdleIndex() {
+        XCTAssertTrue(MoreNavigationPolicy.showsReindexShortcut(isReady: true, isIndexing: false))
+        XCTAssertFalse(MoreNavigationPolicy.showsReindexShortcut(isReady: true, isIndexing: true))
+        XCTAssertFalse(MoreNavigationPolicy.showsReindexShortcut(isReady: false, isIndexing: false))
+        XCTAssertFalse(MoreNavigationPolicy.showsReindexShortcut(isReady: false, isIndexing: true))
+    }
+}
+
 final class ProjectConfigurationTests: XCTestCase {
     private var repositoryRoot: URL {
         URL(fileURLWithPath: #filePath)
@@ -185,7 +194,7 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(bundledPolicy.contains("only after you tap Share"))
     }
 
-    func testPrimaryDockCentersSurpriseAndKeepsMemoriesInMore() throws {
+    func testPrimaryNavigationHasSingleOwnersForSurpriseMemoriesAndSmartAlbums() throws {
         let mainTabView = try contents(of: "Memorable/Views/MainTabView.swift")
         let searchView = try contents(of: "Memorable/Views/SearchView.swift")
         let moreView = try contents(of: "Memorable/Views/MoreView.swift")
@@ -198,7 +207,20 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertFalse(mainTabView.contains("case memories"))
         XCTAssertTrue(moreView.contains("OnThisDayView(captionService: captionService)"))
         XCTAssertFalse(moreView.contains("SurpriseExploreView"))
+        XCTAssertFalse(moreView.contains("title: \"Smart Albums\""))
+        XCTAssertFalse(moreView.contains("SmartAlbumStore"))
+        XCTAssertFalse(moreView.contains("SmartAlbumResultsView"))
         XCTAssertFalse(searchView.contains("Button(action: performSurpriseSearch)"))
+        XCTAssertTrue(searchView.contains("private var smartAlbumsView"))
+        XCTAssertTrue(searchView.contains("ForEach(smartAlbums)"))
+        XCTAssertFalse(searchView.contains("smartAlbums.prefix("))
+    }
+
+    func testUpgradeUsesOneAccessibleDismissAction() throws {
+        let upgradeView = try contents(of: "Memorable/Views/UpgradeView.swift")
+
+        XCTAssertFalse(upgradeView.contains("Button(\"Not now\")"))
+        XCTAssertTrue(upgradeView.contains(".accessibilityLabel(\"Close\")"))
     }
 
     func testPhotoSourcesHasAVisibleExitAndInlineTitle() throws {

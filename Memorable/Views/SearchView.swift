@@ -628,8 +628,8 @@ struct SearchView: View {
             .padding(.bottom, 12)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(smartAlbums.prefix(6)) { album in
+                LazyHStack(spacing: 10) {
+                    ForEach(smartAlbums) { album in
                         Button {
                             viewModel.setQueryText(album.query)
                             performSearch(saveToHistory: true)
@@ -663,6 +663,8 @@ struct SearchView: View {
                                 )
                             )
                         }
+                        .accessibilityLabel("Search smart album, \(album.name)")
+                        .accessibilityHint("Runs the saved search: \(album.query)")
                         .contextMenu {
                             Button(role: .destructive) {
                                 SmartAlbumStore.delete(id: album.id)

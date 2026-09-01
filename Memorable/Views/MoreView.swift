@@ -1,5 +1,11 @@
 import SwiftUI
 
+enum MoreNavigationPolicy {
+    static func showsReindexShortcut(isReady: Bool, isIndexing: Bool) -> Bool {
+        isReady && !isIndexing
+    }
+}
+
 struct MoreView: View {
     @ObservedObject var indexingService: IndexingService
     let searchEngine: SearchEngine
@@ -7,8 +13,6 @@ struct MoreView: View {
     @ObservedObject private var proManager = ProManager.shared
     @Environment(\.database) private var database
 
-    @State private var smartAlbums: [SmartAlbum] = []
-    @State private var showAllAlbums = false
     @State private var showSources = false
     @State private var showDuplicates = false
     @State private var showUpgrade = false
@@ -47,43 +51,6 @@ struct MoreView: View {
                                 )
                             }
 
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) { showAllAlbums.toggle() }
-                            } label: {
-                                toolRow(
-                                    icon: "rectangle.stack",
-                                    title: "Smart Albums",
-                                    subtitle: smartAlbums.isEmpty ? "No saved albums" : "\(smartAlbums.count) self-updating albums"
-                                )
-                            }
-
-                            if showAllAlbums {
-                                ForEach(smartAlbums) { album in
-                                    NavigationLink {
-                                        SmartAlbumResultsView(album: album, searchEngine: searchEngine)
-                                    } label: {
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: 3) {
-                                                Text(album.name)
-                                                    .font(Celestial.Typography.supportingEmphasized)
-                                                    .foregroundStyle(Celestial.Colors.onSurface)
-                                                Text(album.query)
-                                                    .font(Celestial.Typography.caption)
-                                                    .foregroundStyle(Celestial.Colors.outline)
-                                                    .lineLimit(1)
-                                            }
-                                            Spacer()
-                                            Image(systemName: "chevron.right")
-                                                .font(Celestial.Typography.caption)
-                                                .foregroundStyle(Celestial.Colors.outlineVariant)
-                                        }
-                                        .padding(.leading, 32)
-                                        .padding(.vertical, 12)
-                                        .overlay(alignment: .bottom) { CelestialHairline() }
-                                    }
-                                }
-                            }
-
                             Button(action: { showDuplicates = true }) {
                                 toolRow(icon: "square.on.square", title: "Find duplicates", subtitle: "Compare near-identical photos safely")
                             }
@@ -105,14 +72,25 @@ struct MoreView: View {
                         proStatus
                             .padding(.top, 30)
 
-                        HStack {
-                            Button("Re-index library") { showReindexConfirm = true }
-                                .disabled(!database.allowsIndexingWrites)
-                            Spacer()
-                            NavigationLink("Privacy") { PrivacyPolicyView() }
-                            Text("·")
-                            NavigationLink("Licenses") { LicensesView() }
-                            Text("· \(appVersionString)")
+                        VStack(alignment: .leading, spacing: 0) {
+                            if MoreNavigationPolicy.showsReindexShortcut(
+                                isReady: indexingService.isReady,
+                                isIndexing: indexingService.progress.isRunning
+                            ) {
+                                Button("Re-index library") { showReindexConfirm = true }
+                                    .disabled(!database.allowsIndexingWrites)
+                                    .frame(minHeight: 44)
+                            }
+
+                            HStack(spacing: 20) {
+                                NavigationLink("Privacy") { PrivacyPolicyView() }
+                                    .frame(minHeight: 44)
+                                NavigationLink("Licenses") { LicensesView() }
+                                    .frame(minHeight: 44)
+                            }
+
+                            Text(appVersionString)
+                                .padding(.top, 2)
                         }
                         .font(Celestial.Typography.caption)
                         .foregroundStyle(Celestial.Colors.outline)
@@ -129,8 +107,6 @@ struct MoreView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .preferredColorScheme(.dark)
-            .onAppear { smartAlbums = SmartAlbumStore.load() }
-            .onDisappear { cancelPendingVideoPlayerPresentation() }
             .sheet(isPresented: $showSources) {
                 NavigationStack {
                     SourceManagerView(indexingService: indexingService)
@@ -335,110 +311,6 @@ struct PrivacyPolicyView: View {
             }
         }
         .celestialNavigationTitle("Privacy")
-    }
-}
-
-// MARK: - Smart Album Results
-
-struct SmartAlbumResultsView: View {
-    let album: SmartAlbum
-    let searchEngine: SearchEngine
-    @State private var results: [SearchResult] = []
-    @State private var isLoading = true
-    @State private var searchTask: Task<Void, Never>?
-
-    var body: some View {
-        ZStack {
-            CelestialBackdrop()
-
-            if isLoading {
-                ProgressView()
-                    .tint(Celestial.Colors.primaryDim)
-            } else if results.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 36, weight: .thin))
-                        .foregroundStyle(Celestial.Colors.outlineVariant)
-                    Text("No matching photos found")
-                        .font(Celestial.Typography.supporting)
-                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                }
-            } else {
-                ScrollView {
-                    SmartAlbumMasonryGrid(results: results)
-                        .padding(.horizontal, 6)
-                }
-            }
-        }
-        .celestialNavigationTitle(album.name)
-        .onAppear { startSearch() }
-        .onDisappear { cancelSearchForMemoryPressure() }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIApplication.didReceiveMemoryWarningNotification
-        )) { _ in
-            cancelSearchForMemoryPressure()
-        }
-    }
-
-    private func startSearch() {
-        searchTask?.cancel()
-        isLoading = true
-        searchTask = Task {
-            do {
-                let response = try await searchEngine.search(
-                    query: album.query,
-                    featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro)
-                )
-                guard !Task.isCancelled, !searchEngine.isMemoryPressureSuspended else { return }
-                results = Array(response.results.prefix(50))
-                isLoading = false
-            } catch is CancellationError {
-                return
-            } catch {
-                logger.error("Smart album search failed: \(error.safeDiagnosticCode)")
-                isLoading = false
-            }
-        }
-    }
-
-    private func cancelSearchForMemoryPressure() {
-        searchTask?.cancel()
-        searchTask = nil
-        results.removeAll(keepingCapacity: false)
-        isLoading = false
-    }
-}
-
-struct SmartAlbumMasonryGrid: View {
-    let results: [SearchResult]
-    @State private var selectedPhoto: SearchResult?
-
-    var body: some View {
-        LazyVStack(spacing: 6) {
-            ForEach(results) { result in
-                Button {
-                    selectedPhoto = result
-                } label: {
-                    PhotoThumbnailView(result: result)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .fullScreenCover(item: $selectedPhoto) { result in
-            if result.isVideo {
-                Color.clear.onAppear {
-                    selectedPhoto = nil
-                    if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                        presentVideoPlayer(for: asset)
-                    }
-                }
-            } else {
-                SearchResultsViewer(
-                    initialResult: result,
-                    allResults: results.filter { !$0.isVideo }
-                )
-            }
-        }
     }
 }
 
