@@ -106,6 +106,44 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(response.results.last?.id, "photo-0025")
     }
 
+    func testBasicSearchExcludesFolderResultsBeforeDowngradeCleanupFinishes() throws {
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: SearchFixtureDatabase(photos: [
+                FixturePhoto(
+                    id: "photo-library-result",
+                    localIdentifier: "photo-library-result",
+                    date: Date(timeIntervalSince1970: 1),
+                    embedding: float16Vector(first: 1)
+                ),
+                FixturePhoto(
+                    id: "folder-result",
+                    localIdentifier: "folder-result",
+                    date: Date(timeIntervalSince1970: 2),
+                    sourceId: "folder-source",
+                    filePath: "/folder/result.jpg",
+                    embedding: float16Vector(first: 1)
+                )
+            ])
+        )
+        try engine.loadIndex()
+
+        let basic = try engine.hybridSearch(
+            hints: hints(text: "dog"),
+            featurePolicy: .basic
+        )
+        let pro = try engine.hybridSearch(
+            hints: hints(text: "dog"),
+            featurePolicy: .pro
+        )
+
+        XCTAssertEqual(basic.results.map(\.id), ["photo-library-result"])
+        XCTAssertEqual(
+            Set(pro.results.map(\.id)),
+            Set(["photo-library-result", "folder-result"])
+        )
+    }
+
     func testAsyncSearchPassesItsPreparedEmbeddingDirectlyIntoRanking() async throws {
         let encoder = CountingTextEncoder(embedding: floatVector(first: 1))
         let engine = SearchEngine(
@@ -553,7 +591,7 @@ final class SearchEngineTests: XCTestCase {
         try engine.loadIndex()
 
         let search = Task.detached {
-            engine.findSimilar(photoId: "photo-1").count
+            engine.findSimilar(photoId: "photo-1", featurePolicy: .pro).count
         }
         XCTAssertEqual(scorer.searchStarted.wait(timeout: .now() + 1), .success)
         search.cancel()
@@ -561,6 +599,33 @@ final class SearchEngineTests: XCTestCase {
 
         let resultCount = await search.value
         XCTAssertEqual(resultCount, 0)
+    }
+
+    func testFindSimilarDefaultsToFreePolicyAndDoesNotStartScoring() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "photo-1",
+                localIdentifier: "local-photo-1",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            ),
+            .init(
+                id: "photo-2",
+                localIdentifier: "local-photo-2",
+                date: nil,
+                embedding: float16Vector(first: 1)
+            )
+        ])
+        let scorer = RecordingSimilaritySearch()
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder([:]),
+            database: database,
+            photoSimilaritySearch: scorer
+        )
+        try engine.loadIndex()
+
+        XCTAssertTrue(engine.findSimilar(photoId: "photo-1").isEmpty)
+        XCTAssertTrue(scorer.queries.isEmpty)
     }
 
     @MainActor
@@ -666,7 +731,10 @@ final class SearchEngineTests: XCTestCase {
         )
 
         try engine.loadIndex()
-        let result = try XCTUnwrap(engine.hybridSearch(hints: hints(text: "dog")).results.first)
+        let result = try XCTUnwrap(engine.hybridSearch(
+            hints: hints(text: "dog"),
+            featurePolicy: .pro
+        ).results.first)
 
         XCTAssertEqual(result.sourceId, "source-1")
         XCTAssertEqual(result.filePath, "/selected/photo.jpg")
@@ -1274,7 +1342,7 @@ final class SearchEngineTests: XCTestCase {
         )
 
         try engine.loadIndex()
-        let results = engine.findSimilar(photoId: "source")
+        let results = engine.findSimilar(photoId: "source", featurePolicy: .pro)
 
         XCTAssertEqual(results.map(\.id), ["page-3-match"])
     }

@@ -25,8 +25,10 @@ class DuplicateFinder {
         localIdentifiers: [String],
         embeddings: [Float16],
         embeddingDim: Int = EmbeddingConfig.dimensions,
-        threshold: Float = SearchConfig.duplicateThreshold
+        threshold: Float = SearchConfig.duplicateThreshold,
+        featurePolicy: ProFeatureAccessPolicy = .free
     ) -> [DuplicatePair] {
+        guard featurePolicy.allowsNearDuplicateDetection else { return [] }
         let maxPhotos = min(ids.count, IndexingConfig.maxDuplicateScanPhotos)
 
         // Invariant: the flat embeddings buffer must hold at least one row per

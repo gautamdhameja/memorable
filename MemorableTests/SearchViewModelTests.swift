@@ -83,6 +83,26 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testEntitlementRevocationRejectsLateSearchResults() async throws {
+        let searcher = ControlledSearcher()
+        let model = makeModel(search: searcher.search)
+        model.setQueryText("last winter in Berlin")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "last winter in Berlin")
+
+        model.handleProEntitlementRevoked()
+        await searcher.complete(
+            query: "last winter in Berlin",
+            with: response(id: "late-pro-result")
+        )
+        await Task.yield()
+
+        XCTAssertFalse(model.isSearching)
+        XCTAssertNil(model.activeSearchID)
+        XCTAssertTrue(model.results.isEmpty)
+    }
+
+    @MainActor
     func testIndexVersionChangeKeepsResultsVisibleUntilValidationCompletes() async throws {
         let validator = ControlledValidator()
         let model = makeModel(

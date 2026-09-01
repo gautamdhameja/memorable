@@ -49,16 +49,28 @@ enum QueryInputPolicy {
 /// boundaries. Callers that do not provide a policy receive basic search.
 struct SearchFeaturePolicy: Equatable, Sendable {
     let allowsAdvancedQueryFeatures: Bool
+    let allowsFolderResults: Bool
 
-    static let basic = SearchFeaturePolicy(allowsAdvancedQueryFeatures: false)
-    static let pro = SearchFeaturePolicy(allowsAdvancedQueryFeatures: true)
+    static let basic = SearchFeaturePolicy(
+        allowsAdvancedQueryFeatures: false,
+        allowsFolderResults: false
+    )
+    static let pro = SearchFeaturePolicy(
+        allowsAdvancedQueryFeatures: true,
+        allowsFolderResults: true
+    )
 
     init(isPro: Bool) {
         allowsAdvancedQueryFeatures = isPro
+        allowsFolderResults = isPro
     }
 
-    private init(allowsAdvancedQueryFeatures: Bool) {
+    private init(
+        allowsAdvancedQueryFeatures: Bool,
+        allowsFolderResults: Bool
+    ) {
         self.allowsAdvancedQueryFeatures = allowsAdvancedQueryFeatures
+        self.allowsFolderResults = allowsFolderResults
     }
 
     func enforcing(_ hints: QueryHints) -> QueryHints {
@@ -92,6 +104,18 @@ struct SearchFeaturePolicy: Equatable, Sendable {
             }
             .filter { !$0.isEmpty })
         return bounded
+    }
+
+    func enforcing(_ response: SearchResponse) -> SearchResponse {
+        guard !allowsFolderResults else { return response }
+        let isPhotoLibraryResult: (SearchResult) -> Bool = {
+            $0.sourceId == PhotoSourceType.photokit.rawValue
+        }
+        return SearchResponse(
+            results: response.results.filter(isPhotoLibraryResult),
+            fallbackResults: response.fallbackResults.filter(isPhotoLibraryResult),
+            filtersApplied: response.filtersApplied
+        )
     }
 }
 

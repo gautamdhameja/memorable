@@ -54,6 +54,18 @@ final class MoreNavigationPolicyTests: XCTestCase {
         XCTAssertFalse(MoreNavigationPolicy.showsReindexShortcut(isReady: false, isIndexing: false))
         XCTAssertFalse(MoreNavigationPolicy.showsReindexShortcut(isReady: false, isIndexing: true))
     }
+
+    func testProFeaturePolicyFailsClosedForEveryPaidCapability() {
+        XCTAssertFalse(ProFeatureAccessPolicy.free.allowsFindSimilar)
+        XCTAssertFalse(ProFeatureAccessPolicy.free.allowsNearDuplicateDetection)
+        XCTAssertFalse(ProFeatureAccessPolicy.free.allowsFolderRefresh)
+        XCTAssertFalse(SearchFeaturePolicy.basic.allowsFolderResults)
+
+        XCTAssertTrue(ProFeatureAccessPolicy.pro.allowsFindSimilar)
+        XCTAssertTrue(ProFeatureAccessPolicy.pro.allowsNearDuplicateDetection)
+        XCTAssertTrue(ProFeatureAccessPolicy.pro.allowsFolderRefresh)
+        XCTAssertTrue(SearchFeaturePolicy.pro.allowsFolderResults)
+    }
 }
 
 final class ProjectConfigurationTests: XCTestCase {

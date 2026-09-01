@@ -36,6 +36,7 @@ struct UpgradeView: View {
                     VStack(spacing: 0) {
                         proFeature("Expanded local search", detail: "Search every locally available indexed photo and video")
                         proFeature("Find similar", detail: "Start from a photo instead of a description")
+                        proFeature("Find duplicates", detail: "Review near-identical photos before removing either copy")
                         proFeature("Negative search", detail: "Leave things out, like “beach -crowds”")
                         proFeature("Folder sources", detail: "Index photos outside the Photos library")
                         proFeature("Smarter dates and places", detail: "Understand descriptions like “last winter in Berlin”")
@@ -62,28 +63,37 @@ struct UpgradeView: View {
                             if proManager.isPro { Haptics.success() }
                         }
                     }) {
-                        Group {
-                            if proManager.isLoadingProduct {
+                        HStack(spacing: 10) {
+                            if proManager.isPurchasing || proManager.isLoadingProduct {
                                 ProgressView()
                                     .tint(Celestial.Colors.onPrimaryContainer)
                                     .controlSize(.regular)
+                            }
+                            if proManager.isPurchasing {
+                                Text("Purchasing Pro...")
+                            } else if proManager.isLoadingProduct {
+                                Text("Connecting to App Store...")
                             } else if let product = proManager.product {
                                 Text("Unlock Pro · \(product.displayPrice)")
+                            } else if proManager.hasProductLoadFailed {
+                                Text("Try Again")
                             } else {
                                 Text("Upgrade to Pro")
                             }
                         }
                         .frame(maxWidth: .infinity)
-                        .opacity(proManager.product == nil ? 0.5 : 1.0)
                     }
                     .celestialPrimaryButtonStyle(
                         tint: Celestial.Colors.amber,
                         foreground: Celestial.Colors.surfaceDim
                     )
-                    .disabled(proManager.product == nil)
+                    .disabled(proManager.isCommerceBusy)
+                    .accessibilityLabel(
+                        proManager.isPurchasing ? "Purchasing Pro" : "Upgrade to Memorable Pro"
+                    )
                     .padding(.top, 14)
 
-                    if proManager.product == nil && !proManager.isLoadingProduct {
+                    if proManager.hasProductLoadFailed {
                         Text("Unable to connect to the App Store. Please check your connection and try again.")
                             .font(Celestial.Typography.caption)
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
@@ -95,15 +105,21 @@ struct UpgradeView: View {
                         Task { await proManager.restorePurchases() }
                     }) {
                         if proManager.isRestoring {
-                            ProgressView()
-                                .tint(Celestial.Colors.primaryDim)
-                                .controlSize(.small)
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .tint(Celestial.Colors.primaryDim)
+                                    .controlSize(.small)
+                                Text("Restoring Purchase...")
+                            }
                         } else {
                             Text("Restore Purchase")
                         }
                     }
                     .celestialSecondaryButtonStyle()
-                    .disabled(proManager.isRestoring)
+                    .disabled(proManager.isCommerceBusy)
+                    .accessibilityLabel(
+                        proManager.isRestoring ? "Restoring Purchase" : "Restore Purchase"
+                    )
 
                     if let message = proManager.restoreMessage {
                         Text(message)

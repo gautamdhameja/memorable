@@ -125,6 +125,79 @@ final class ProManagerTests: XCTestCase {
         XCTAssertEqual(loadCount, 2, "One request performs the initial load and one retry")
         XCTAssertEqual(delayCount, 1)
         XCTAssertFalse(manager.isLoadingProduct)
+        XCTAssertEqual(manager.productLoadState, .failed)
+    }
+
+    func testPurchaseRequestsAreSingleFlightAndRecoverToIdle() async {
+        var loadCount = 0
+        var releaseFirstLoad: CheckedContinuation<Void, Never>?
+        let firstLoadStarted = expectation(description: "First purchase started loading")
+        let manager = ProManager(
+            productLoader: { _ in
+                loadCount += 1
+                if loadCount == 1 {
+                    firstLoadStarted.fulfill()
+                    await withCheckedContinuation { continuation in
+                        releaseFirstLoad = continuation
+                    }
+                }
+                return []
+            },
+            retryDelay: {}
+        )
+
+        let firstPurchase = Task { await manager.purchase() }
+        await fulfillment(of: [firstLoadStarted], timeout: 1)
+        let duplicatePurchase = Task { await manager.purchase() }
+        await duplicatePurchase.value
+
+        XCTAssertEqual(manager.commerceState, .purchasing)
+        XCTAssertEqual(loadCount, 1)
+
+        releaseFirstLoad?.resume()
+        await firstPurchase.value
+
+        XCTAssertEqual(loadCount, 2, "Only the accepted purchase performs the load and retry")
+        XCTAssertEqual(manager.commerceState, .idle)
+        XCTAssertEqual(manager.purchaseError, "Product not available. Try again later.")
+    }
+
+    func testActiveEntitlementPredicateRejectsRevokedAndUnrelatedProducts() {
+        XCTAssertTrue(ProManager.isActiveEntitlement(
+            productId: ProManager.productId,
+            revocationDate: nil
+        ))
+        XCTAssertTrue(ProManager.isActiveEntitlement(
+            productId: ProManager.legacyProductId,
+            revocationDate: nil
+        ))
+        XCTAssertFalse(ProManager.isActiveEntitlement(
+            productId: ProManager.productId,
+            revocationDate: Date()
+        ))
+        XCTAssertFalse(ProManager.isActiveEntitlement(
+            productId: "com.example.other",
+            revocationDate: nil
+        ))
+    }
+
+    func testRestoreAccumulatorDistinguishesRevokedAndUnverifiedPurchases() {
+        var accumulator = RestoreEntitlementAccumulator()
+
+        accumulator.observeVerified(
+            productId: ProManager.productId,
+            revocationDate: Date()
+        )
+        XCTAssertFalse(accumulator.foundActiveEntitlement)
+
+        accumulator.observeUnverified(productId: ProManager.legacyProductId)
+        XCTAssertTrue(accumulator.foundUnverifiedEntitlement)
+
+        accumulator.observeVerified(
+            productId: ProManager.legacyProductId,
+            revocationDate: nil
+        )
+        XCTAssertTrue(accumulator.foundActiveEntitlement)
     }
 
     func testColdLaunchWithoutEntitlementReconcilesAlreadyFreeState() async {

@@ -96,6 +96,55 @@ enum EntitlementVerificationResult {
     case indeterminate
 }
 
+/// Centralizes the release feature boundary. Core operations default to the
+/// free policy so a missing UI check cannot accidentally unlock Pro work.
+struct ProFeatureAccessPolicy: Equatable, Sendable {
+    let isPro: Bool
+
+    static let free = ProFeatureAccessPolicy(isPro: false)
+    static let pro = ProFeatureAccessPolicy(isPro: true)
+
+    var allowsFindSimilar: Bool { isPro }
+    var allowsNearDuplicateDetection: Bool { isPro }
+    var allowsFolderRefresh: Bool { isPro }
+}
+
+enum ProProductLoadState: Equatable {
+    case idle
+    case loading
+    case loaded
+    case failed
+}
+
+enum ProCommerceState: Equatable {
+    case idle
+    case purchasing
+    case restoring
+
+    var isBusy: Bool { self != .idle }
+}
+
+@MainActor
+struct RestoreEntitlementAccumulator: Equatable {
+    private(set) var foundActiveEntitlement = false
+    private(set) var foundUnverifiedEntitlement = false
+
+    mutating func observeVerified(productId: String, revocationDate: Date?) {
+        if ProManager.isActiveEntitlement(
+            productId: productId,
+            revocationDate: revocationDate
+        ) {
+            foundActiveEntitlement = true
+        }
+    }
+
+    mutating func observeUnverified(productId: String) {
+        if ProManager.isEntitlementProduct(productId) {
+            foundUnverifiedEntitlement = true
+        }
+    }
+}
+
 struct ProRuntimePolicy: Equatable {
     let initiallyPro: Bool
     let performsEntitlementVerification: Bool
@@ -145,21 +194,31 @@ class ProManager: ObservableObject {
 
     static let shared = ProManager()
 
-    static let productId = "com.blockdeep.memorable.pro.v2"
-    static let legacyProductId = "com.blockdeep.memorable.pro"
-    private static let entitlementProductIds: Set<String> = [productId, legacyProductId]
+    nonisolated static let productId = "com.blockdeep.memorable.pro.v2"
+    nonisolated static let legacyProductId = "com.blockdeep.memorable.pro"
+    nonisolated private static let entitlementProductIds: Set<String> = [productId, legacyProductId]
     private static let lastKnownEntitlementKey = "lastKnownVerifiedProEntitlement"
 
-    static func isEntitlementProduct(_ productId: String) -> Bool {
+    nonisolated static func isEntitlementProduct(_ productId: String) -> Bool {
         entitlementProductIds.contains(productId)
     }
 
+    nonisolated static func isActiveEntitlement(productId: String, revocationDate: Date?) -> Bool {
+        isEntitlementProduct(productId) && revocationDate == nil
+    }
+
     @Published var isPro: Bool
-    @Published var product: Product?
+    @Published private(set) var product: Product?
+    @Published private(set) var productLoadState: ProProductLoadState = .idle
+    @Published private(set) var commerceState: ProCommerceState = .idle
     @Published var purchaseError: String?
-    @Published var isRestoring: Bool = false
     @Published var restoreMessage: String?
-    @Published var isLoadingProduct: Bool = false
+
+    var isLoadingProduct: Bool { productLoadState == .loading }
+    var hasProductLoadFailed: Bool { productLoadState == .failed }
+    var isPurchasing: Bool { commerceState == .purchasing }
+    var isRestoring: Bool { commerceState == .restoring }
+    var isCommerceBusy: Bool { commerceState.isBusy || isLoadingProduct }
 
     private var transactionListener: Task<Void, Never>?
     private var freeTierReconciliationTask: Task<Void, Never>?
@@ -222,9 +281,14 @@ class ProManager: ObservableObject {
     // MARK: - Product
 
     func loadProduct() async {
+        guard !commerceState.isBusy else { return }
+        await performProductLoad()
+    }
+
+    private func performProductLoad() async {
         guard !isLoadingProduct else { return }
-        isLoadingProduct = true
-        defer { isLoadingProduct = false }
+        productLoadState = .loading
+        purchaseError = nil
         do {
             var products = try await productLoader([Self.productId])
             if products.isEmpty {
@@ -234,11 +298,17 @@ class ProManager: ObservableObject {
                 try await retryDelay()
                 products = try await productLoader([Self.productId])
             }
-            product = products.first
+            product = products.first(where: { $0.id == Self.productId })
+            productLoadState = product == nil ? .failed : .loaded
+            if product == nil {
+                logger.error("StoreKit returned no matching Memorable Pro product")
+            }
             #if DEBUG
-            logger.info("[ProManager] Loaded \(products.count) products, match: \(products.first?.displayName ?? "nil")")
+            logger.info("[ProManager] Loaded \(products.count) products, match: \(self.product?.displayName ?? "nil")")
             #endif
         } catch {
+            product = nil
+            productLoadState = .failed
             logger.error("Failed to load products: \(error.safeDiagnosticCode)")
         }
     }
@@ -246,16 +316,21 @@ class ProManager: ObservableObject {
     // MARK: - Purchase
 
     func purchase() async {
+        guard commerceState == .idle, !isLoadingProduct else { return }
+        commerceState = .purchasing
+        defer { commerceState = .idle }
+        restoreMessage = nil
+        purchaseError = nil
+
         if product == nil {
             // Product may have failed to load at launch (e.g. no network, or
             // StoreKit cold-start glitch). Retry once before failing.
-            await loadProduct()
+            await performProductLoad()
         }
         guard let product else {
             purchaseError = "Product not available. Try again later."
             return
         }
-        purchaseError = nil
         do {
             let result = try await product.purchase()
             switch result {
@@ -279,7 +354,9 @@ class ProManager: ObservableObject {
     // MARK: - Restore
 
     func restorePurchases() async {
-        isRestoring = true
+        guard commerceState == .idle, !isLoadingProduct else { return }
+        commerceState = .restoring
+        defer { commerceState = .idle }
         restoreMessage = nil
         purchaseError = nil
 
@@ -287,27 +364,33 @@ class ProManager: ObservableObject {
             try await AppStore.sync()
         } catch {
             logger.error("Restore failed: \(error.safeDiagnosticCode)")
-            isRestoring = false
             purchaseError = "Restore failed: \(error.localizedDescription)"
             return
         }
 
-        var found = false
+        var accumulator = RestoreEntitlementAccumulator()
         for await result in Transaction.currentEntitlements {
-            guard case .verified(let transaction) = result else {
-                logger.error("Ignored an unverified restored entitlement")
-                continue
-            }
-            if Self.isEntitlementProduct(transaction.productID) {
+            switch result {
+            case .verified(let transaction):
+                accumulator.observeVerified(
+                    productId: transaction.productID,
+                    revocationDate: transaction.revocationDate
+                )
+                guard accumulator.foundActiveEntitlement else { continue }
                 await publishVerifiedEntitlement()
-                found = true
-                break
+            case .unverified(let transaction, _):
+                accumulator.observeUnverified(productId: transaction.productID)
+                if Self.isEntitlementProduct(transaction.productID) {
+                    logger.error("Ignored an unverified restored entitlement")
+                }
             }
+            if accumulator.foundActiveEntitlement { break }
         }
 
-        isRestoring = false
-        if found {
+        if accumulator.foundActiveEntitlement {
             restoreMessage = "Pro unlocked successfully!"
+        } else if accumulator.foundUnverifiedEntitlement {
+            purchaseError = "Your purchase could not be verified. Please try restoring again."
         } else {
             restoreMessage = "No previous purchase found."
         }
@@ -342,8 +425,10 @@ class ProManager: ObservableObject {
                 verificationResult = .indeterminate
                 continue
             }
-            if Self.isEntitlementProduct(transaction.productID),
-               transaction.revocationDate == nil {
+            if Self.isActiveEntitlement(
+                productId: transaction.productID,
+                revocationDate: transaction.revocationDate
+            ) {
                 verificationResult = .entitled
                 break
             }
@@ -465,12 +550,15 @@ class ProManager: ObservableObject {
 
     private func listenForTransactions() -> Task<Void, Never> {
         Task.detached {
-            let entitlementProductIds = await Self.entitlementProductIds
+            let entitlementProductIds = Self.entitlementProductIds
             for await result in Transaction.updates {
                 switch result {
                 case .verified(let transaction):
                     if entitlementProductIds.contains(transaction.productID) {
-                        if transaction.revocationDate != nil {
+                        if !Self.isActiveEntitlement(
+                            productId: transaction.productID,
+                            revocationDate: transaction.revocationDate
+                        ) {
                             await self.verifyEntitlement()
                         } else {
                             await self.reconcileVerifiedEntitlement(true)

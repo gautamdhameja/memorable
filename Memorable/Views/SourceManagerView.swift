@@ -6,6 +6,7 @@ struct SourceManagerView: View {
     @Environment(\.database) private var database
     @Environment(\.dismiss) private var dismiss
     @State private var sources: [PhotoSource] = []
+    @State private var applePhotosIndexedCount = 0
     @State private var showFolderPicker = false
     @State private var showUpgrade = false
     @State private var deleteError: String?
@@ -24,7 +25,7 @@ struct SourceManagerView: View {
                                 .font(Celestial.Typography.bodyEmphasized)
                                 .foregroundStyle(Celestial.Colors.onSurface)
                             if indexingService.isReady {
-                                Text("\(indexingService.searchEngine.indexSize) photos indexed")
+                                Text("\(applePhotosIndexedCount) photos indexed")
                                     .font(Celestial.Typography.caption)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
@@ -86,14 +87,31 @@ struct SourceManagerView: View {
                             }
                             Spacer()
                             Button {
-                                indexingService.reindexFolderSource(source)
+                                if ProFeatureAccessPolicy(isPro: proManager.isPro)
+                                    .allowsFolderRefresh {
+                                    indexingService.reindexFolderSource(source)
+                                } else {
+                                    showUpgrade = true
+                                }
                             } label: {
-                                Image(systemName: "arrow.clockwise.circle")
-                                    .foregroundStyle(Celestial.Colors.primaryDim)
+                                Image(
+                                    systemName: proManager.isPro
+                                        ? "arrow.clockwise.circle"
+                                        : "lock.circle"
+                                )
+                                .foregroundStyle(
+                                    proManager.isPro
+                                        ? Celestial.Colors.primaryDim
+                                        : Celestial.Colors.amber
+                                )
                             }
                             .buttonStyle(.plain)
                             .disabled(indexingService.progress.isRunning)
-                            .accessibilityLabel("Refresh \(source.name)")
+                            .accessibilityLabel(
+                                proManager.isPro
+                                    ? "Refresh \(source.name)"
+                                    : "Refresh \(source.name), Pro feature"
+                            )
                         }
                         .padding(12)
                         .modifier(GlassPanelModifier(cornerRadius: 16))
@@ -181,12 +199,18 @@ struct SourceManagerView: View {
     private func loadSources() async {
         do {
             let db = database
-            sources = try await Task.detached(priority: .utility) {
-                try db.listSources()
+            let loaded = try await Task.detached(priority: .utility) {
+                (
+                    sources: try db.listSources(),
+                    photoLibraryCounts: try db.photoLibraryIndexedMediaCounts()
+                )
             }.value
+            sources = loaded.sources
+            applePhotosIndexedCount = loaded.photoLibraryCounts.photos
         } catch {
             logger.error("Failed to load sources: \(error.safeDiagnosticCode)")
             sources = []
+            applePhotosIndexedCount = 0
         }
     }
 }

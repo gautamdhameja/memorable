@@ -210,6 +210,17 @@ final class SearchViewModel: ObservableObject {
         screenshotIDs = []
     }
 
+    /// Invalidates the active search generation before cancelling so a search
+    /// implementation that finishes cooperatively cannot publish Pro results
+    /// after StoreKit revokes the entitlement.
+    func handleProEntitlementRevoked() {
+        searchSequence += 1
+        searchTask?.cancel()
+        searchTask = nil
+        activeSearchID = nil
+        isSearching = false
+    }
+
     func applySimilarResults(_ similarResults: [SearchResult]) {
         results = similarResults
         queryText = "Similar to selected photo"

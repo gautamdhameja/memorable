@@ -335,6 +335,8 @@ struct SearchView: View {
             }
             .onChange(of: proManager.isPro) { _, isPro in
                 guard !isPro else { return }
+                viewModel.handleProEntitlementRevoked()
+                cancelFindSimilar()
                 if let selectedPhoto,
                    !FolderResultAccessPolicy.allows(
                        sourceId: selectedPhoto.sourceId,
@@ -1356,15 +1358,22 @@ struct SearchView: View {
     // MARK: - Actions
 
     private func startFindSimilar(photoID: String) {
+        guard proManager.isPro else {
+            showUpgrade = true
+            return
+        }
         findSimilarTask?.cancel()
         findSimilarGeneration &+= 1
         let generation = findSimilarGeneration
         let engine = searchEngine
+        let featurePolicy = ProFeatureAccessPolicy(isPro: proManager.isPro)
         findSimilarTask = Task {
             let similar = await SimilaritySearchOperation.run {
-                engine.findSimilar(photoId: photoID)
+                engine.findSimilar(photoId: photoID, featurePolicy: featurePolicy)
             }
-            guard !Task.isCancelled, generation == findSimilarGeneration else { return }
+            guard !Task.isCancelled,
+                  generation == findSimilarGeneration,
+                  proManager.isPro else { return }
             viewModel.applySimilarResults(similar)
             findSimilarTask = nil
         }

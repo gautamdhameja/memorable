@@ -576,7 +576,7 @@ final class SearchEngine: Sendable {
                 recordsPerformanceMetrics: recordsPerformanceMetrics
             )
             try checkSearchGeneration(memoryPressureGeneration)
-            return response
+            return featurePolicy.enforcing(response)
         }
     }
 
@@ -1430,7 +1430,12 @@ final class SearchEngine: Sendable {
 
     // MARK: - Similar Photos
 
-    func findSimilar(photoId: String, topK: Int = 50) -> [SearchResult] {
+    func findSimilar(
+        photoId: String,
+        topK: Int = 50,
+        featurePolicy: ProFeatureAccessPolicy = .free
+    ) -> [SearchResult] {
+        guard featurePolicy.allowsFindSimilar else { return [] }
         let generation = indexSnapshot.withLock { $0.memoryPressureGeneration }
         guard !Task.isCancelled else { return [] }
         return indexAccessCoordinator.withSearchUnlessCancelled {

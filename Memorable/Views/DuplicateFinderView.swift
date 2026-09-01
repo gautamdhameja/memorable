@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DuplicateFinderView: View {
     @ObservedObject var indexingService: IndexingService
+    @ObservedObject private var proManager = ProManager.shared
     @Environment(\.database) private var database
     @State private var duplicates: [DuplicatePair] = []
     @State private var isScanning = false
@@ -97,6 +98,15 @@ struct DuplicateFinderView: View {
         .onDisappear {
             cancelScan(clearResults: false)
         }
+        .onAppear {
+            guard !proManager.isPro else { return }
+            dismiss()
+        }
+        .onChange(of: proManager.isPro) { _, isPro in
+            guard !isPro else { return }
+            cancelScan(clearResults: true)
+            dismiss()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
             cancelScan(clearResults: true)
         }
@@ -115,11 +125,16 @@ struct DuplicateFinderView: View {
     }
 
     private func startScan() {
+        guard proManager.isPro else {
+            dismiss()
+            return
+        }
         scanTask?.cancel()
         scanGeneration &+= 1
         let generation = scanGeneration
         isScanning = true
         let db = database
+        let featurePolicy = ProFeatureAccessPolicy(isPro: proManager.isPro)
         scanTask = Task.detached(priority: .userInitiated) {
             do {
                 let data = try db.loadEmbeddingsForDuplicateScan(
@@ -129,7 +144,8 @@ struct DuplicateFinderView: View {
                 let found = DuplicateFinder.findDuplicates(
                     ids: data.ids,
                     localIdentifiers: data.localIdentifiers,
-                    embeddings: data.embeddings
+                    embeddings: data.embeddings,
+                    featurePolicy: featurePolicy
                 )
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
@@ -137,7 +153,7 @@ struct DuplicateFinderView: View {
                         startedGeneration: generation,
                         currentGeneration: scanGeneration,
                         isCancelled: Task.isCancelled
-                    ) else { return }
+                    ), proManager.isPro else { return }
                     duplicates = found
                     isScanning = false
                     scanComplete = true

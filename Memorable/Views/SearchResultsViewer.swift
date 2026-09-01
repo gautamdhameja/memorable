@@ -383,6 +383,9 @@ struct SearchResultsViewer: View {
             shareCoordinator.visibleResultDidChange(to: currentResultID)
         }
         .onChange(of: proManager.isPro) {
+            if !proManager.isPro {
+                cancelFindSimilar()
+            }
             enforceFolderEntitlement()
         }
     }
@@ -425,14 +428,16 @@ struct SearchResultsViewer: View {
         findSimilarGeneration += 1
         let generation = findSimilarGeneration
         let photoID = displayedResults[currentIndex].id
+        let featurePolicy = ProFeatureAccessPolicy(isPro: proManager.isPro)
         isFindingSimilar = true
 
         findSimilarTask = Task { @MainActor in
             let similar = await SimilaritySearchOperation.run {
-                searchEngine.findSimilar(photoId: photoID)
+                searchEngine.findSimilar(photoId: photoID, featurePolicy: featurePolicy)
             }
             guard !Task.isCancelled,
-                  generation == findSimilarGeneration else {
+                  generation == findSimilarGeneration,
+                  proManager.isPro else {
                 return
             }
 

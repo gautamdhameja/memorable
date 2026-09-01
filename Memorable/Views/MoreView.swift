@@ -51,8 +51,19 @@ struct MoreView: View {
                                 )
                             }
 
-                            Button(action: { showDuplicates = true }) {
-                                toolRow(icon: "square.on.square", title: "Find duplicates", subtitle: "Compare near-identical photos safely")
+                            Button(action: {
+                                if ProFeatureAccessPolicy(isPro: proManager.isPro)
+                                    .allowsNearDuplicateDetection {
+                                    showDuplicates = true
+                                } else {
+                                    showUpgrade = true
+                                }
+                            }) {
+                                toolRow(
+                                    icon: "square.on.square",
+                                    title: proManager.isPro ? "Find duplicates" : "Find duplicates · Pro",
+                                    subtitle: "Compare near-identical photos safely"
+                                )
                             }
                             .disabled(
                                 indexingService.progress.isRunning

@@ -99,19 +99,33 @@ final class SearchConfigTests: XCTestCase {
             localIdentifiers: localIDs,
             embeddings: embeddings,
             embeddingDim: 1,
-            threshold: 0.5
+            threshold: 0.5,
+            featurePolicy: .pro
         )
         let second = DuplicateFinder.findDuplicates(
             ids: ids,
             localIdentifiers: localIDs,
             embeddings: embeddings,
             embeddingDim: 1,
-            threshold: 0.5
+            threshold: 0.5,
+            featurePolicy: .pro
         )
 
         XCTAssertEqual(first.count, DuplicateFinder.maximumRetainedPairs)
         XCTAssertEqual(first.map(\.id), second.map(\.id))
         XCTAssertTrue(zip(first, first.dropFirst()).allSatisfy { $0.similarity >= $1.similarity })
+    }
+
+    func testDuplicateFinderDefaultsToFreePolicyAndReturnsNoResults() {
+        let results = DuplicateFinder.findDuplicates(
+            ids: ["first", "second"],
+            localIdentifiers: ["local-first", "local-second"],
+            embeddings: [1, 1],
+            embeddingDim: 1,
+            threshold: 0.5
+        )
+
+        XCTAssertTrue(results.isEmpty)
     }
 
     @MainActor
