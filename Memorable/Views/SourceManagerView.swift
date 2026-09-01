@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct SourceManagerView: View {
     @ObservedObject var indexingService: IndexingService
     @Environment(\.database) private var database
+    @Environment(\.dismiss) private var dismiss
     @State private var sources: [PhotoSource] = []
     @State private var showFolderPicker = false
     @State private var showUpgrade = false
@@ -20,11 +21,11 @@ struct SourceManagerView: View {
                         CelestialGlassIcon(systemName: "photo.on.rectangle", size: 34)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Apple Photos")
-                                .font(.body.weight(.medium))
+                                .font(Celestial.Typography.bodyEmphasized)
                                 .foregroundStyle(Celestial.Colors.onSurface)
                             if indexingService.isReady {
                                 Text("\(indexingService.searchEngine.indexSize) photos indexed")
-                                    .font(.caption)
+                                    .font(Celestial.Typography.caption)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
                         }
@@ -51,14 +52,17 @@ struct SourceManagerView: View {
                     .disabled(!database.allowsIndexingWrites)
                 } header: {
                     Text("Photo Library")
+                        .font(Celestial.Typography.eyebrow)
+                        .textCase(nil)
                 } footer: {
                     Text("Memorable indexes media that is available on this iPhone. It does not download iCloud-only items.")
+                        .font(Celestial.Typography.caption)
                 }
 
                 Section {
                     if sources.filter({ $0.type == PhotoSourceType.folder.rawValue }).isEmpty {
                         Text("No folders added")
-                            .font(.subheadline)
+                            .font(Celestial.Typography.supporting)
                             .foregroundStyle(Celestial.Colors.outline)
                             .padding(12)
                             .modifier(GlassPanelModifier(cornerRadius: 16))
@@ -74,10 +78,10 @@ struct SourceManagerView: View {
                             )
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(source.name)
-                                    .font(.body.weight(.medium))
+                                    .font(Celestial.Typography.bodyEmphasized)
                                     .foregroundStyle(Celestial.Colors.onSurface)
                                 Text("\(source.photoCount) photos")
-                                    .font(.caption)
+                                    .font(Celestial.Typography.caption)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
                             Spacer()
@@ -126,13 +130,23 @@ struct SourceManagerView: View {
                     .disabled(!database.allowsIndexingWrites)
                 } header: {
                     Text("Folders")
+                        .font(Celestial.Typography.eyebrow)
+                        .textCase(nil)
                 }
             }
             .scrollContentBackground(.hidden)
         }
         .preferredColorScheme(.dark)
         .navigationTitle("Photo Sources")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") { dismiss() }
+                    .font(Celestial.Typography.button)
+                    .foregroundStyle(Celestial.Colors.primaryDim)
+            }
+        }
         .sheet(isPresented: $showFolderPicker) {
             FolderPickerView { url in
                 let name = FolderDisplayNamePolicy.sanitized(url.lastPathComponent)

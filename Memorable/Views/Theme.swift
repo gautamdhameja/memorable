@@ -74,7 +74,8 @@ enum Celestial {
         static let title = Font.system(.title, design: .serif, weight: .semibold)
         static let title2 = Font.system(.title2, design: .serif, weight: .semibold)
         static let title3 = Font.system(.title3, design: .serif, weight: .semibold)
-        static let brand = Font.system(.title2, design: .serif, weight: .semibold)
+        static let brand = Font.system(.title, design: .serif, weight: .semibold)
+        static let screenTitle = Font.system(.title2, design: .serif, weight: .semibold)
 
         static let memoryCaption = Font.system(.title3, design: .serif, weight: .medium)
         static let compactMemoryCaption = Font.system(.subheadline, design: .serif, weight: .medium)

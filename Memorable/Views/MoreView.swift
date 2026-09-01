@@ -30,7 +30,7 @@ struct MoreView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("More")
-                            .font(Celestial.Typography.title)
+                            .font(Celestial.Typography.screenTitle)
                             .padding(.top, 14)
 
                         indexStatus

@@ -201,6 +201,23 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertFalse(searchView.contains("Button(action: performSurpriseSearch)"))
     }
 
+    func testPhotoSourcesHasAVisibleExitAndInlineTitle() throws {
+        let sourceManager = try contents(of: "Memorable/Views/SourceManagerView.swift")
+
+        XCTAssertTrue(sourceManager.contains("@Environment(\\.dismiss) private var dismiss"))
+        XCTAssertTrue(sourceManager.contains("Button(\"Done\") { dismiss() }"))
+        XCTAssertTrue(sourceManager.contains(".navigationBarTitleDisplayMode(.inline)"))
+    }
+
+    func testBrandTypographyOutranksSecondaryScreenTitles() throws {
+        let theme = try contents(of: "Memorable/Views/Theme.swift")
+        let moreView = try contents(of: "Memorable/Views/MoreView.swift")
+
+        XCTAssertTrue(theme.contains("static let brand = Font.system(.title,"))
+        XCTAssertTrue(theme.contains("static let screenTitle = Font.system(.title2,"))
+        XCTAssertTrue(moreView.contains(".font(Celestial.Typography.screenTitle)"))
+    }
+
     func testAppStoreTextFieldsMeetCurrentLimitsAndVersion() throws {
         let metadata = try contents(of: "APP_STORE_METADATA.txt")
         let subtitle = try metadataValue(prefix: "Subtitle: ", in: metadata)
