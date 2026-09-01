@@ -2,6 +2,8 @@ import Foundation
 import StoreKit
 import os
 
+/// Sendable invariant: validity, lease counts, and waiter ownership are accessed
+/// only under `state`; waiters are removed under the lock and resumed afterward.
 final class EntitlementReconciliationPermit: @unchecked Sendable {
     private struct State {
         var isValid = true

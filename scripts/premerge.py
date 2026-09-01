@@ -18,6 +18,7 @@ def run(command: list[str]) -> None:
 
 def main() -> int:
     try:
+        run([sys.executable, "scripts/signing_hygiene.py"])
         run([sys.executable, "scripts/verify_models.py"])
         run([sys.executable, "scripts/migration_guard.py"])
         run([sys.executable, "scripts/relevance.py", "run"])

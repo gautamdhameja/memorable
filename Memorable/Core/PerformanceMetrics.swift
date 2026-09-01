@@ -6,6 +6,8 @@ struct PerformanceMetric: Equatable, Sendable {
     let durationSeconds: TimeInterval
 }
 
+/// Sendable invariant: every read and mutation of `starts` and `completed` is
+/// performed under `state`; `append` is private and called only from locked scopes.
 final class PerformanceMetrics: @unchecked Sendable {
     static let shared = PerformanceMetrics()
     static let completedMetricLimit = 100
@@ -178,6 +180,8 @@ struct MainThreadResponsivenessSnapshot: Equatable, Sendable {
 
 /// Keeps at most one probe queued on the main thread. A frozen UI therefore
 /// produces one useful stall duration instead of an unbounded callback backlog.
+/// Sendable invariant: all probe state is accessed under `state`; the timer is
+/// initialized once by the sole successful `start()` and runs on `queue`.
 final class MainThreadResponsivenessMonitor: @unchecked Sendable {
     static let shared = MainThreadResponsivenessMonitor()
 

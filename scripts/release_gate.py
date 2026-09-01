@@ -29,6 +29,16 @@ def release_commands(
             "-destination",
             simulator_destination,
             "-quiet",
+            "clean",
+        ],
+        [
+            "xcodebuild",
+            *project,
+            "-scheme",
+            "Memorable",
+            "-destination",
+            simulator_destination,
+            "-quiet",
             "test",
         ],
         [

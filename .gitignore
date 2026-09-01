@@ -37,6 +37,17 @@ buildServer.json
 *.dSYM.zip
 *.dSYM
 
+## Signing credentials and machine-local overrides
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+AuthKey_*.p8
+*.p8
+ExportOptions.plist
+.env
+Config/Local.xcconfig
+
 ## Playgrounds
 timeline.xctimeline
 playground.xcworkspace

@@ -8,6 +8,16 @@ python3 scripts/release_gate.py
 
 It checks the app code, local privacy policy, metadata limits, tests, Release build, and static analysis. Complete the following tasks with your Apple developer account and physical devices.
 
+If Xcode reports `has no member` for a symbol that plainly exists in the source,
+the build database may be stale. The automated gate cleans before testing. If the
+error persists in a manual Xcode run, delete only the stale build databases and
+run the gate again:
+
+```bash
+rm -rf ~/Library/Developer/Xcode/DerivedData/Memorable-*/Build/Intermediates.noindex/XCBuildData
+python3 scripts/release_gate.py
+```
+
 ## Publish support and privacy pages
 
 1. Publish a support page at a stable HTTPS URL that you control.

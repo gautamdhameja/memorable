@@ -1,6 +1,8 @@
 import Vision
 import UIKit
 
+/// Sendable invariant: the request and operation are immutable and owned by one
+/// detached task; cancellation only invokes Vision's thread-safe `cancel()` API.
 private final class VisionWorkBox<Value: Sendable>: @unchecked Sendable {
     let request: VNRequest
     let operation: () throws -> Value

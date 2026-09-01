@@ -239,6 +239,9 @@ private final class SystemPhotoChangeObservationRegistrar: PhotoChangeObservatio
     }
 }
 
+/// Sendable invariant: callback, registration state, and the PhotoKit fetch
+/// snapshot each have a dedicated lock. User callbacks are dispatched to the
+/// main queue, and the registrar reference is immutable after initialization.
 final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
     private let callback = OSAllocatedUnfairLock<(@MainActor @Sendable (PhotoLibraryChangeEvent) -> Void)?>(
         initialState: nil

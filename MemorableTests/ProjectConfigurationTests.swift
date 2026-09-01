@@ -75,20 +75,45 @@ final class ProjectConfigurationTests: XCTestCase {
             .deletingLastPathComponent()
     }
 
-    func testDeviceSigningUsesOfficialTeamByDefault() throws {
+    func testSigningConfigurationUsesSafeLocalOverridesAndAutomatedGuard() throws {
         let projectYAML = try contents(of: "project.yml")
-        let buildConfigURL = repositoryRoot.appendingPathComponent("Config/Build.xcconfig")
-        let buildConfig = if FileManager.default.fileExists(atPath: buildConfigURL.path) {
-            try String(contentsOf: buildConfigURL, encoding: .utf8)
-        } else {
-            ""
-        }
+        let buildConfig = try contents(of: "Config/Build.xcconfig")
+        let localConfigExample = try contents(of: "Config/Local.xcconfig.example")
+        let gitignore = try contents(of: ".gitignore")
+        let premerge = try contents(of: "scripts/premerge.py")
+        let signingGuard = try contents(of: "scripts/signing_hygiene.py")
+        let credentialPatterns = [
+            "*.p12",
+            "*.cer",
+            "*.certSigningRequest",
+            "*.mobileprovision",
+            "AuthKey_*.p8",
+            "*.p8",
+            "ExportOptions.plist",
+            ".env",
+            "Config/Local.xcconfig",
+        ]
 
         XCTAssertTrue(projectYAML.contains("CODE_SIGN_STYLE: Automatic"))
-        XCTAssertTrue(projectYAML.contains("DEVELOPMENT_TEAM: GHL726VCA6"))
-        XCTAssertFalse(projectYAML.contains("Config/Build.xcconfig"))
+        XCTAssertTrue(projectYAML.contains("DEVELOPMENT_TEAM:"))
+        XCTAssertEqual(
+            projectYAML.components(separatedBy: "Config/Build.xcconfig").count - 1,
+            3
+        )
+        XCTAssertEqual(
+            buildConfig.trimmingCharacters(in: .whitespacesAndNewlines),
+            #"#include? "Local.xcconfig""#
+        )
         XCTAssertFalse(buildConfig.contains("CODE_SIGNING_ALLOWED = NO"))
         XCTAssertFalse(buildConfig.contains("CODE_SIGNING_REQUIRED = NO"))
+        XCTAssertTrue(localConfigExample.contains("DEVELOPMENT_TEAM = YOUR_TEAM_ID"))
+        XCTAssertTrue(localConfigExample.contains("CODE_SIGNING_ALLOWED = YES"))
+        for pattern in credentialPatterns {
+            XCTAssertTrue(gitignore.contains(pattern), "Missing signing ignore: \(pattern)")
+        }
+        XCTAssertTrue(premerge.contains("scripts/signing_hygiene.py"))
+        XCTAssertTrue(signingGuard.contains("git\", \"ls-files\", \"-z"))
+        XCTAssertTrue(signingGuard.contains("git\", \"check-ignore"))
     }
 
     func testProjectRemainsIPhoneOnly() throws {

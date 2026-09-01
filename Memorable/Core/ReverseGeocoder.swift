@@ -37,7 +37,7 @@ protocol LocationGeocoding: AnyObject, Sendable {
 }
 
 @MainActor
-private final class AppleLocationGeocoder: LocationGeocoding, @unchecked Sendable {
+private final class AppleLocationGeocoder: LocationGeocoding {
     private let geocoder = CLGeocoder()
 
     func reverseGeocode(

@@ -11,6 +11,7 @@ configs:
 settings:
   base:
     SWIFT_VERSION: "6"
+    DEVELOPMENT_TEAM: GHL726VCA6
 packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift
@@ -22,6 +23,10 @@ targets:
   Memorable:
     type: application
     platform: iOS
+    configFiles:
+      Debug: Config/Build.xcconfig
+      Release: Config/Build.xcconfig
+      ReleaseTest: Config/Build.xcconfig
     preBuildScripts:
       - name: Verify bundled models
         script: |
@@ -89,7 +94,6 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: GHL726VCA6
         PROVISIONING_PROFILE_SPECIFIER: ""
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         SUPPORTS_MACCATALYST: "NO"

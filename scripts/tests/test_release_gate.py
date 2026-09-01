@@ -17,21 +17,23 @@ class ReleaseGateTests(unittest.TestCase):
     def test_command_contract_covers_every_automated_release_check(self) -> None:
         commands = release_gate.release_commands("simulator-destination", "python")
 
-        self.assertEqual(len(commands), 6)
+        self.assertEqual(len(commands), 7)
         self.assertEqual(
             commands[0],
             ["python", "-m", "unittest", "discover", "-s", "scripts/tests"],
         )
         self.assertEqual(commands[1], ["python", "scripts/premerge.py"])
         self.assertIn("Memorable", commands[2])
-        self.assertIn("test", commands[2])
-        self.assertIn("MemorableReleaseTests", commands[3])
+        self.assertIn("clean", commands[2])
+        self.assertIn("Memorable", commands[3])
         self.assertIn("test", commands[3])
-        self.assertIn("Release", commands[4])
-        self.assertIn("build", commands[4])
+        self.assertIn("MemorableReleaseTests", commands[4])
+        self.assertIn("test", commands[4])
         self.assertIn("Release", commands[5])
-        self.assertIn("analyze", commands[5])
-        for command in commands[2:4]:
+        self.assertIn("build", commands[5])
+        self.assertIn("Release", commands[6])
+        self.assertIn("analyze", commands[6])
+        for command in commands[2:5]:
             self.assertIn("simulator-destination", command)
 
     @mock.patch("release_gate.run")
@@ -43,8 +45,8 @@ class ReleaseGateTests(unittest.TestCase):
             result = release_gate.main()
 
         self.assertEqual(result, 0)
-        self.assertEqual(run.call_count, 6)
-        for call in run.call_args_list[2:4]:
+        self.assertEqual(run.call_count, 7)
+        for call in run.call_args_list[2:5]:
             self.assertIn("chosen-simulator", call.args[0])
 
     @mock.patch("release_gate.run")

@@ -88,6 +88,8 @@ enum PhotoShareResourcePolicy {
     }
 }
 
+/// Sendable invariant: the file handle, byte count, and terminal failure are
+/// accessed only while holding `state`; the URL and size limit are immutable.
 final class PhotoShareFileWriter: @unchecked Sendable {
     private struct State {
         var handle: FileHandle?

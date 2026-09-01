@@ -128,6 +128,8 @@ enum ThermalSafetyPolicy {
     }
 }
 
+/// Sendable invariant: the non-Sendable observer token is read and cleared
+/// atomically under `token`, so concurrent cancellation removes it at most once.
 final class NotificationObservation: @unchecked Sendable {
     private let token: OSAllocatedUnfairLock<NSObjectProtocol?>
 

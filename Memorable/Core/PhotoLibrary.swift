@@ -64,6 +64,9 @@ enum FolderImageLoadOperation {
 
 /// Coalesces thumbnail asset lookups that arrive during the same render pass
 /// into one PhotoKit fetch, then retains a bounded cache for grids and taps.
+/// Sendable invariant: pending continuations and flush state are accessed only
+/// under `state`; `NSCache` provides thread-safe cache access and each drained
+/// continuation batch is resumed exactly once outside the lock.
 private final class PhotoKitAssetResolver: @unchecked Sendable {
     private struct State {
         var pending: [String: [CheckedContinuation<PHAsset?, Never>]] = [:]
