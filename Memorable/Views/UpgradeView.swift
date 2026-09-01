@@ -124,7 +124,7 @@ struct UpgradeView: View {
                         .font(Celestial.Typography.supporting)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 44)
+                        .frame(minHeight: 44)
                         .padding(.bottom, 24)
                 }
                 .padding(.horizontal, 26)

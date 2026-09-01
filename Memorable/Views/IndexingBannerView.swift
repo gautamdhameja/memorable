@@ -2,6 +2,7 @@ import SwiftUI
 
 struct IndexingBannerView: View {
     @ObservedObject var indexingService: IndexingService
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .largeTitle) private var percentageSize: CGFloat = 56
     @ScaledMetric(relativeTo: .title2) private var percentageSuffixSize: CGFloat = 25
 
@@ -41,7 +42,7 @@ struct IndexingBannerView: View {
                     .padding(.top, 42)
 
                 Text("Let this iPhone cool down")
-                    .font(Celestial.Typography.title2)
+                    .font(Celestial.Typography.interfaceTitle)
                     .foregroundStyle(Celestial.Colors.onSurface)
                     .padding(.top, 18)
 
@@ -65,35 +66,52 @@ struct IndexingBannerView: View {
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                ZStack {
-                    Circle()
-                        .stroke(Celestial.Colors.hairline, lineWidth: 3)
-                    Circle()
-                        .trim(from: 0, to: indexingService.progress.percentage / 100)
-                        .stroke(Celestial.Colors.primaryDim, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    Circle()
-                        .stroke(
-                            Celestial.Colors.amber.opacity(0.28),
-                            style: StrokeStyle(lineWidth: 1, dash: [2, 9])
-                        )
-                        .padding(16)
-                    VStack(spacing: 10) {
-                        HStack(alignment: .firstTextBaseline, spacing: 1) {
-                            Text("\(Int(indexingService.progress.percentage))")
-                                .font(.system(size: percentageSize, weight: .medium, design: .default))
-                                .tracking(-2)
-                            Text("%")
-                                .font(.system(size: percentageSuffixSize, weight: .medium, design: .default))
+                Group {
+                    if dynamicTypeSize.isAccessibilitySize {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("\(Int(indexingService.progress.percentage))%")
+                                .font(Celestial.Typography.interfaceTitle)
+                                .foregroundStyle(Celestial.Colors.onSurface)
+                            Text(phaseLabel)
+                                .font(Celestial.Typography.supporting)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                            ProgressView(value: indexingService.progress.percentage, total: 100)
+                                .tint(Celestial.Colors.primaryDim)
                         }
-                        Text(phaseLabel)
-                            .font(Celestial.Typography.supporting)
-                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 28)
+                    } else {
+                        ZStack {
+                            Circle()
+                                .stroke(Celestial.Colors.hairline, lineWidth: 3)
+                            Circle()
+                                .trim(from: 0, to: indexingService.progress.percentage / 100)
+                                .stroke(Celestial.Colors.primaryDim, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                            Circle()
+                                .stroke(
+                                    Celestial.Colors.amber.opacity(0.28),
+                                    style: StrokeStyle(lineWidth: 1, dash: [2, 9])
+                                )
+                                .padding(16)
+                            VStack(spacing: 10) {
+                                HStack(alignment: .firstTextBaseline, spacing: 1) {
+                                    Text("\(Int(indexingService.progress.percentage))")
+                                        .font(.system(size: percentageSize, weight: .medium, design: .default))
+                                        .tracking(-2)
+                                    Text("%")
+                                        .font(.system(size: percentageSuffixSize, weight: .medium, design: .default))
+                                }
+                                Text(phaseLabel)
+                                    .font(Celestial.Typography.supporting)
+                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                            }
+                        }
+                        .frame(width: 206, height: 206)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 42)
                     }
                 }
-                .frame(width: 206, height: 206)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 42)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(phaseLabel): \(Int(indexingService.progress.percentage)) percent")
 
@@ -146,7 +164,7 @@ struct IndexingBannerView: View {
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             Spacer()
             Text(value)
-                .font(.system(.subheadline, design: .default, weight: .medium))
+                .font(Celestial.Typography.supportingEmphasized)
                 .foregroundStyle(accent ? Celestial.Colors.amber : Celestial.Colors.onSurface)
                 .multilineTextAlignment(.trailing)
         }

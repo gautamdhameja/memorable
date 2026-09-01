@@ -27,15 +27,15 @@ struct OnThisDayView: View {
                             )
                             if indexedCount == 0 {
                                 Text("Index your photo library to unlock memories")
-                                    .font(.subheadline)
+                                    .font(Celestial.Typography.supporting)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                     .multilineTextAlignment(.center)
                                 Text("Go to Search and tap \"Build Search Index\"")
-                                    .font(.caption)
+                                    .font(Celestial.Typography.caption)
                                     .foregroundStyle(Celestial.Colors.outlineVariant)
                             } else {
                                 Text("No memories from this day in previous years")
-                                    .font(.subheadline)
+                                    .font(Celestial.Typography.supporting)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                     .multilineTextAlignment(.center)
                             }
@@ -63,7 +63,7 @@ struct OnThisDayView: View {
                                     .foregroundStyle(Celestial.Colors.onSurface)
                                     .padding(.top, 10)
                                 Text("\(yearGroups.reduce(0) { $0 + $1.photos.count }) photos across \(yearGroups.count) years")
-                                    .font(.subheadline)
+                                    .font(Celestial.Typography.supporting)
                                     .foregroundStyle(Celestial.Colors.secondary)
                                     .padding(.top, 8)
 
@@ -91,7 +91,7 @@ struct OnThisDayView: View {
                                             .foregroundStyle(Celestial.Colors.onSurface)
                                         Spacer()
                                         Text("\(group.photos.count) photos")
-                                            .font(.caption)
+                                            .font(Celestial.Typography.caption)
                                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                     }
                                     .padding(.horizontal, 26)
@@ -112,10 +112,7 @@ struct OnThisDayView: View {
                 .padding(.bottom, 40)
             }
         }
-        .navigationTitle("Memories")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
-        .toolbarColorScheme(.dark, for: .navigationBar)
+        .celestialNavigationTitle("Memories")
         .preferredColorScheme(.dark)
         .fullScreenCover(isPresented: $showSlideshow) {
             MemorySlideshowView(captionService: captionService)
@@ -271,28 +268,29 @@ struct MemoryThumbnail: View {
     }
 
     var body: some View {
-        ZStack {
-            if let thumb = thumbnail {
-                Image(uiImage: thumb)
-                    .resizable()
-                    .aspectRatio(aspectRatio, contentMode: .fit)
-            } else {
-                Rectangle()
-                    .fill(Celestial.Colors.surfaceContainer)
-                    .aspectRatio(4.0/3.0, contentMode: .fit)
-                    .overlay {
-                        ProgressView()
-                            .tint(Celestial.Colors.outlineVariant)
-                            .controlSize(.small)
-                    }
+        Button(action: handleTap) {
+            ZStack {
+                if let thumb = thumbnail {
+                    Image(uiImage: thumb)
+                        .resizable()
+                        .aspectRatio(aspectRatio, contentMode: .fit)
+                } else {
+                    Rectangle()
+                        .fill(Celestial.Colors.surfaceContainer)
+                        .aspectRatio(4.0/3.0, contentMode: .fit)
+                        .overlay {
+                            ProgressView()
+                                .tint(Celestial.Colors.outlineVariant)
+                                .controlSize(.small)
+                        }
+                }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(creationDate.map { "Memory from \(DateFormatter.mediumDate.string(from: $0))" } ?? "Memory photo")
         .accessibilityAddTraits(.isImage)
-        .accessibilityAddTraits(.isButton)
-        .onTapGesture { handleTap() }
         .fullScreenCover(item: $selectedResult) { result in
             SearchResultsViewer(
                 initialResult: result,

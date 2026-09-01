@@ -209,7 +209,7 @@ Two-pass indexing: photos first, then videos.
 
 ## Design system -- Celestial theme
 
-Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.swift`. Uses native iOS navigation (`.navigationTitle`, `.toolbar`) with system SF fonts. Custom elements: capsule search bar with glass morphism, rounded thumbnails, ultra-thin material badges.
+Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.swift`. New York serif is reserved for the Memorable brand, memories, onboarding storytelling, and editorial moments. SF Pro is used for navigation, utility headings, controls, body copy, captions, and technical UI. All text roles use semantic Dynamic Type styles. Pushed and modal navigation screens use the shared inline `celestialNavigationTitle` treatment. Custom elements include the capsule search bar, rounded thumbnails, and Liquid Glass surfaces.
 
 ## Freemium gating
 

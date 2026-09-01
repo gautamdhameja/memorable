@@ -31,7 +31,7 @@ struct PhotoThumbnailView: View {
                     .overlay(alignment: .bottomTrailing) {
                         if result.isVideo {
                             Image(systemName: "play.fill")
-                                .font(.caption2.weight(.semibold))
+                                .font(Celestial.Typography.captionStrong)
                                 .foregroundStyle(.white)
                                 .frame(width: 28, height: 28)
                                 .modifier(

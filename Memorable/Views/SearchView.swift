@@ -160,17 +160,17 @@ struct SearchView: View {
                                 .foregroundStyle(Celestial.Colors.error)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Indexing is unavailable")
-                                    .font(.subheadline.weight(.medium))
+                                    .font(Celestial.Typography.supportingEmphasized)
                                     .foregroundStyle(Celestial.Colors.onSurface)
                                 Text("Memorable could not open its local search database. Free storage, then close and reopen the app.")
-                                    .font(.caption)
+                                    .font(Celestial.Typography.caption)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
                             }
                             Button(storageResetScheduled ? "Reset scheduled for next launch" : "Reset local search data") {
                                 showStorageResetConfirm = true
                             }
-                            .font(.caption.weight(.semibold))
+                            .font(Celestial.Typography.captionStrong)
                             .foregroundStyle(Celestial.Colors.primaryDim)
                             .disabled(storageResetScheduled)
                         }
@@ -199,9 +199,9 @@ struct SearchView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .foregroundStyle(Celestial.Colors.error)
-                                    .font(.footnote)
+                                    .font(Celestial.Typography.footnote)
                                 Text("Large library (\(searchEngine.indexSize) photos)")
-                                    .font(.footnote)
+                                    .font(Celestial.Typography.footnote)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
                             .padding(.horizontal, 16)
@@ -397,7 +397,7 @@ struct SearchView: View {
                 get: { viewModel.queryText },
                 set: { viewModel.setQueryText($0) }
             ))
-                .font(.body)
+                .font(Celestial.Typography.body)
                 .foregroundStyle(Celestial.Colors.onSurface)
                 .submitLabel(.search)
                 .onSubmit {
@@ -407,7 +407,7 @@ struct SearchView: View {
             if !viewModel.queryText.isEmpty {
                 Button(action: { viewModel.setQueryText("") }) {
                     Image(systemName: "xmark")
-                        .font(.caption.weight(.semibold))
+                        .font(Celestial.Typography.captionStrong)
                         .foregroundStyle(Celestial.Colors.outline)
                         .frame(width: 28, height: 28)
                 }
@@ -415,7 +415,7 @@ struct SearchView: View {
             }
         }
         .padding(.horizontal, 16)
-        .frame(height: 52)
+        .frame(minHeight: 52)
         .modifier(GlassSearchBarModifier(cornerRadius: 13))
         .opacity(searchEngine.isIndexLoaded || !viewModel.queryText.isEmpty ? 1.0 : 0.85)
     }
@@ -441,22 +441,22 @@ struct SearchView: View {
     private var upgradeBanner: some View {
         HStack(spacing: 10) {
             Image(systemName: "sparkles")
-                .font(.subheadline)
+                .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.amber)
             Text("Searching \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
-                .font(.subheadline)
+                .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             Spacer()
             Button("Unlock full library") {
                 showUpgrade = true
             }
-            .font(.subheadline.weight(.medium))
+            .font(Celestial.Typography.supportingEmphasized)
             .foregroundStyle(Celestial.Colors.primary)
             Button {
                 viewModel.dismissUpgradeBanner()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.caption)
+                    .font(Celestial.Typography.caption)
                     .foregroundStyle(Celestial.Colors.outline)
                     .padding(6)
             }
@@ -501,14 +501,14 @@ struct SearchView: View {
             if indexingService.hitFreeLimit
                 && totalLibraryCount > searchEngine.totalSize {
                 Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
-                    .font(.footnote)
+                    .font(Celestial.Typography.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
                 resumeIndexingButton
             } else if searchEngine.totalSize > 0 {
                 Text("Search your \(searchEngine.totalSize) photos & videos")
-                    .font(.footnote)
+                    .font(Celestial.Typography.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
@@ -533,11 +533,11 @@ struct SearchView: View {
                     } label: {
                         HStack(spacing: 12) {
                             Text(suggestion)
-                                .font(.body)
+                                .font(Celestial.Typography.body)
                                 .foregroundStyle(Celestial.Colors.secondary)
                             Spacer()
                             Image(systemName: "arrow.up.left")
-                                .font(.caption)
+                                .font(Celestial.Typography.caption)
                                 .foregroundStyle(Celestial.Colors.outlineVariant)
                         }
                         .frame(minHeight: 50)
@@ -569,10 +569,10 @@ struct SearchView: View {
         return VStack(spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: "location.circle")
-                    .font(.caption2)
+                    .font(Celestial.Typography.micro)
                     .foregroundStyle(Celestial.Colors.outline)
                 Text("Finding photo locations  \(completed) / \(total)")
-                    .font(.caption2)
+                    .font(Celestial.Typography.micro)
                     .foregroundStyle(Celestial.Colors.outline)
                 Spacer()
             }
@@ -599,7 +599,7 @@ struct SearchView: View {
                 indexingService.startIndexing()
             }) {
                 Label("Index remaining media", systemImage: "arrow.clockwise")
-                    .font(.subheadline.weight(.medium))
+                    .font(Celestial.Typography.supportingEmphasized)
             }
             .buttonStyle(CelestialSecondaryButtonStyle())
             .padding(.top, 10)
@@ -620,7 +620,7 @@ struct SearchView: View {
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 Spacer()
                 Text("\(smartAlbums.count) saved")
-                    .font(.caption)
+                    .font(Celestial.Typography.caption)
                     .foregroundStyle(Celestial.Colors.primaryDim)
             }
             .padding(.horizontal, 26)
@@ -644,12 +644,12 @@ struct SearchView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 .overlay(alignment: .bottomTrailing) {
                                     Image(systemName: "rectangle.stack")
-                                        .font(.caption)
+                                        .font(Celestial.Typography.caption)
                                         .foregroundStyle(Celestial.Colors.primary)
                                         .padding(8)
                                 }
                                 Text(album.name)
-                                    .font(.caption.weight(.medium))
+                                    .font(Celestial.Typography.eyebrow)
                                     .foregroundStyle(Celestial.Colors.onSurface)
                                     .lineLimit(1)
                                     .frame(width: 108, alignment: .leading)
@@ -691,7 +691,7 @@ struct SearchView: View {
                 Button("Clear All") {
                     viewModel.clearSearchHistory()
                 }
-                .font(.caption.weight(.semibold))
+                .font(Celestial.Typography.captionStrong)
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
             }
             .padding(.horizontal, 26)
@@ -705,14 +705,14 @@ struct SearchView: View {
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "clock.arrow.circlepath")
-                            .font(.subheadline)
+                            .font(Celestial.Typography.supporting)
                             .foregroundStyle(Celestial.Colors.tertiaryDim)
                         Text(query)
-                            .font(.subheadline)
+                            .font(Celestial.Typography.supporting)
                             .foregroundStyle(Celestial.Colors.onSurface)
                         Spacer()
                         Image(systemName: "arrow.up.left")
-                            .font(.footnote)
+                            .font(Celestial.Typography.footnote)
                             .foregroundStyle(Celestial.Colors.outlineVariant)
                     }
                     .padding(.horizontal, 26)
@@ -743,16 +743,16 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.footnote)
+                    .font(Celestial.Typography.footnote)
                     .foregroundStyle(Celestial.Colors.tertiaryDim)
                 Text("Results for \"\(viewModel.lastQuery)\"")
-                    .font(.caption.weight(.medium))
+                    .font(Celestial.Typography.eyebrow)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 Spacer()
                 Button("Dismiss") {
                     viewModel.dismissLastResults()
                 }
-                .font(.caption.weight(.semibold))
+                .font(Celestial.Typography.captionStrong)
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
             }
             .padding(.horizontal, 16)
@@ -769,7 +769,7 @@ struct SearchView: View {
             ProgressView()
                 .tint(Celestial.Colors.primaryDim)
             Text(searchingStateText)
-                .font(.subheadline)
+                .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
         }
         .frame(maxWidth: .infinity)
@@ -790,7 +790,7 @@ struct SearchView: View {
                 .foregroundStyle(Celestial.Colors.error)
                 .accessibilityHidden(true)
             Text(error)
-                .font(.subheadline)
+                .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .multilineTextAlignment(.center)
         }
@@ -802,11 +802,11 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let summary = viewModel.filterSummary {
                 Text("Nothing matches all of that")
-                    .font(Celestial.Typography.title2)
+                    .font(Celestial.Typography.interfaceTitle)
                     .foregroundStyle(Celestial.Colors.onSurface)
 
                 Text(noResultsExplanation(summary))
-                    .font(.body)
+                    .font(Celestial.Typography.body)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .lineSpacing(5)
                     .padding(.top, 12)
@@ -843,28 +843,31 @@ struct SearchView: View {
                         let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
                         LazyVGrid(columns: columns, spacing: 8) {
                             ForEach(viewModel.fallbackResults) { result in
-                                FallbackThumbnail(result: result)
-                                    .onTapGesture {
-                                        if result.isVideo {
-                                            if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                                                presentVideoPlayer(for: asset)
-                                            }
-                                        } else {
-                                            // Use fallback results for the viewer since main results are empty.
-                                            viewModel.useFallbackResultsForViewer()
-                                            selectedPhoto = result
+                                Button {
+                                    if result.isVideo {
+                                        if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
+                                            presentVideoPlayer(for: asset)
                                         }
+                                    } else {
+                                        // Use fallback results for the viewer since main results are empty.
+                                        viewModel.useFallbackResultsForViewer()
+                                        selectedPhoto = result
+                                    }
+                                } label: {
+                                    FallbackThumbnail(result: result)
                                 }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(result.isVideo ? "Video result" : "Photo result")
                             }
                         }
                     }
                 }
             } else {
                 Text("No matching photos")
-                    .font(Celestial.Typography.title2)
+                    .font(Celestial.Typography.interfaceTitle)
                     .foregroundStyle(Celestial.Colors.onSurface)
                 Text("Try a broader description or remove a detail.")
-                    .font(.body)
+                    .font(Celestial.Typography.body)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .padding(.top, 12)
             }
@@ -878,11 +881,11 @@ struct SearchView: View {
         Button(action: action) {
             HStack {
                 Text(title)
-                    .font(.body.weight(.medium))
+                    .font(Celestial.Typography.bodyEmphasized)
                     .foregroundStyle(Celestial.Colors.onSurface)
                 Spacer()
                 Image(systemName: "arrow.right")
-                    .font(.caption)
+                    .font(Celestial.Typography.caption)
                     .foregroundStyle(Celestial.Colors.outline)
             }
             .frame(minHeight: 54)
@@ -983,25 +986,25 @@ struct SearchView: View {
                 if indexingService.hitFreeLimit
                     && totalLibraryCount > searchEngine.totalSize {
                     Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
-                        .font(Celestial.Typography.title3)
+                        .font(Celestial.Typography.interfaceTitle3)
                         .foregroundStyle(Celestial.Colors.onSurface)
                     resumeIndexingButton
                 } else {
                     Text("Search your \(searchEngine.totalSize) photos & videos")
-                        .font(Celestial.Typography.title3)
+                        .font(Celestial.Typography.interfaceTitle3)
                         .foregroundStyle(Celestial.Colors.onSurface)
                 }
                 Text("Describe what you're looking for")
-                    .font(.body)
+                    .font(Celestial.Typography.body)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .padding(.top, 10)
             } else {
                 if indexingService.indexRebuildRequired {
                     Text("Update the search index")
-                        .font(Celestial.Typography.title)
+                        .font(Celestial.Typography.interfaceTitle)
                         .foregroundStyle(Celestial.Colors.onSurface)
                     Text("Memorable improved how it understands image orientation. Rebuild once to keep search results accurate.")
-                        .font(.body)
+                        .font(Celestial.Typography.body)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         .lineSpacing(4)
                         .padding(.top, 12)
@@ -1015,10 +1018,10 @@ struct SearchView: View {
                     .disabled(!database.allowsIndexingWrites)
                 } else {
                     Text("Make your library searchable")
-                        .font(Celestial.Typography.title)
+                        .font(Celestial.Typography.interfaceTitle)
                         .foregroundStyle(Celestial.Colors.onSurface)
                     Text("A one-time scan runs on this iPhone. Photos become searchable as it goes.")
-                        .font(.body)
+                        .font(Celestial.Typography.body)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         .lineSpacing(4)
                         .padding(.top, 12)
@@ -1045,10 +1048,10 @@ struct SearchView: View {
             if let summary = viewModel.filterSummary {
                 VStack(alignment: .leading, spacing: 10) {
                     structuredQuerySentence(summary)
-                        .font(.body)
+                        .font(Celestial.Typography.body)
                         .lineSpacing(6)
                     Text("Search details understood from your description")
-                        .font(.caption)
+                        .font(Celestial.Typography.caption)
                         .foregroundStyle(Celestial.Colors.outline)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1062,7 +1065,7 @@ struct SearchView: View {
 
             HStack {
                 Text("\(filteredCount) \(filteredCount == 1 ? "result" : "results")")
-                    .font(.subheadline)
+                    .font(Celestial.Typography.supporting)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 Spacer()
 
@@ -1077,7 +1080,7 @@ struct SearchView: View {
                     }
                 } label: {
                     Text(viewModel.sortMode == .relevance ? "Relevance" : "Recent")
-                        .font(.subheadline.weight(.medium))
+                        .font(Celestial.Typography.supportingEmphasized)
                         .foregroundStyle(Celestial.Colors.primaryDim)
                 }
 
@@ -1086,7 +1089,7 @@ struct SearchView: View {
                         albumName = viewModel.queryText
                         showSaveAlbum = true
                     }
-                    .font(.subheadline.weight(.medium))
+                    .font(Celestial.Typography.supportingEmphasized)
                     .foregroundStyle(Celestial.Colors.amber)
                 }
             }
@@ -1101,7 +1104,7 @@ struct SearchView: View {
                             viewModel.setMediaFilter(filter)
                         } label: {
                             Text(filter.label)
-                                .font(.subheadline.weight(.medium))
+                                .font(Celestial.Typography.supportingEmphasized)
                                 .foregroundStyle(isActive ? Celestial.Colors.onSurface : Celestial.Colors.outline)
                                 .padding(.bottom, 10)
                                 .overlay(alignment: .bottom) {
@@ -1161,7 +1164,7 @@ struct SearchView: View {
                             .foregroundStyle(Celestial.Colors.amber)
                         Spacer()
                         Text("\(group.results.count) \(group.results.count == 1 ? "result" : "results")")
-                            .font(.footnote)
+                            .font(Celestial.Typography.footnote)
                             .foregroundStyle(Celestial.Colors.outline)
                     }
                     .padding(.horizontal, 16)
@@ -1183,7 +1186,7 @@ struct SearchView: View {
                     viewModel.showAllResults(count: filtered.count)
                 } label: {
                     Text("Show all \(filtered.count) matching results")
-                        .font(.subheadline.weight(.semibold))
+                        .font(Celestial.Typography.button)
                         .foregroundStyle(Celestial.Colors.primary)
                 }
                 .padding(.vertical, 24)
@@ -1192,7 +1195,7 @@ struct SearchView: View {
 
             if !visible.isEmpty {
                 Text(AppCopy.aiDisclaimer)
-                    .font(.caption2)
+                    .font(Celestial.Typography.micro)
                     .foregroundStyle(Celestial.Colors.outline)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
@@ -1210,8 +1213,12 @@ struct SearchView: View {
     }
 
     private func resultTile(result: SearchResult) -> some View {
-        PhotoThumbnailView(result: result)
-            .onTapGesture { handleResultTap(result) }
+        Button {
+            handleResultTap(result)
+        } label: {
+            PhotoThumbnailView(result: result)
+        }
+            .buttonStyle(.plain)
             .contextMenu {
                 if result.supportsFindSimilar {
                     if proManager.isPro {
@@ -1230,7 +1237,6 @@ struct SearchView: View {
                 }
             }
             .accessibilityLabel(result.isVideo ? "Video result" : "Photo result")
-            .accessibilityAddTraits(.isButton)
     }
 
     // MARK: - Actions

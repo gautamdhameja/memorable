@@ -37,7 +37,7 @@ struct OnboardingView: View {
                             .lineLimit(1)
                     }
                     .padding(.horizontal, 15)
-                    .frame(height: 50)
+                    .frame(minHeight: 50)
                     .modifier(GlassSearchBarModifier(cornerRadius: 13))
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("Example search: sunset at the beach last summer")
@@ -213,7 +213,7 @@ struct OnboardingView: View {
                     .font(Celestial.Typography.bodyEmphasized)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 46)
+                    .frame(minHeight: 46)
                 }
                 .frame(minHeight: max(0, proxy.size.height - 10), alignment: .top)
                 .padding(.horizontal, 26)

@@ -40,7 +40,7 @@ struct MemorySlideshowView: View {
                             }
                             if let date = currentDate {
                                 Text(date.formatted(date: .long, time: .omitted))
-                                    .font(.footnote.weight(.medium))
+                                    .font(Celestial.Typography.footnoteEmphasized)
                                     .foregroundStyle(.white.opacity(0.7))
                                     .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
                             }
@@ -71,7 +71,7 @@ struct MemorySlideshowView: View {
                     ProgressView()
                         .tint(.white)
                     Text("Loading memories...")
-                        .font(.subheadline)
+                        .font(Celestial.Typography.supporting)
                         .foregroundStyle(.white.opacity(0.6))
                 }
             }
@@ -91,12 +91,13 @@ struct MemorySlideshowView: View {
                                     )
                                 )
                         }
+                        .accessibilityLabel("Close memories")
                         Spacer()
                         Text("Memories")
-                            .font(.footnote.weight(.medium))
+                            .font(Celestial.Typography.footnoteEmphasized)
                             .foregroundStyle(.white.opacity(0.82))
                             .padding(.horizontal, 12)
-                            .frame(height: 34)
+                            .frame(minHeight: 34)
                             .modifier(
                                 GlassCapsuleModifier(
                                     tint: Color.black.opacity(0.12),

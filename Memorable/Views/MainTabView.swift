@@ -137,7 +137,7 @@ struct MainTabView: View {
 
             dockButton(.more)
         }
-        .frame(height: 62)
+        .frame(minHeight: 62)
         .padding(.horizontal, 6)
     }
 
@@ -189,14 +189,18 @@ struct MainTabView: View {
                 .frame(width: 32, height: 32)
 
                 Text(tab.title)
-                    .font(.caption2.weight(isSelected ? .semibold : .medium))
+                    .font(
+                        isSelected
+                            ? Celestial.Typography.microStrong
+                            : Celestial.Typography.microEmphasized
+                    )
             }
             .foregroundStyle(
                 isSelected
                     ? Celestial.Colors.primary
                     : Celestial.Colors.onSurfaceVariant
             )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -280,7 +284,7 @@ private struct SurpriseDockIcon: View {
                 )
             )
             .contentShape(Circle())
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .opacity(isAvailable ? 1 : 0.38)
     }
 }
@@ -304,7 +308,7 @@ private struct SemanticWarmupView: View {
                             .tint(Celestial.Colors.primaryDim)
                     }
                     Text(statusText)
-                        .font(.subheadline)
+                        .font(Celestial.Typography.supporting)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     if case .failed = semanticRuntime.phase {
                         Button("Try Again", action: retry)
@@ -313,8 +317,7 @@ private struct SemanticWarmupView: View {
                 }
                 .padding(.horizontal, 24)
             }
-            .navigationTitle("Memorable")
-            .navigationBarTitleDisplayMode(.inline)
+            .celestialNavigationTitle("Memorable")
         }
     }
 

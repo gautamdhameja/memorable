@@ -63,7 +63,7 @@ struct ContentView: View {
                 size: 64
             )
             Text("Photo access is required")
-                .font(Celestial.Typography.title)
+                .font(Celestial.Typography.interfaceTitle)
                 .foregroundStyle(Celestial.Colors.onSurface)
             Text("Memorable processes photo and search content on your device. If a photo includes GPS coordinates, Apple may receive those coordinates to return a place name.")
                 .font(Celestial.Typography.body)
@@ -88,7 +88,7 @@ struct ContentView: View {
                 size: 64
             )
             Text("Something went wrong")
-                .font(Celestial.Typography.title)
+                .font(Celestial.Typography.interfaceTitle)
                 .foregroundStyle(Celestial.Colors.onSurface)
             Text(message)
                 .font(Celestial.Typography.body)
@@ -142,7 +142,7 @@ struct ContentView: View {
                 .controlSize(.regular)
 
             Text(appState.loadingStatus)
-                .font(.footnote)
+                .font(Celestial.Typography.footnote)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .animation(.easeInOut(duration: 0.2), value: appState.loadingStatus)
 

@@ -33,7 +33,7 @@ struct IndexingSlideshowView: View {
                             }
                             if let date = currentDate {
                                 Text(date.formatted(date: .abbreviated, time: .omitted))
-                                    .font(.caption.weight(.medium))
+                                    .font(Celestial.Typography.eyebrow)
                                     .foregroundStyle(.white.opacity(0.8))
                                     .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
                             }
@@ -70,7 +70,7 @@ struct IndexingSlideshowView: View {
                             ProgressView()
                                 .tint(Celestial.Colors.outlineVariant)
                             Text("Relive your memories...")
-                                .font(.caption)
+                                .font(Celestial.Typography.caption)
                                 .foregroundStyle(Celestial.Colors.outline)
                         }
                     }

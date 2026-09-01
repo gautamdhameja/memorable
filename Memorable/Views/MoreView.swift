@@ -65,16 +65,16 @@ struct MoreView: View {
                                         HStack {
                                             VStack(alignment: .leading, spacing: 3) {
                                                 Text(album.name)
-                                                    .font(.subheadline.weight(.medium))
+                                                    .font(Celestial.Typography.supportingEmphasized)
                                                     .foregroundStyle(Celestial.Colors.onSurface)
                                                 Text(album.query)
-                                                    .font(.caption)
+                                                    .font(Celestial.Typography.caption)
                                                     .foregroundStyle(Celestial.Colors.outline)
                                                     .lineLimit(1)
                                             }
                                             Spacer()
                                             Image(systemName: "chevron.right")
-                                                .font(.caption)
+                                                .font(Celestial.Typography.caption)
                                                 .foregroundStyle(Celestial.Colors.outlineVariant)
                                         }
                                         .padding(.leading, 32)
@@ -114,12 +114,12 @@ struct MoreView: View {
                             NavigationLink("Licenses") { LicensesView() }
                             Text("· \(appVersionString)")
                         }
-                        .font(.caption)
+                        .font(Celestial.Typography.caption)
                         .foregroundStyle(Celestial.Colors.outline)
                         .padding(.top, 34)
 
                         Text(AppCopy.aiDisclaimer)
-                            .font(.caption2)
+                            .font(Celestial.Typography.micro)
                             .foregroundStyle(Celestial.Colors.outlineVariant)
                             .padding(.top, 18)
                             .padding(.bottom, 32)
@@ -177,10 +177,10 @@ struct MoreView: View {
         let _ = indexingService.indexVersion
         return VStack(alignment: .leading, spacing: 0) {
             Text(indexStatusTitle)
-                .font(.body.weight(.medium))
+                .font(Celestial.Typography.bodyEmphasized)
                 .foregroundStyle(Celestial.Colors.onSurface)
             Text(indexStatusDetail)
-                .font(.subheadline)
+                .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .padding(.top, 6)
 
@@ -192,7 +192,7 @@ struct MoreView: View {
                         indexingService.startIndexing()
                     }
                 }
-                .font(.subheadline.weight(.semibold))
+                .font(Celestial.Typography.button)
                 .foregroundStyle(Celestial.Colors.primaryDim)
                 .padding(.top, 14)
                 .disabled(!database.allowsIndexingWrites)
@@ -211,7 +211,7 @@ struct MoreView: View {
                         .foregroundStyle(Celestial.Colors.primaryDim)
                         .disabled(!database.allowsIndexingWrites)
                 }
-                .font(.subheadline)
+                .font(Celestial.Typography.supporting)
                 .padding(.top, 14)
             }
         }
@@ -242,15 +242,15 @@ struct MoreView: View {
             CelestialGlassIcon(systemName: icon, size: 34)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.body.weight(.medium))
+                    .font(Celestial.Typography.bodyEmphasized)
                     .foregroundStyle(Celestial.Colors.onSurface)
                 Text(subtitle)
-                    .font(.caption)
+                    .font(Celestial.Typography.caption)
                     .foregroundStyle(Celestial.Colors.outline)
             }
             Spacer()
             Image(systemName: "chevron.right")
-                .font(.caption)
+                .font(Celestial.Typography.caption)
                 .foregroundStyle(Celestial.Colors.outlineVariant)
         }
         .frame(minHeight: 68)
@@ -264,15 +264,15 @@ struct MoreView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Memorable Pro")
-                            .font(.body.weight(.medium))
+                            .font(Celestial.Typography.bodyEmphasized)
                             .foregroundStyle(Celestial.Colors.amber)
                         Text("All locally available media can be searched")
-                            .font(.caption)
+                            .font(Celestial.Typography.caption)
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     }
                     Spacer()
                     Text("ACTIVE")
-                        .font(.caption.weight(.semibold))
+                        .font(Celestial.Typography.captionStrong)
                         .foregroundStyle(Celestial.Colors.amber)
                 }
             } else {
@@ -280,15 +280,15 @@ struct MoreView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Memorable Pro")
-                                .font(.body.weight(.medium))
+                                .font(Celestial.Typography.bodyEmphasized)
                                 .foregroundStyle(Celestial.Colors.amber)
                             Text("Search all locally available media. One-time purchase.")
-                                .font(.caption)
+                                .font(Celestial.Typography.caption)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
                         Spacer()
                         Text("Upgrade")
-                            .font(.subheadline.weight(.semibold))
+                            .font(Celestial.Typography.button)
                             .foregroundStyle(Celestial.Colors.amber)
                     }
                 }
@@ -327,16 +327,14 @@ struct PrivacyPolicyView: View {
             CelestialBackdrop()
             ScrollView {
                 Text(Self.policyText)
-                    .font(.body)
+                    .font(Celestial.Typography.body)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(24)
             }
         }
-        .navigationTitle("Privacy")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarColorScheme(.dark, for: .navigationBar)
+        .celestialNavigationTitle("Privacy")
     }
 }
 
@@ -362,7 +360,7 @@ struct SmartAlbumResultsView: View {
                         .font(.system(size: 36, weight: .thin))
                         .foregroundStyle(Celestial.Colors.outlineVariant)
                     Text("No matching photos found")
-                        .font(.subheadline)
+                        .font(Celestial.Typography.supporting)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 }
             } else {
@@ -372,9 +370,7 @@ struct SmartAlbumResultsView: View {
                 }
             }
         }
-        .navigationTitle(album.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarColorScheme(.dark, for: .navigationBar)
+        .celestialNavigationTitle(album.name)
         .onAppear { startSearch() }
         .onDisappear { cancelSearchForMemoryPressure() }
         .onReceive(NotificationCenter.default.publisher(
@@ -420,8 +416,12 @@ struct SmartAlbumMasonryGrid: View {
     var body: some View {
         LazyVStack(spacing: 6) {
             ForEach(results) { result in
-                PhotoThumbnailView(result: result)
-                    .onTapGesture { selectedPhoto = result }
+                Button {
+                    selectedPhoto = result
+                } label: {
+                    PhotoThumbnailView(result: result)
+                }
+                .buttonStyle(.plain)
             }
         }
         .fullScreenCover(item: $selectedPhoto) { result in
@@ -513,10 +513,10 @@ struct LicensesView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(entry.name)
-                                .font(.body.weight(.medium))
+                                .font(Celestial.Typography.bodyEmphasized)
                                 .foregroundStyle(Celestial.Colors.onSurface)
                             Text(entry.license)
-                                .font(.footnote)
+                                .font(Celestial.Typography.footnote)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
                         .padding(.vertical, 8)
@@ -530,9 +530,7 @@ struct LicensesView: View {
             }
             .scrollContentBackground(.hidden)
         }
-        .navigationTitle("Licenses")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarColorScheme(.dark, for: .navigationBar)
+        .celestialNavigationTitle("Licenses")
     }
 }
 
@@ -546,19 +544,17 @@ private struct LicenseDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(entry.url)
-                        .font(.footnote)
+                        .font(Celestial.Typography.footnote)
                         .foregroundStyle(Celestial.Colors.primaryFixedDim)
 
                     Text(entry.text)
-                        .font(.system(.caption, design: .monospaced))
+                        .font(Celestial.Typography.technical)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 }
                 .padding()
             }
         }
-        .navigationTitle(entry.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarColorScheme(.dark, for: .navigationBar)
+        .celestialNavigationTitle(entry.name)
     }
 }
 

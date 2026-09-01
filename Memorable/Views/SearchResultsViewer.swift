@@ -242,10 +242,10 @@ struct SearchResultsViewer: View {
                     HStack {
                         Button(action: { dismiss() }) {
                             Label("Results", systemImage: "chevron.left")
-                                .font(.body)
+                                .font(Celestial.Typography.body)
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 12)
-                                .frame(height: 40)
+                                .frame(minHeight: 40)
                                 .modifier(
                                     GlassCapsuleModifier(
                                         tint: Color.black.opacity(0.16)
@@ -256,10 +256,10 @@ struct SearchResultsViewer: View {
                         Spacer()
                         if displayedResults.count > 1 {
                             Text("\(currentIndex + 1) of \(displayedResults.count)")
-                                .font(.subheadline)
+                                .font(Celestial.Typography.supporting)
                                 .foregroundStyle(.white.opacity(0.82))
                                 .padding(.horizontal, 11)
-                                .frame(height: 34)
+                                .frame(minHeight: 34)
                                 .modifier(
                                     GlassCapsuleModifier(
                                         tint: Color.black.opacity(0.12),
@@ -277,7 +277,7 @@ struct SearchResultsViewer: View {
                                             .tint(.white)
                                     } else {
                                         Image(systemName: "square.and.arrow.up")
-                                            .font(.body.weight(.semibold))
+                                            .font(Celestial.Typography.bodyStrong)
                                             .foregroundStyle(.white)
                                     }
                                 }
@@ -306,7 +306,7 @@ struct SearchResultsViewer: View {
                             HStack(alignment: .center, spacing: 16) {
                                 if let date = result.creationDate {
                                     Text(date.formatted(date: .long, time: .shortened))
-                                        .font(.body.weight(.semibold))
+                                        .font(Celestial.Typography.bodyStrong)
                                         .foregroundStyle(.white.opacity(0.94))
                                         .lineLimit(2)
                                         .fixedSize(horizontal: false, vertical: true)
@@ -324,7 +324,7 @@ struct SearchResultsViewer: View {
                                                     .tint(Celestial.Colors.amber)
                                             }
                                             Text(proManager.isPro ? "Find similar" : "Find similar · Pro")
-                                                .font(.subheadline.weight(.semibold))
+                                                .font(Celestial.Typography.button)
                                                 .foregroundStyle(Celestial.Colors.amber)
                                         }
                                         .frame(minHeight: 44)

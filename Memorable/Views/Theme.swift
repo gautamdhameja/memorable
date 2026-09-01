@@ -66,26 +66,36 @@ enum Celestial {
 
     // MARK: - Typography
 
-    // New York gives memories and major moments an editorial voice. SF Pro
-    // remains the interface face so controls and supporting copy stay native
-    // and highly legible. All roles use text styles to preserve Dynamic Type.
+    // New York gives the brand, memories, and editorial moments a distinct
+    // voice. SF Pro owns navigation, interface headings, controls, and copy.
+    // All roles use text styles so Dynamic Type remains authoritative.
     enum Typography {
         static let display = Font.system(.largeTitle, design: .serif, weight: .semibold)
         static let title = Font.system(.title, design: .serif, weight: .semibold)
         static let title2 = Font.system(.title2, design: .serif, weight: .semibold)
         static let title3 = Font.system(.title3, design: .serif, weight: .semibold)
         static let brand = Font.system(.title, design: .serif, weight: .semibold)
-        static let screenTitle = Font.system(.title2, design: .serif, weight: .semibold)
+        static let screenTitle = Font.system(.title2, design: .default, weight: .semibold)
+        static let interfaceTitle = Font.system(.title2, design: .default, weight: .semibold)
+        static let interfaceTitle3 = Font.system(.title3, design: .default, weight: .semibold)
 
         static let memoryCaption = Font.system(.title3, design: .serif, weight: .medium)
         static let compactMemoryCaption = Font.system(.subheadline, design: .serif, weight: .medium)
 
         static let body = Font.system(.body, design: .default, weight: .regular)
         static let bodyEmphasized = Font.system(.body, design: .default, weight: .medium)
+        static let bodyStrong = Font.system(.body, design: .default, weight: .semibold)
         static let supporting = Font.system(.subheadline, design: .default, weight: .regular)
+        static let supportingEmphasized = Font.system(.subheadline, design: .default, weight: .medium)
         static let button = Font.system(.subheadline, design: .default, weight: .semibold)
+        static let footnote = Font.system(.footnote, design: .default, weight: .regular)
+        static let footnoteEmphasized = Font.system(.footnote, design: .default, weight: .medium)
         static let eyebrow = Font.system(.caption, design: .default, weight: .medium)
         static let caption = Font.system(.caption, design: .default, weight: .regular)
+        static let captionStrong = Font.system(.caption, design: .default, weight: .semibold)
+        static let micro = Font.system(.caption2, design: .default, weight: .regular)
+        static let microEmphasized = Font.system(.caption2, design: .default, weight: .medium)
+        static let microStrong = Font.system(.caption2, design: .default, weight: .bold)
         static let technical = Font.system(.caption, design: .monospaced, weight: .medium)
     }
 
@@ -157,5 +167,23 @@ struct CelestialHairline: View {
             .fill(Celestial.Colors.hairline)
             .frame(height: 1)
             .accessibilityHidden(true)
+    }
+}
+
+private struct CelestialNavigationTitleModifier: ViewModifier {
+    let title: String
+
+    func body(content: Content) -> some View {
+        content
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+    }
+}
+
+extension View {
+    func celestialNavigationTitle(_ title: String) -> some View {
+        modifier(CelestialNavigationTitleModifier(title: title))
     }
 }

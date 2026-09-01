@@ -23,7 +23,7 @@ struct DuplicateFinderView: View {
                             ProgressView()
                                 .tint(Celestial.Colors.primaryDim)
                             Text("Scanning for duplicates...")
-                                .font(.subheadline)
+                                .font(Celestial.Typography.supporting)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
                     } else if duplicates.isEmpty && scanComplete {
@@ -34,7 +34,7 @@ struct DuplicateFinderView: View {
                                 size: 64
                             )
                             Text("No duplicates found")
-                                .font(.subheadline)
+                                .font(Celestial.Typography.supporting)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
                     } else if !duplicates.isEmpty {
@@ -73,7 +73,7 @@ struct DuplicateFinderView: View {
                                 size: 64
                             )
                             Text("Find near-identical photos in your library")
-                                .font(.subheadline)
+                                .font(Celestial.Typography.supporting)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             Button("Scan for Duplicates") {
                                 Haptics.medium()
@@ -84,9 +84,7 @@ struct DuplicateFinderView: View {
                     }
                 }
             }
-            .navigationTitle("Duplicates")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
+            .celestialNavigationTitle("Duplicates")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
@@ -215,7 +213,7 @@ struct DuplicatePairRow: View {
                     .fill(pair.similarity > 0.98 ? Celestial.Colors.error : Celestial.Colors.amber)
                     .frame(width: 6, height: 6)
                 Text("\(matchPercent)% match")
-                    .font(.subheadline.weight(.medium))
+                    .font(Celestial.Typography.supportingEmphasized)
                     .foregroundStyle(pair.similarity > 0.98 ? Celestial.Colors.error : Celestial.Colors.amber)
                 Spacer()
             }
@@ -332,7 +330,7 @@ struct DuplicatePairRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(alignment: alignment) {
             Text(label)
-                .font(.caption2.weight(.bold))
+                .font(Celestial.Typography.microStrong)
                 .foregroundStyle(.white)
                 .padding(8)
                 .shadow(radius: 3)

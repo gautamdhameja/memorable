@@ -137,9 +137,7 @@ struct SourceManagerView: View {
             .scrollContentBackground(.hidden)
         }
         .preferredColorScheme(.dark)
-        .navigationTitle("Photo Sources")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarColorScheme(.dark, for: .navigationBar)
+        .celestialNavigationTitle("Photo Sources")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") { dismiss() }

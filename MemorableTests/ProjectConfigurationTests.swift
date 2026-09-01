@@ -203,19 +203,60 @@ final class ProjectConfigurationTests: XCTestCase {
 
     func testPhotoSourcesHasAVisibleExitAndInlineTitle() throws {
         let sourceManager = try contents(of: "Memorable/Views/SourceManagerView.swift")
+        let theme = try contents(of: "Memorable/Views/Theme.swift")
 
         XCTAssertTrue(sourceManager.contains("@Environment(\\.dismiss) private var dismiss"))
         XCTAssertTrue(sourceManager.contains("Button(\"Done\") { dismiss() }"))
-        XCTAssertTrue(sourceManager.contains(".navigationBarTitleDisplayMode(.inline)"))
+        XCTAssertTrue(sourceManager.contains(".celestialNavigationTitle(\"Photo Sources\")"))
+        XCTAssertTrue(theme.contains(".navigationBarTitleDisplayMode(.inline)"))
+        XCTAssertTrue(theme.contains(".toolbar(.visible, for: .navigationBar)"))
+    }
+
+    func testPushedScreensCannotBypassTheSharedNavigationPolicy() throws {
+        let sources = try allAppSourceText()
+
+        XCTAssertEqual(
+            sources.components(separatedBy: ".navigationTitle(").count - 1,
+            1,
+            "Navigation titles must go through celestialNavigationTitle so a hidden parent bar cannot strand a child screen"
+        )
     }
 
     func testBrandTypographyOutranksSecondaryScreenTitles() throws {
         let theme = try contents(of: "Memorable/Views/Theme.swift")
         let moreView = try contents(of: "Memorable/Views/MoreView.swift")
 
-        XCTAssertTrue(theme.contains("static let brand = Font.system(.title,"))
-        XCTAssertTrue(theme.contains("static let screenTitle = Font.system(.title2,"))
+        XCTAssertTrue(theme.contains("static let brand = Font.system(.title, design: .serif"))
+        XCTAssertTrue(theme.contains("static let screenTitle = Font.system(.title2, design: .default"))
         XCTAssertTrue(moreView.contains(".font(Celestial.Typography.screenTitle)"))
+    }
+
+    func testViewsUseSemanticTypographyRoles() throws {
+        let sources = try allSourceText(in: "Memorable/Views")
+        let forbiddenFonts = [
+            ".font(.body)",
+            ".font(.subheadline)",
+            ".font(.caption)",
+            ".font(.caption2)",
+            ".font(.footnote)",
+        ]
+
+        for font in forbiddenFonts {
+            XCTAssertFalse(sources.contains(font), "Use a Celestial typography role instead of \(font)")
+        }
+    }
+
+    func testPhotoControlsUseButtonsAndTextControlsCanGrow() throws {
+        let searchView = try contents(of: "Memorable/Views/SearchView.swift")
+        let moreView = try contents(of: "Memorable/Views/MoreView.swift")
+        let memoriesView = try contents(of: "Memorable/Views/OnThisDayView.swift")
+        let mainTabView = try contents(of: "Memorable/Views/MainTabView.swift")
+
+        XCTAssertFalse(searchView.contains("PhotoThumbnailView(result: result)\n            .onTapGesture"))
+        XCTAssertFalse(moreView.contains("PhotoThumbnailView(result: result)\n                    .onTapGesture"))
+        XCTAssertFalse(memoriesView.contains(".accessibilityAddTraits(.isButton)\n        .onTapGesture"))
+        XCTAssertTrue(searchView.contains(".frame(minHeight: 52)"))
+        XCTAssertTrue(mainTabView.contains(".frame(minHeight: 62)"))
     }
 
     func testAppStoreTextFieldsMeetCurrentLimitsAndVersion() throws {
@@ -258,7 +299,11 @@ final class ProjectConfigurationTests: XCTestCase {
     }
 
     private func allAppSourceText() throws -> String {
-        let sourceRoot = repositoryRoot.appendingPathComponent("Memorable")
+        try allSourceText(in: "Memorable")
+    }
+
+    private func allSourceText(in relativePath: String) throws -> String {
+        let sourceRoot = repositoryRoot.appendingPathComponent(relativePath)
         guard let enumerator = FileManager.default.enumerator(
             at: sourceRoot,
             includingPropertiesForKeys: nil
