@@ -106,6 +106,14 @@ python3 scripts/premerge.py
 
 The pre-merge script verifies bundled model artifacts, checks migration deletion safety, and runs the real-model relevance gate. The relevance gate may need its pinned external dataset when the local cache is incomplete; model verification itself is strictly offline.
 
+Before shipping a release, run the complete automated gate:
+
+```bash
+python3 scripts/release_gate.py
+```
+
+It runs the repository's Python tests, pre-merge checks, full simulator test suite, Release-only entitlement test, unsigned Release build, and static analysis. Then complete `RELEASE_MANUAL_CHECKLIST.md` with the distribution account and physical devices.
+
 ## Memory and cancellation limits
 
 Keep high-cost work bounded and cancellable:

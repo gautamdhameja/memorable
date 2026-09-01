@@ -1,6 +1,12 @@
 # Complete the manual App Store release
 
-The repository checks the app code, local privacy policy, metadata limits, unit tests, and unsigned release build. Complete the following tasks with your Apple developer account and physical devices.
+First run the complete automated release gate from the repository root:
+
+```bash
+python3 scripts/release_gate.py
+```
+
+It checks the app code, local privacy policy, metadata limits, tests, Release build, and static analysis. Complete the following tasks with your Apple developer account and physical devices.
 
 ## Publish support and privacy pages
 

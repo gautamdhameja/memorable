@@ -105,6 +105,18 @@ state or prompt checks. Record the reviewed statement in
 `MEMORABLE_MIGRATION_BASE` to the target branch when it differs from the current
 branch's upstream.
 
+## Automated release gate
+
+Before a release, run the complete automated gate:
+
+```bash
+python3 scripts/release_gate.py
+```
+
+This runs the Python checks, pre-merge safety gates, full simulator tests,
+Release-only entitlement test, unsigned Release build, and static analysis.
+Complete the separate `RELEASE_MANUAL_CHECKLIST.md` before App Store submission.
+
 ## Dependencies
 
 - **GRDB.swift 7.x** -- SQLite database
