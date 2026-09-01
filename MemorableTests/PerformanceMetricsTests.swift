@@ -95,4 +95,56 @@ final class PerformanceMetricsTests: XCTestCase {
             accuracy: 0.001
         )
     }
+
+    func testMainThreadResponsivenessSnapshotIsUnavailableBeforeFirstProbe() {
+        let snapshot = MainThreadResponsivenessPolicy.snapshot(
+            completedStallSeconds: nil,
+            completedProbeCount: 0,
+            pendingScheduledAt: nil,
+            now: 12
+        )
+
+        XCTAssertFalse(snapshot.isAvailable)
+        XCTAssertFalse(snapshot.isPending)
+        XCTAssertEqual(snapshot.maximumStallSeconds, 0)
+    }
+
+    func testMainThreadResponsivenessSnapshotIncludesPendingProbeAge() {
+        let snapshot = MainThreadResponsivenessPolicy.snapshot(
+            completedStallSeconds: 0.2,
+            completedProbeCount: 1,
+            pendingScheduledAt: 10,
+            now: 10.75
+        )
+
+        XCTAssertTrue(snapshot.isAvailable)
+        XCTAssertTrue(snapshot.isPending)
+        XCTAssertEqual(snapshot.maximumStallSeconds, 0.75, accuracy: 0.001)
+    }
+
+    func testCompletedHealthyProbeMakesResponsivenessAvailable() {
+        let snapshot = MainThreadResponsivenessPolicy.snapshot(
+            completedStallSeconds: nil,
+            completedProbeCount: 1,
+            pendingScheduledAt: nil,
+            now: 12
+        )
+
+        XCTAssertTrue(snapshot.isAvailable)
+        XCTAssertFalse(snapshot.isPending)
+        XCTAssertEqual(snapshot.maximumStallSeconds, 0)
+    }
+
+    func testResponsivenessSnapshotPreservesLargerCompletedStall() {
+        let snapshot = MainThreadResponsivenessPolicy.snapshot(
+            completedStallSeconds: 0.8,
+            completedProbeCount: 3,
+            pendingScheduledAt: 11.75,
+            now: 12
+        )
+
+        XCTAssertTrue(snapshot.isAvailable)
+        XCTAssertTrue(snapshot.isPending)
+        XCTAssertEqual(snapshot.maximumStallSeconds, 0.8, accuracy: 0.001)
+    }
 }

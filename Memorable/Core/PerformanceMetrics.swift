@@ -75,9 +75,13 @@ final class PerformanceMetrics: @unchecked Sendable {
         let value: (String) -> TimeInterval = { [self] name in
             latestDuration(for: name) ?? -1
         }
+        let responsiveness = MainThreadResponsivenessMonitor.shared.snapshot()
         let line = [
             "app_launch_completed=1",
             "semantic_search_ready=\(semanticSearchReady ? 1 : 0)",
+            "main_thread_probe_available=\(responsiveness.isAvailable ? 1 : 0)",
+            "main_thread_probe_pending=\(responsiveness.isPending ? 1 : 0)",
+            "startup_to_semantic_seconds=\(Self.format(value(PerformancePhase.startupToSemanticSearch)))",
             "semantic_warmup_seconds=\(Self.format(value(PerformancePhase.semanticWarmup)))",
             "launch_to_shell_seconds=\(Self.format(value(PerformancePhase.launchToShell)))",
             "photo_authorization_seconds=\(Self.format(value(PerformancePhase.photoAuthorization)))",
@@ -90,7 +94,7 @@ final class PerformanceMetrics: @unchecked Sendable {
             "database_open_seconds=\(Self.format(value(PerformancePhase.databaseOpen)))",
             "entitlement_verification_seconds=\(Self.format(value(PerformancePhase.entitlementVerification)))",
             "index_load_seconds=\(Self.format(value(PerformancePhase.indexLoad)))",
-            "main_thread_stall_seconds=\(Self.format(max(0, value(PerformancePhase.mainThreadResponsiveness))))",
+            "main_thread_stall_seconds=\(Self.format(responsiveness.maximumStallSeconds))",
         ].joined(separator: " ")
         logger.info("[StartupSnapshot] \(line, privacy: .public)")
     }
@@ -113,6 +117,7 @@ final class PerformanceMetrics: @unchecked Sendable {
 
 enum PerformancePhase {
     static let launchToShell = "launch.to_shell"
+    static let startupToSemanticSearch = "startup.to_semantic_search"
     static let semanticWarmup = "semantic.warmup"
     static let photoAuthorization = "startup.photo_authorization"
     static let imageModelLoad = "startup.image_model_load"
@@ -149,6 +154,26 @@ enum MainThreadResponsivenessPolicy {
         guard delay >= reportThresholdSeconds else { return nil }
         return delay
     }
+
+    static func snapshot(
+        completedStallSeconds: TimeInterval?,
+        completedProbeCount: Int,
+        pendingScheduledAt: CFAbsoluteTime?,
+        now: CFAbsoluteTime
+    ) -> MainThreadResponsivenessSnapshot {
+        let pendingDelay = pendingScheduledAt.map { max(0, now - $0) } ?? 0
+        return MainThreadResponsivenessSnapshot(
+            isAvailable: completedProbeCount > 0 || pendingScheduledAt != nil,
+            isPending: pendingScheduledAt != nil,
+            maximumStallSeconds: max(completedStallSeconds ?? 0, pendingDelay)
+        )
+    }
+}
+
+struct MainThreadResponsivenessSnapshot: Equatable, Sendable {
+    let isAvailable: Bool
+    let isPending: Bool
+    let maximumStallSeconds: TimeInterval
 }
 
 /// Keeps at most one probe queued on the main thread. A frozen UI therefore
@@ -158,7 +183,9 @@ final class MainThreadResponsivenessMonitor: @unchecked Sendable {
 
     private struct State: Sendable {
         var isRunning = false
-        var probePending = false
+        var pendingScheduledAt: CFAbsoluteTime?
+        var completedProbeCount = 0
+        var maximumCompletedStallSeconds: TimeInterval = 0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -185,25 +212,55 @@ final class MainThreadResponsivenessMonitor: @unchecked Sendable {
     }
 
     private func enqueueProbe() {
+        let scheduledAt = CFAbsoluteTimeGetCurrent()
         let shouldEnqueue = state.withLock { state in
-            guard state.isRunning, !state.probePending else { return false }
-            state.probePending = true
+            guard state.isRunning, state.pendingScheduledAt == nil else { return false }
+            state.pendingScheduledAt = scheduledAt
             return true
         }
         guard shouldEnqueue else { return }
 
-        let scheduledAt = CFAbsoluteTimeGetCurrent()
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.state.withLock { $0.probePending = false }
-            guard let stall = MainThreadResponsivenessPolicy.stallDuration(
+            let observedAt = CFAbsoluteTimeGetCurrent()
+            let stall = MainThreadResponsivenessPolicy.stallDuration(
                 scheduledAt: scheduledAt,
-                observedAt: CFAbsoluteTimeGetCurrent()
-            ) else { return }
-            PerformanceMetrics.shared.record(
-                PerformancePhase.mainThreadResponsiveness,
-                durationSeconds: stall
+                observedAt: observedAt
+            )
+            if let stall {
+                PerformanceMetrics.shared.record(
+                    PerformancePhase.mainThreadResponsiveness,
+                    durationSeconds: stall
+                )
+            }
+            self.state.withLock {
+                $0.pendingScheduledAt = nil
+                $0.completedProbeCount += 1
+                $0.maximumCompletedStallSeconds = max(
+                    $0.maximumCompletedStallSeconds,
+                    stall ?? 0
+                )
+            }
+        }
+    }
+
+    func snapshot(
+        now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+    ) -> MainThreadResponsivenessSnapshot {
+        let probeState = state.withLock {
+            (
+                completedProbeCount: $0.completedProbeCount,
+                pendingScheduledAt: $0.pendingScheduledAt,
+                maximumCompletedStallSeconds: $0.maximumCompletedStallSeconds
             )
         }
+        return MainThreadResponsivenessPolicy.snapshot(
+            completedStallSeconds: probeState.completedProbeCount > 0
+                ? probeState.maximumCompletedStallSeconds
+                : nil,
+            completedProbeCount: probeState.completedProbeCount,
+            pendingScheduledAt: probeState.pendingScheduledAt,
+            now: now
+        )
     }
 }

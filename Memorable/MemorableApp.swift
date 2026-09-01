@@ -97,8 +97,9 @@ class AppState: ObservableObject {
         }
     ) {
         MainThreadResponsivenessMonitor.shared.start()
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         PerformanceMetrics.shared.start(PerformancePhase.launchToShell)
+        PerformanceMetrics.shared.start(PerformancePhase.startupToSemanticSearch)
         #endif
         self.requestPhotoAuthorization = requestPhotoAuthorization
         self.currentPhotoAuthorization = currentPhotoAuthorization
@@ -140,7 +141,7 @@ class AppState: ObservableObject {
         guard isDeviceSupported else { return }
         isInitializing = true
         defer { isInitializing = false }
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         logger.info("[AppState] initialize() started")
         PerformanceMetrics.shared.start(PerformancePhase.photoAuthorization)
         #endif
@@ -151,7 +152,7 @@ class AppState: ObservableObject {
             authorizationStatus = await requestPhotoAuthorization()
         }
 
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         PerformanceMetrics.shared.end(PerformancePhase.photoAuthorization)
         #endif
 
@@ -171,7 +172,7 @@ class AppState: ObservableObject {
         semanticRuntime.markShellReady()
         loadingStatus = "Preparing search..."
 
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         PerformanceMetrics.shared.end(PerformancePhase.launchToShell)
         #endif
         semanticRuntime.startPostPaintWarmup()
@@ -267,7 +268,7 @@ class AppState: ObservableObject {
         currentWarmupPriority = priority
         defer { isCoreWarmupRunning = false }
 
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         PerformanceMetrics.shared.start(PerformancePhase.semanticWarmup)
         logger.info("[AppState] Core semantic warmup started, priority=\(String(describing: priority))")
         #endif
@@ -287,11 +288,11 @@ class AppState: ObservableObject {
 
                 async let modelsTask = prewarmedModelsForSearch()
                 async let databaseTask = CancellableDetachedOperation.run(priority: .userInitiated) {
-                    #if DEBUG
+                    #if DEBUG || STARTUP_METRICS
                     let startedAt = CFAbsoluteTimeGetCurrent()
                     #endif
                     let database = AppDatabase.shared as any DatabaseProtocol
-                    #if DEBUG
+                    #if DEBUG || STARTUP_METRICS
                     PerformanceMetrics.shared.record(
                         PerformancePhase.databaseOpen,
                         durationSeconds: CFAbsoluteTimeGetCurrent() - startedAt
@@ -326,11 +327,11 @@ class AppState: ObservableObject {
 
                 // Verify after wiring the callback so a refunded user always
                 // has an oversized local index trimmed to the free-tier limit.
-                #if DEBUG
+                #if DEBUG || STARTUP_METRICS
                 let entitlementStartedAt = CFAbsoluteTimeGetCurrent()
                 #endif
                 await ProManager.shared.verifyEntitlement()
-                #if DEBUG
+                #if DEBUG || STARTUP_METRICS
                 PerformanceMetrics.shared.record(
                     PerformancePhase.entitlementVerification,
                     durationSeconds: CFAbsoluteTimeGetCurrent() - entitlementStartedAt
@@ -351,7 +352,7 @@ class AppState: ObservableObject {
             readiness.markSemanticModelReady()
             readiness.markIndexWarming()
 
-            #if DEBUG
+            #if DEBUG || STARTUP_METRICS
             PerformanceMetrics.shared.start(PerformancePhase.indexLoad)
             #endif
 
@@ -363,7 +364,7 @@ class AppState: ObservableObject {
             try Task.checkCancellation()
             startPendingOnboardingIndexIfNeeded(using: indexing)
 
-            #if DEBUG
+            #if DEBUG || STARTUP_METRICS
             PerformanceMetrics.shared.end(PerformancePhase.indexLoad)
             #endif
 
@@ -373,8 +374,9 @@ class AppState: ObservableObject {
                 }
             }
 
-            #if DEBUG
+            #if DEBUG || STARTUP_METRICS
             PerformanceMetrics.shared.end(PerformancePhase.semanticWarmup)
+            PerformanceMetrics.shared.end(PerformancePhase.startupToSemanticSearch)
             let semanticSearchReady = loadedIndex
             Task.detached(priority: .background) {
                 try? await Task.sleep(for: .seconds(2))

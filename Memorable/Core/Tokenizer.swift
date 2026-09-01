@@ -124,11 +124,11 @@ final class CLIPTokenizer: Sendable {
         guard let modelURL = Bundle.main.url(forResource: "tokenizer", withExtension: "model") else {
             throw TokenizerError.filesNotFound
         }
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         let fileReadStartedAt = CFAbsoluteTimeGetCurrent()
         #endif
         let data = try Data(contentsOf: modelURL)
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         PerformanceMetrics.shared.record(
             PerformancePhase.tokenizerFileRead,
             durationSeconds: CFAbsoluteTimeGetCurrent() - fileReadStartedAt
@@ -136,7 +136,7 @@ final class CLIPTokenizer: Sendable {
         let protoDecodeStartedAt = CFAbsoluteTimeGetCurrent()
         #endif
         let model = try Self.parseModel(data)
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         PerformanceMetrics.shared.record(
             PerformancePhase.tokenizerProtoDecode,
             durationSeconds: CFAbsoluteTimeGetCurrent() - protoDecodeStartedAt
@@ -151,7 +151,7 @@ final class CLIPTokenizer: Sendable {
         pieces.reserveCapacity(model.pieces.count)
         var byteTokens: [UInt8: Int] = [:]
         byteTokens.reserveCapacity(256)
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         let tableBuildStartedAt = CFAbsoluteTimeGetCurrent()
         #endif
 
@@ -167,7 +167,7 @@ final class CLIPTokenizer: Sendable {
 
         self.pieces = pieces
         self.byteFallbackTokens = byteTokens
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         PerformanceMetrics.shared.record(
             PerformancePhase.tokenizerTableBuild,
             durationSeconds: CFAbsoluteTimeGetCurrent() - tableBuildStartedAt

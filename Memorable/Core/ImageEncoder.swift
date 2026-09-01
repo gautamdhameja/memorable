@@ -9,14 +9,14 @@ final class ImageEncoder: Sendable {
     init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) async throws {
         try Task.checkCancellation()
         let modelURL = try resourceManager.url(for: .imageEncoder)
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         let startedAt = CFAbsoluteTimeGetCurrent()
         #endif
         let loadedModel = try await MLModel.load(
             contentsOf: modelURL,
             configuration: Self.modelConfiguration()
         )
-        #if DEBUG
+        #if DEBUG || STARTUP_METRICS
         PerformanceMetrics.shared.record(
             PerformancePhase.imageModelLoad,
             durationSeconds: CFAbsoluteTimeGetCurrent() - startedAt
