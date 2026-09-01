@@ -78,7 +78,7 @@ struct MainTabView: View {
                     dockContents
                         .glassEffect(
                             .regular.tint(Celestial.Colors.surfaceContainerLow.opacity(0.34)),
-                            in: .rect(cornerRadius: 20)
+                            in: .rect(cornerRadius: 24)
                         )
                 }
             } else {
@@ -94,7 +94,7 @@ struct MainTabView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.top, 4)
+        .padding(.top, 6)
         .padding(.bottom, 2)
         .background(
             LinearGradient(
@@ -112,12 +112,12 @@ struct MainTabView: View {
                 dockButton(tab)
             }
         }
-        .frame(height: 50)
+        .frame(height: 62)
         .padding(.horizontal, 6)
     }
 
     private var dockShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
     }
 
     private func dockButton(_ tab: Tab) -> some View {
@@ -131,7 +131,7 @@ struct MainTabView: View {
                 selectedTab = tab
             }
         } label: {
-            VStack(spacing: 0) {
+            VStack(spacing: 2) {
                 ZStack {
                     if isSelected {
                         selectedIconLens
