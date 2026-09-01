@@ -5,9 +5,13 @@ import os
 /// Loads a standard SentencePiece .model protobuf and performs BPE tokenization
 /// with byte fallback for unknown characters.
 final class CLIPTokenizer: Sendable {
+    private struct Piece: Sendable {
+        let id: Int
+        let score: Float
+    }
+
     private let contextLength: Int
-    private let vocab: [String: Int]
-    private let scores: [String: Float]
+    private let pieces: [String: Piece]
     private let byteFallbackTokens: [UInt8: Int]
     private let eosId: Int32
     private let padId: Int32
@@ -33,13 +37,13 @@ final class CLIPTokenizer: Sendable {
         // SentencePiece proto defaults pad_id to -1; SigLIP2/Gemma uses 0 (<pad>)
         self.padId = spec.padID >= 0 ? spec.padID : 0
 
-        var v: [String: Int] = [:]
-        var s: [String: Float] = [:]
+        var pieces: [String: Piece] = [:]
+        pieces.reserveCapacity(proto.pieces.count)
         var byteTokens: [UInt8: Int] = [:]
+        byteTokens.reserveCapacity(256)
 
         for (i, piece) in proto.pieces.enumerated() {
-            v[piece.piece] = i
-            s[piece.piece] = piece.score
+            pieces[piece.piece] = Piece(id: i, score: piece.score)
             if piece.type == .byte {
                 // Byte fallback tokens are formatted as <0xNN>
                 if let byteVal = Self.parseByteToken(piece.piece) {
@@ -48,8 +52,7 @@ final class CLIPTokenizer: Sendable {
             }
         }
 
-        self.vocab = v
-        self.scores = s
+        self.pieces = pieces
         self.byteFallbackTokens = byteTokens
     }
 
@@ -123,14 +126,14 @@ final class CLIPTokenizer: Sendable {
 
             for i in 0..<(symbols.count - 1) {
                 let merged = symbols[i] + symbols[i + 1]
-                if let score = scores[merged], score > bestScore {
+                if let score = pieces[merged]?.score, score > bestScore {
                     bestScore = score
                     bestIdx = i
                     bestMerged = merged
                 }
             }
 
-            guard bestIdx >= 0, vocab[bestMerged] != nil else { break }
+            guard bestIdx >= 0, pieces[bestMerged] != nil else { break }
 
             var newSymbols: [String] = []
             var i = 0
@@ -165,7 +168,7 @@ final class CLIPTokenizer: Sendable {
         var tokens: [String] = []
         for char in word {
             let s = String(char)
-            if vocab[s] != nil {
+            if pieces[s] != nil {
                 tokens.append(s)
             } else {
                 // Byte fallback: encode the character as UTF-8 bytes
@@ -178,13 +181,13 @@ final class CLIPTokenizer: Sendable {
     }
 
     private func tokenId(for piece: String) -> Int {
-        if let id = vocab[piece] { return id }
+        if let id = pieces[piece]?.id { return id }
         // If a single byte token, use byte fallback
         if let byteVal = Self.parseByteToken(piece), let id = byteFallbackTokens[byteVal] {
             return id
         }
         // Unknown token (should not happen with byte fallback)
-        return vocab["<unk>"] ?? 3
+        return pieces["<unk>"]?.id ?? 3
     }
 
     // MARK: - Byte Token Helpers
