@@ -7,6 +7,7 @@ struct SearchView: View {
     let searchEngine: SearchEngine
     @ObservedObject var semanticRuntime: SemanticSearchRuntime
     let captionService: PhotoCaptionService
+    let surpriseRequestID: Int
 
     @StateObject private var viewModel: SearchViewModel
     @State private var selectedPhoto: SearchResult?
@@ -38,12 +39,14 @@ struct SearchView: View {
         indexingService: IndexingService,
         searchEngine: SearchEngine,
         semanticRuntime: SemanticSearchRuntime,
-        captionService: PhotoCaptionService
+        captionService: PhotoCaptionService,
+        surpriseRequestID: Int
     ) {
         self.indexingService = indexingService
         self.searchEngine = searchEngine
         self.semanticRuntime = semanticRuntime
         self.captionService = captionService
+        self.surpriseRequestID = surpriseRequestID
         _viewModel = StateObject(wrappedValue: SearchViewModel(dependencies: .init(
             prioritizeUserSearch: { indexingService.prioritizeUserSearch() },
             isSemanticSearchReady: { semanticRuntime.readiness.isSemanticSearchReady },
@@ -346,6 +349,9 @@ struct SearchView: View {
                 // indexVersion without invalidating the user's current UI.
                 viewModel.validateVisibleResults(reason: "indexVersion changed")
             }
+            .onChange(of: surpriseRequestID) { _, _ in
+                performSurpriseSearch()
+            }
             .onChange(of: scenePhase) {
                 if scenePhase == .active {
                     // Reload search index if it was dropped due to memory pressure
@@ -377,24 +383,6 @@ struct SearchView: View {
                 .foregroundStyle(Celestial.Colors.onSurface)
                 .layoutPriority(1)
             Spacer()
-            if canShowValidatedSuggestions {
-                Button(action: performSurpriseSearch) {
-                    Image(systemName: "wand.and.stars")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Celestial.Colors.amber)
-                        .frame(width: 38, height: 38)
-                        .modifier(
-                            GlassCircleModifier(
-                                tint: Celestial.Colors.amber.opacity(0.14)
-                            )
-                        )
-                        .contentShape(Circle())
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Surprise me with a photo search")
-            }
         }
         .padding(.horizontal, 26)
         .padding(.top, 8)
@@ -1007,13 +995,6 @@ struct SearchView: View {
                     .font(.body)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .padding(.top, 10)
-                if canShowValidatedSuggestions {
-                    Button(action: performSurpriseSearch) {
-                        Label("Surprise Me", systemImage: "sparkles")
-                    }
-                    .buttonStyle(CelestialSecondaryButtonStyle())
-                    .padding(.top, 20)
-                }
             } else {
                 if indexingService.indexRebuildRequired {
                     Text("Update the search index")

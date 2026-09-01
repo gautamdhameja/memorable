@@ -9,115 +9,116 @@ struct OnThisDayView: View {
     @State private var indexedCount = 0
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                CelestialBackdrop()
+        ZStack {
+            CelestialBackdrop()
 
-                ScrollView {
-                    VStack(spacing: 0) {
-                        if isLoading {
-                            ProgressView()
-                                .tint(Celestial.Colors.primaryDim)
-                                .padding(.top, 60)
-                        } else if yearGroups.isEmpty {
-                            VStack(spacing: 16) {
-                                CelestialGlassIcon(
-                                    systemName: indexedCount == 0 ? "photo.on.rectangle.angled" : "calendar",
-                                    tint: Celestial.Colors.onSurfaceVariant,
-                                    size: 64
-                                )
-                                if indexedCount == 0 {
-                                    Text("Index your photo library to unlock memories")
-                                        .font(.subheadline)
-                                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                        .multilineTextAlignment(.center)
-                                    Text("Go to Search and tap \"Build Search Index\"")
-                                        .font(.caption)
-                                        .foregroundStyle(Celestial.Colors.outlineVariant)
-                                } else {
-                                    Text("No memories from this day in previous years")
-                                        .font(.subheadline)
-                                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                        .multilineTextAlignment(.center)
-                                }
-                            }
+            ScrollView {
+                VStack(spacing: 0) {
+                    if isLoading {
+                        ProgressView()
+                            .tint(Celestial.Colors.primaryDim)
                             .padding(.top, 60)
-                            .padding(.horizontal)
-                        } else {
-                            ZStack(alignment: .bottomLeading) {
-                                MemoryHeroImage(photo: yearGroups.first?.photos.first)
-                                    .frame(height: 400)
-                                LinearGradient(
-                                    colors: [.black.opacity(0.12), Celestial.Colors.background],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                                .frame(height: 240)
-
-                                VStack(alignment: .leading, spacing: 0) {
-                                    Text("ON THIS DAY")
-                                        .font(Celestial.Typography.eyebrow)
-                                        .tracking(1.4)
-                                        .foregroundStyle(Celestial.Colors.amber)
-                                    Text(Date.now.formatted(.dateTime.month(.wide).day()))
-                                        .font(Celestial.Typography.display)
-                                        .foregroundStyle(Celestial.Colors.onSurface)
-                                        .padding(.top, 10)
-                                    Text("\(yearGroups.reduce(0) { $0 + $1.photos.count }) photos across \(yearGroups.count) years")
-                                        .font(.subheadline)
-                                        .foregroundStyle(Celestial.Colors.secondary)
-                                        .padding(.top, 8)
-
-                                    Button(action: { showSlideshow = true }) {
-                                        Label("Relive your memories", systemImage: "play.fill")
-                                    }
-                                    .buttonStyle(
-                                        CelestialButtonStyle(
-                                            tint: Celestial.Colors.onSurface,
-                                            foreground: Celestial.Colors.surfaceDim
-                                        )
-                                    )
-                                    .padding(.top, 22)
-                                }
-                                .padding(.horizontal, 26)
-                                .padding(.bottom, 24)
+                    } else if yearGroups.isEmpty {
+                        VStack(spacing: 16) {
+                            CelestialGlassIcon(
+                                systemName: indexedCount == 0 ? "photo.on.rectangle.angled" : "calendar",
+                                tint: Celestial.Colors.onSurfaceVariant,
+                                size: 64
+                            )
+                            if indexedCount == 0 {
+                                Text("Index your photo library to unlock memories")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                    .multilineTextAlignment(.center)
+                                Text("Go to Search and tap \"Build Search Index\"")
+                                    .font(.caption)
+                                    .foregroundStyle(Celestial.Colors.outlineVariant)
+                            } else {
+                                Text("No memories from this day in previous years")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                    .multilineTextAlignment(.center)
                             }
-
-                            LazyVStack(spacing: 28) {
-                                ForEach(yearGroups, id: \.year) { group in
-                                    VStack(spacing: 12) {
-                                        HStack(alignment: .firstTextBaseline) {
-                                            Text("\(String(group.year))")
-                                                .font(Celestial.Typography.title2)
-                                                .foregroundStyle(Celestial.Colors.onSurface)
-                                            Spacer()
-                                            Text("\(group.photos.count) photos")
-                                                .font(.caption)
-                                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                        }
-                                        .padding(.horizontal, 26)
-
-                                        MasonryGrid(
-                                            Array(group.photos.prefix(20)),
-                                            spacing: 5
-                                        ) { photo in
-                                            MemoryThumbnail(photo: photo, groupPhotos: group.photos)
-                                        }
-                                        .padding(.horizontal, 5)
-                                    }
-                                }
-                            }
-                            .padding(.top, 28)
                         }
+                        .padding(.top, 60)
+                        .padding(.horizontal)
+                    } else {
+                        ZStack(alignment: .bottomLeading) {
+                            MemoryHeroImage(photo: yearGroups.first?.photos.first)
+                                .frame(height: 400)
+                            LinearGradient(
+                                colors: [.black.opacity(0.12), Celestial.Colors.background],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 240)
+
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text("ON THIS DAY")
+                                    .font(Celestial.Typography.eyebrow)
+                                    .tracking(1.4)
+                                    .foregroundStyle(Celestial.Colors.amber)
+                                Text(Date.now.formatted(.dateTime.month(.wide).day()))
+                                    .font(Celestial.Typography.display)
+                                    .foregroundStyle(Celestial.Colors.onSurface)
+                                    .padding(.top, 10)
+                                Text("\(yearGroups.reduce(0) { $0 + $1.photos.count }) photos across \(yearGroups.count) years")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Celestial.Colors.secondary)
+                                    .padding(.top, 8)
+
+                                Button(action: { showSlideshow = true }) {
+                                    Label("Relive your memories", systemImage: "play.fill")
+                                }
+                                .buttonStyle(
+                                    CelestialButtonStyle(
+                                        tint: Celestial.Colors.onSurface,
+                                        foreground: Celestial.Colors.surfaceDim
+                                    )
+                                )
+                                .padding(.top, 22)
+                            }
+                            .padding(.horizontal, 26)
+                            .padding(.bottom, 24)
+                        }
+
+                        LazyVStack(spacing: 28) {
+                            ForEach(yearGroups, id: \.year) { group in
+                                VStack(spacing: 12) {
+                                    HStack(alignment: .firstTextBaseline) {
+                                        Text("\(String(group.year))")
+                                            .font(Celestial.Typography.title2)
+                                            .foregroundStyle(Celestial.Colors.onSurface)
+                                        Spacer()
+                                        Text("\(group.photos.count) photos")
+                                            .font(.caption)
+                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                    }
+                                    .padding(.horizontal, 26)
+
+                                    MasonryGrid(
+                                        Array(group.photos.prefix(20)),
+                                        spacing: 5
+                                    ) { photo in
+                                        MemoryThumbnail(photo: photo, groupPhotos: group.photos)
+                                    }
+                                    .padding(.horizontal, 5)
+                                }
+                            }
+                        }
+                        .padding(.top, 28)
                     }
-                    .padding(.bottom, 40)
                 }
+                .padding(.bottom, 40)
             }
-            .toolbar(.hidden, for: .navigationBar)
-            .preferredColorScheme(.dark)
-            .fullScreenCover(isPresented: $showSlideshow) {
-                MemorySlideshowView(captionService: captionService)
-            }
+        }
+        .navigationTitle("Memories")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .preferredColorScheme(.dark)
+        .fullScreenCover(isPresented: $showSlideshow) {
+            MemorySlideshowView(captionService: captionService)
         }
         .task {
             do {

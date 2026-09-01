@@ -1,66 +1,81 @@
 import SwiftUI
 
-struct MainTabView: View {
-    private enum Tab: Int, CaseIterable {
-        case search
-        case memories
-        case more
+enum MainTabDestination: Int {
+    case search
+    case more
 
-        var title: String {
-            switch self {
-            case .search: return "Search"
-            case .memories: return "Memories"
-            case .more: return "More"
-            }
-        }
-
-        var systemImage: String {
-            switch self {
-            case .search: return "magnifyingglass"
-            case .memories: return "photo.stack"
-            case .more: return "square.grid.2x2"
-            }
+    var title: String {
+        switch self {
+        case .search: return "Search"
+        case .more: return "More"
         }
     }
 
+    var systemImage: String {
+        switch self {
+        case .search: return "magnifyingglass"
+        case .more: return "square.grid.2x2"
+        }
+    }
+}
+
+struct MainTabNavigationState {
+    var destination: MainTabDestination
+    private(set) var surpriseRequestID: Int
+
+    init(
+        destination: MainTabDestination = .search,
+        surpriseRequestID: Int = 0
+    ) {
+        self.destination = destination
+        self.surpriseRequestID = surpriseRequestID
+    }
+
+    @discardableResult
+    mutating func requestSurprise(isAvailable: Bool) -> Bool {
+        guard isAvailable else { return false }
+        destination = .search
+        surpriseRequestID &+= 1
+        return true
+    }
+}
+
+struct MainTabView: View {
     var indexingService: IndexingService?
     var searchEngine: SearchEngine?
     @ObservedObject var semanticRuntime: SemanticSearchRuntime
     let captionService: PhotoCaptionService
     let retrySemanticWarmup: () -> Void
 
-    @State private var selectedTab: Tab = .search
+    @State private var navigation = MainTabNavigationState()
     @Namespace private var dockGlassNamespace
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $navigation.destination) {
             if let indexingService, let searchEngine {
                 SearchView(
                     indexingService: indexingService,
                     searchEngine: searchEngine,
                     semanticRuntime: semanticRuntime,
-                    captionService: captionService
+                    captionService: captionService,
+                    surpriseRequestID: navigation.surpriseRequestID
                 )
-                .tag(Tab.search)
+                .tag(MainTabDestination.search)
             } else {
                 SemanticWarmupView(semanticRuntime: semanticRuntime, retry: retrySemanticWarmup)
-                    .tag(Tab.search)
-            }
-
-            if indexingService != nil, searchEngine != nil {
-                OnThisDayView(captionService: captionService)
-                    .tag(Tab.memories)
-            } else {
-                SemanticWarmupView(semanticRuntime: semanticRuntime, retry: retrySemanticWarmup)
-                    .tag(Tab.memories)
+                    .tag(MainTabDestination.search)
             }
 
             if let indexingService, let searchEngine {
-                MoreView(indexingService: indexingService, searchEngine: searchEngine)
-                    .tag(Tab.more)
+                MoreView(
+                    indexingService: indexingService,
+                    searchEngine: searchEngine,
+                    captionService: captionService
+                )
+                    .tag(MainTabDestination.more)
             } else {
                 SemanticWarmupView(semanticRuntime: semanticRuntime, retry: retrySemanticWarmup)
-                    .tag(Tab.more)
+                    .tag(MainTabDestination.more)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
@@ -108,27 +123,49 @@ struct MainTabView: View {
 
     private var dockContents: some View {
         HStack(spacing: 0) {
-            ForEach(Tab.allCases, id: \.rawValue) { tab in
-                dockButton(tab)
+            dockButton(.search)
+
+            if let indexingService {
+                SurpriseDockButton(
+                    indexingService: indexingService,
+                    isSearchAvailable: searchEngine != nil,
+                    action: requestSurpriseSearch
+                )
+            } else {
+                SurpriseDockPlaceholder()
             }
+
+            dockButton(.more)
         }
         .frame(height: 62)
         .padding(.horizontal, 6)
+    }
+
+    private func requestSurpriseSearch() {
+        let isAvailable = searchEngine != nil
+            && indexingService?.canShowValidatedSearchSuggestions == true
+        if navigation.destination != .search {
+            withAnimation(.easeOut(duration: 0.16)) {
+                _ = navigation.requestSurprise(isAvailable: isAvailable)
+            }
+        } else {
+            navigation.requestSurprise(isAvailable: isAvailable)
+        }
     }
 
     private var dockShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: 24, style: .continuous)
     }
 
-    private func dockButton(_ tab: Tab) -> some View {
-        let isSelected = selectedTab == tab
+    private func dockButton(_ tab: MainTabDestination) -> some View {
+        let isSelected = navigation.destination == tab
         let hasNewPhotos = tab == .more && (indexingService?.newPhotosAvailable ?? false)
 
         return Button {
-            guard selectedTab != tab else { return }
+            guard navigation.destination != tab else { return }
             Haptics.selection()
             withAnimation(.easeOut(duration: 0.16)) {
-                selectedTab = tab
+                navigation.destination = tab
             }
         } label: {
             VStack(spacing: 2) {
@@ -190,6 +227,61 @@ struct MainTabView: View {
                 .frame(width: 32, height: 32)
                 .matchedGeometryEffect(id: "selected-tab", in: dockGlassNamespace)
         }
+    }
+}
+
+private struct SurpriseDockButton: View {
+    @ObservedObject var indexingService: IndexingService
+    let isSearchAvailable: Bool
+    let action: () -> Void
+
+    private var isAvailable: Bool {
+        isSearchAvailable && indexingService.canShowValidatedSearchSuggestions
+    }
+
+    var body: some View {
+        Button(action: action) {
+            SurpriseDockIcon(isAvailable: isAvailable)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isAvailable)
+        .accessibilityLabel("Surprise me with a photo search")
+        .accessibilityValue(isAvailable ? "Available" : "Unavailable")
+        .accessibilityHint(
+            isAvailable
+                ? "Searches your library using a matched suggestion"
+                : "Available after indexing and suggestion preparation finish"
+        )
+    }
+}
+
+private struct SurpriseDockPlaceholder: View {
+    var body: some View {
+        SurpriseDockIcon(isAvailable: false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Surprise me with a photo search")
+            .accessibilityValue("Unavailable")
+            .accessibilityHint("Available after indexing and suggestion preparation finish")
+    }
+}
+
+private struct SurpriseDockIcon: View {
+    let isAvailable: Bool
+
+    var body: some View {
+        Image(systemName: "wand.and.stars")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(Celestial.Colors.amber)
+            .frame(width: 42, height: 42)
+            .modifier(
+                GlassCircleModifier(
+                    tint: Celestial.Colors.amber.opacity(0.16),
+                    interactive: isAvailable
+                )
+            )
+            .contentShape(Circle())
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .opacity(isAvailable ? 1 : 0.38)
     }
 }
 

@@ -3,6 +3,7 @@ import SwiftUI
 struct MoreView: View {
     @ObservedObject var indexingService: IndexingService
     let searchEngine: SearchEngine
+    let captionService: PhotoCaptionService
     @ObservedObject private var proManager = ProManager.shared
     @Environment(\.database) private var database
 
@@ -36,6 +37,16 @@ struct MoreView: View {
                             .padding(.top, 30)
 
                         VStack(spacing: 0) {
+                            NavigationLink {
+                                OnThisDayView(captionService: captionService)
+                            } label: {
+                                toolRow(
+                                    icon: "photo.stack",
+                                    title: "Memories",
+                                    subtitle: "On this day and slideshows"
+                                )
+                            }
+
                             Button {
                                 withAnimation(.easeInOut(duration: 0.2)) { showAllAlbums.toggle() }
                             } label: {
@@ -70,17 +81,6 @@ struct MoreView: View {
                                         .padding(.vertical, 12)
                                         .overlay(alignment: .bottom) { CelestialHairline() }
                                     }
-                                }
-                            }
-
-                            if indexingService.canShowValidatedSearchSuggestions {
-                                NavigationLink {
-                                    SurpriseExploreView(
-                                        searchEngine: searchEngine,
-                                        indexingService: indexingService
-                                    )
-                                } label: {
-                                    toolRow(icon: "scope", title: "Explore", subtitle: "Matched in your library")
                                 }
                             }
 
@@ -439,202 +439,6 @@ struct SmartAlbumMasonryGrid: View {
                 )
             }
         }
-    }
-}
-
-// MARK: - Surprise/Explore View
-
-struct SurpriseExploreView: View {
-    let searchEngine: SearchEngine
-    @ObservedObject var indexingService: IndexingService
-    @Environment(\.database) private var database
-    @State private var query: String = ""
-    @State private var results: [SearchResult] = []
-    @State private var isLoading = false
-    @State private var selectedPhoto: SearchResult?
-    @State private var exploreTask: Task<Void, Never>?
-    @State private var exploreGeneration = 0
-    @State private var noEligibleResults = false
-
-    private var canExplore: Bool {
-        indexingService.canShowValidatedSearchSuggestions
-    }
-
-    var body: some View {
-        ZStack {
-            CelestialBackdrop()
-
-            VStack(spacing: 16) {
-                if results.isEmpty && !isLoading {
-                    Spacer()
-                    VStack(spacing: 16) {
-                        CelestialGlassIcon(
-                            systemName: "sparkles",
-                            tint: Celestial.Colors.amber,
-                            size: 68
-                        )
-                        Text(noEligibleResults
-                             ? "No eligible memories matched right now"
-                             : "Tap to discover a random memory")
-                            .font(.subheadline)
-                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        Button(action: { explore() }) {
-                            Label(noEligibleResults ? "Try Again" : "Surprise Me", systemImage: "sparkles")
-                        }
-                        .buttonStyle(CelestialButtonStyle())
-                        .disabled(!canExplore)
-                    }
-                    Spacer()
-                } else if isLoading {
-                    Spacer()
-                    ProgressView()
-                        .tint(Celestial.Colors.primaryDim)
-                    Spacer()
-                } else {
-                    HStack {
-                        Text("\"\(query)\"")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(Celestial.Colors.onSurface)
-                        Spacer()
-                        Button("Try Another") { explore() }
-                            .buttonStyle(CelestialSecondaryButtonStyle())
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-
-                    ScrollView {
-                        LazyVStack(spacing: 6) {
-                            ForEach(results) { result in
-                                PhotoThumbnailView(result: result)
-                                    .onTapGesture { selectedPhoto = result }
-                            }
-                        }
-                        .padding(.horizontal, 6)
-                    }
-                }
-            }
-        }
-        .navigationTitle("Explore")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarColorScheme(.dark, for: .navigationBar)
-        .onChange(of: canExplore) { _, isAvailable in
-            guard !isAvailable else { return }
-            clearExploreResults()
-        }
-        .onChange(of: indexingService.validatedSearchSuggestions) { oldValue, newValue in
-            guard oldValue != newValue else { return }
-            clearExploreResults()
-        }
-        .onDisappear { cancelExplore() }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIApplication.didReceiveMemoryWarningNotification
-        )) { _ in
-            clearExploreResults()
-        }
-        .fullScreenCover(item: $selectedPhoto) { result in
-            if result.isVideo {
-                Color.clear.onAppear {
-                    selectedPhoto = nil
-                    if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                        presentVideoPlayer(for: asset)
-                    }
-                }
-            } else {
-                SearchResultsViewer(
-                    initialResult: result,
-                    allResults: results.filter { !$0.isVideo }
-                )
-            }
-        }
-    }
-
-    private func explore() {
-        guard canExplore else { return }
-        let suggestions = indexingService.validatedSearchSuggestions.shuffled()
-        cancelExplore()
-        exploreGeneration += 1
-        let generation = exploreGeneration
-        isLoading = true
-        noEligibleResults = false
-        indexingService.prioritizeUserSearch()
-        exploreTask = Task {
-            do {
-                let database = database
-                let match = try await ExploreSearchOperation.firstEligibleMatch(
-                    suggestions: suggestions,
-                    search: { suggestion in
-                        Array(try await searchEngine.search(
-                            query: suggestion,
-                            featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro)
-                        ).results.prefix(20))
-                    },
-                    filter: { found in
-                        let photoIDs = found.filter { !$0.isVideo }.map(\.id)
-                        let eligiblePhotoIDs = try await CancellableDetachedOperation.run {
-                            try database.distinctMemoryPhotoIDs(in: photoIDs)
-                        }
-                        return found.filter { $0.isVideo || eligiblePhotoIDs.contains($0.id) }
-                    }
-                )
-                guard !Task.isCancelled, generation == exploreGeneration else { return }
-                query = match?.query ?? ""
-                results = match?.results ?? []
-                noEligibleResults = match == nil
-            } catch is CancellationError {
-                return
-            } catch {
-                logger.error("Explore search failed: \(error.safeDiagnosticCode)")
-            }
-            guard generation == exploreGeneration else { return }
-            isLoading = false
-            exploreTask = nil
-        }
-    }
-
-    private func cancelExplore() {
-        exploreGeneration += 1
-        exploreTask?.cancel()
-        exploreTask = nil
-        isLoading = false
-    }
-
-    private func clearExploreResults() {
-        cancelExplore()
-        query = ""
-        results.removeAll(keepingCapacity: false)
-        selectedPhoto = nil
-        noEligibleResults = false
-    }
-}
-
-enum ExploreSearchOperation {
-    static let maximumSuggestionAttempts = 3
-
-    static func run(
-        search: @escaping @Sendable () async throws -> [SearchResult]
-    ) async throws -> [SearchResult] {
-        try Task.checkCancellation()
-        let results = try await search()
-        try Task.checkCancellation()
-        return results
-    }
-
-    static func firstEligibleMatch(
-        suggestions: [String],
-        maximumAttempts: Int = maximumSuggestionAttempts,
-        search: @escaping @Sendable (String) async throws -> [SearchResult],
-        filter: @escaping @Sendable ([SearchResult]) async throws -> [SearchResult]
-    ) async throws -> (query: String, results: [SearchResult])? {
-        for suggestion in suggestions.prefix(max(0, maximumAttempts)) {
-            try Task.checkCancellation()
-            let found = try await search(suggestion)
-            let eligibleResults = try await filter(found)
-            try Task.checkCancellation()
-            if !eligibleResults.isEmpty {
-                return (suggestion, eligibleResults)
-            }
-        }
-        return nil
     }
 }
 

@@ -1,4 +1,35 @@
 import XCTest
+@testable import Memorable
+
+final class MainTabNavigationStateTests: XCTestCase {
+    func testUnavailableSurpriseIsNoOpFromMore() {
+        var navigation = MainTabNavigationState(
+            destination: .more,
+            surpriseRequestID: 4
+        )
+
+        XCTAssertFalse(navigation.requestSurprise(isAvailable: false))
+        XCTAssertEqual(navigation.destination, .more)
+        XCTAssertEqual(navigation.surpriseRequestID, 4)
+    }
+
+    func testAvailableSurpriseRoutesFromMoreAndIncrementsOnce() {
+        var navigation = MainTabNavigationState(destination: .more)
+
+        XCTAssertTrue(navigation.requestSurprise(isAvailable: true))
+        XCTAssertEqual(navigation.destination, .search)
+        XCTAssertEqual(navigation.surpriseRequestID, 1)
+    }
+
+    func testSubsequentAvailableSurpriseInSearchIncrementsOnceAgain() {
+        var navigation = MainTabNavigationState(destination: .more)
+        navigation.requestSurprise(isAvailable: true)
+
+        XCTAssertTrue(navigation.requestSurprise(isAvailable: true))
+        XCTAssertEqual(navigation.destination, .search)
+        XCTAssertEqual(navigation.surpriseRequestID, 2)
+    }
+}
 
 final class ProjectConfigurationTests: XCTestCase {
     private var repositoryRoot: URL {
@@ -152,6 +183,22 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(moreView.contains("forResource: \"PRIVACY_POLICY\""))
         XCTAssertTrue(bundledPolicy.contains("The developer does not operate a backend"))
         XCTAssertTrue(bundledPolicy.contains("only after you tap Share"))
+    }
+
+    func testPrimaryDockCentersSurpriseAndKeepsMemoriesInMore() throws {
+        let mainTabView = try contents(of: "Memorable/Views/MainTabView.swift")
+        let searchView = try contents(of: "Memorable/Views/SearchView.swift")
+        let moreView = try contents(of: "Memorable/Views/MoreView.swift")
+        let searchDock = try XCTUnwrap(mainTabView.range(of: "dockButton(.search)"))
+        let surpriseDock = try XCTUnwrap(mainTabView.range(of: "SurpriseDockButton("))
+        let moreDock = try XCTUnwrap(mainTabView.range(of: "dockButton(.more)"))
+
+        XCTAssertLessThan(searchDock.lowerBound, surpriseDock.lowerBound)
+        XCTAssertLessThan(surpriseDock.lowerBound, moreDock.lowerBound)
+        XCTAssertFalse(mainTabView.contains("case memories"))
+        XCTAssertTrue(moreView.contains("OnThisDayView(captionService: captionService)"))
+        XCTAssertFalse(moreView.contains("SurpriseExploreView"))
+        XCTAssertFalse(searchView.contains("Button(action: performSurpriseSearch)"))
     }
 
     func testAppStoreTextFieldsMeetCurrentLimitsAndVersion() throws {

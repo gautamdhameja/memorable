@@ -14,7 +14,6 @@
 		0B4B8513E90FA85EBDC6F3B4 /* ProRuntimePolicyReleaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5621B1BD2FCC20DC8E50E3F5 /* ProRuntimePolicyReleaseTests.swift */; };
 		0E884F45849ABB4F4E8F9ED1 /* PhotoLibraryChangeTracking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 810CA270D09C76FA245A5D33 /* PhotoLibraryChangeTracking.swift */; };
 		0EE4B71814955753E7E55F6B /* ModelResourceManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E6EFB179805C00124922AE8 /* ModelResourceManagerTests.swift */; };
-		0F744967F222930E9ECADBFD /* ExploreSearchOperationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D79CC46FC786AF19CE4020A6 /* ExploreSearchOperationTests.swift */; };
 		12F4DD4420DEE03F04DCCEE8 /* known_cities.json in Resources */ = {isa = PBXBuildFile; fileRef = AFBC7A6D08712953CA1F73D0 /* known_cities.json */; };
 		170F97DF8912DE3891217535 /* SearchViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58A64E3CDF3FDBD320A7C6CB /* SearchViewModelTests.swift */; };
 		18D346BBF02E0BDC7748249A /* AppReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 054A46B2B59A88A2B3476DB4 /* AppReadinessTests.swift */; };
@@ -243,7 +242,6 @@
 		CA911DEE314BF3B886667D60 /* PhotoLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibrary.swift; sourceTree = "<group>"; };
 		CCADA0FD80165DA6787463DF /* PRIVACY_POLICY.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PRIVACY_POLICY.txt; sourceTree = "<group>"; };
 		D1C3923C53A44ED25AD180AF /* IndexingSlideshowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexingSlideshowView.swift; sourceTree = "<group>"; };
-		D79CC46FC786AF19CE4020A6 /* ExploreSearchOperationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExploreSearchOperationTests.swift; sourceTree = "<group>"; };
 		D89AE4449DEC5C93060EB6FB /* coco-caption-2017.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "coco-caption-2017.json"; sourceTree = "<group>"; };
 		D9C78A2EAC356EC0AF54E59C /* RelevanceEvaluationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelevanceEvaluationTests.swift; sourceTree = "<group>"; };
 		DB3383ACBD9BCB3A63BF2F95 /* sentencepiece_model.pb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = sentencepiece_model.pb.swift; sourceTree = "<group>"; };
@@ -368,7 +366,6 @@
 				F9C4EFF52D545A7824AA0C64 /* DatabaseTests.swift */,
 				AE71B213091826148D42C24D /* DataModelTests.swift */,
 				F591D36647675763A6EC50E1 /* EncoderConcurrencyTests.swift */,
-				D79CC46FC786AF19CE4020A6 /* ExploreSearchOperationTests.swift */,
 				F5661D0CBF6070096FC39055 /* FolderSourceRegistrationTests.swift */,
 				C38AECA102DA521B202842D5 /* ImagePreprocessingTests.swift */,
 				3ACA20B9965BC290051D78F3 /* IndexingJobQueueTests.swift */,
@@ -725,7 +722,6 @@
 				08AB7B596E02761884A22B46 /* DataModelTests.swift in Sources */,
 				E8B95D1CD4BE7E2931465267 /* DatabaseTests.swift in Sources */,
 				C92A9A0B268A3B4426B06438 /* EncoderConcurrencyTests.swift in Sources */,
-				0F744967F222930E9ECADBFD /* ExploreSearchOperationTests.swift in Sources */,
 				61F86AA31AA98859490BB993 /* FolderSourceRegistrationTests.swift in Sources */,
 				5EA88297B4E08821C3C41190 /* ImagePreprocessingTests.swift in Sources */,
 				4FFE096249330CD6A54EF35A /* IndexingJobQueueTests.swift in Sources */,
