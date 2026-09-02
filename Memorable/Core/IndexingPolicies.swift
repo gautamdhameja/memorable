@@ -44,11 +44,9 @@ enum InitialIndexingExperiencePolicy {
     }
 
     static func shouldShow(
-        isInitialLibraryWorkflowActive: Bool,
-        isIndexing: Bool,
-        isThermallyPaused: Bool
+        isInitialLibraryWorkflowActive: Bool
     ) -> Bool {
-        isInitialLibraryWorkflowActive && (isIndexing || isThermallyPaused)
+        isInitialLibraryWorkflowActive
     }
 
     static func shouldResumePendingRun(
@@ -206,6 +204,37 @@ enum PhotoEnrichmentTask {
             task.cancel()
         }
         return Task.isCancelled ? nil : value
+    }
+}
+
+@MainActor
+enum PhotoEnrichmentBatchOperation {
+    static func run(
+        candidates: [PhotoEnrichmentCandidate],
+        prefetchPhotoKitAssets: ([String]) async -> Void,
+        enrich: (PhotoEnrichmentCandidate) async -> PhotoEnrichmentUpdate?
+    ) async -> [PhotoEnrichmentUpdate]? {
+        guard !Task.isCancelled else { return nil }
+        let photoKitIdentifiers = candidates.compactMap { candidate in
+            candidate.sourceId == PhotoSourceType.photokit.rawValue
+                ? candidate.localIdentifier
+                : nil
+        }
+        if !photoKitIdentifiers.isEmpty {
+            await prefetchPhotoKitAssets(photoKitIdentifiers)
+        }
+        guard !Task.isCancelled else { return nil }
+
+        var updates: [PhotoEnrichmentUpdate] = []
+        updates.reserveCapacity(candidates.count)
+        for candidate in candidates {
+            guard !Task.isCancelled, let update = await enrich(candidate) else {
+                return nil
+            }
+            updates.append(update)
+            await Task.yield()
+        }
+        return updates
     }
 }
 

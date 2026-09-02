@@ -1097,6 +1097,72 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertTrue(observation.cancellationWasSeen)
     }
 
+    @MainActor
+    func testPhotoEnrichmentBatchPrefetchesPhotoKitAssetsBeforeProcessing() async {
+        let photoKitCandidate = PhotoEnrichmentCandidate(
+            localIdentifier: "photo-1",
+            pixelWidth: 100,
+            pixelHeight: 100,
+            sourceId: PhotoSourceType.photokit.rawValue,
+            filePath: nil
+        )
+        let folderCandidate = PhotoEnrichmentCandidate(
+            localIdentifier: "folder-1",
+            pixelWidth: 100,
+            pixelHeight: 100,
+            sourceId: "folder-source",
+            filePath: "/tmp/folder-1.jpg"
+        )
+        var events: [String] = []
+
+        let updates = await PhotoEnrichmentBatchOperation.run(
+            candidates: [photoKitCandidate, folderCandidate],
+            prefetchPhotoKitAssets: { identifiers in
+                events.append("prefetch:\(identifiers.joined(separator: ","))")
+            },
+            enrich: { candidate in
+                events.append("enrich:\(candidate.localIdentifier)")
+                return PhotoEnrichmentUpdate(
+                    localIdentifier: candidate.localIdentifier,
+                    ocrText: nil,
+                    sharpnessScore: 1,
+                    sceneLabels: nil
+                )
+            }
+        )
+
+        XCTAssertEqual(events, ["prefetch:photo-1", "enrich:photo-1", "enrich:folder-1"])
+        XCTAssertEqual(updates?.map(\.localIdentifier), ["photo-1", "folder-1"])
+    }
+
+    @MainActor
+    func testCancelledPhotoEnrichmentBatchSkipsPrefetchAndProcessing() async {
+        let candidate = PhotoEnrichmentCandidate(
+            localIdentifier: "photo-1",
+            pixelWidth: 100,
+            pixelHeight: 100,
+            sourceId: PhotoSourceType.photokit.rawValue,
+            filePath: nil
+        )
+        var events: [String] = []
+        let task = Task { @MainActor in
+            await PhotoEnrichmentBatchOperation.run(
+                candidates: [candidate],
+                prefetchPhotoKitAssets: { _ in events.append("prefetch") },
+                enrich: { _ in
+                    events.append("enrich")
+                    return nil
+                }
+            )
+        }
+
+        task.cancel()
+        let updates = await task.value
+
+        XCTAssertNil(updates)
+        XCTAssertTrue(events.isEmpty)
+    }
+
     private enum RegistrationTestError: Error, Equatable {
         case bookmarkFailed
         case insertFailed
@@ -1315,32 +1381,43 @@ final class IndexingPolicyTests: XCTestCase {
         ))
     }
 
-    func testInitialIndexingExperienceShowsOnlyWhileInitialWorkIsActive() {
+    func testInitialIndexingExperienceStaysVisibleBetweenBaseIndexingAndEnrichment() {
         XCTAssertTrue(InitialIndexingExperiencePolicy.shouldShow(
-            isInitialLibraryWorkflowActive: true,
-            isIndexing: true,
-            isThermallyPaused: false
-        ))
-        XCTAssertTrue(InitialIndexingExperiencePolicy.shouldShow(
-            isInitialLibraryWorkflowActive: true,
-            isIndexing: false,
-            isThermallyPaused: true
+            isInitialLibraryWorkflowActive: true
         ))
         XCTAssertFalse(InitialIndexingExperiencePolicy.shouldShow(
-            isInitialLibraryWorkflowActive: false,
-            isIndexing: true,
-            isThermallyPaused: false
+            isInitialLibraryWorkflowActive: false
         ))
-        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldShow(
-            isInitialLibraryWorkflowActive: true,
-            isIndexing: false,
-            isThermallyPaused: false
-        ))
-        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldShow(
-            isInitialLibraryWorkflowActive: false,
-            isIndexing: false,
-            isThermallyPaused: true
-        ))
+    }
+
+    @MainActor
+    func testInitialPresentationSurvivesBaseProgressCompletion() {
+        let suiteName = "InitialIndexingServiceTransitionTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let service = makeSurpriseLaunchService(
+            database: SearchFixtureDatabase(),
+            cachedState: SurpriseQueryCache.State(
+                validatedQueries: [],
+                lastValidatedCount: 0
+            ),
+            initialIndexingDefaults: defaults
+        )
+        service.startIndexing()
+
+        service.progress = IndexingProgress(
+            total: 100,
+            completed: 100,
+            isRunning: false,
+            phase: .photos,
+            photosComplete: true,
+            searchableCount: 100
+        )
+
+        XCTAssertFalse(service.progress.isRunning)
+        XCTAssertTrue(service.isInitialLibraryIndexingActive)
+        XCTAssertTrue(service.shouldShowInitialIndexingExperience)
+        service.stopIndexing()
     }
 
     func testInitialIndexingExperienceStorePersistsPendingAndCompletionState() {

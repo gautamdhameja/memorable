@@ -10,7 +10,7 @@ struct IndexingBannerView: View {
         switch indexingService.progress.phase {
         case .photos: return "Indexing photos"
         case .videos: return "Indexing videos"
-        case .enrichment: return "Improving search"
+        case .enrichment: return "Finishing indexing"
         case .idle: return "Indexing"
         }
     }
@@ -201,7 +201,7 @@ struct InitialIndexingProgressView: View {
         switch indexingService.progress.phase {
         case .photos: return "Building photo search"
         case .videos: return "Adding your videos"
-        case .enrichment: return "Adding helpful details"
+        case .enrichment: return "Finishing your search index"
         case .idle: return "Building search"
         }
     }

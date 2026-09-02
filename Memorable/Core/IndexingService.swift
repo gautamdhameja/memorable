@@ -11,9 +11,6 @@ class IndexingService: ObservableObject {
     @Published var progress = IndexingProgress(total: 0, completed: 0, isRunning: false) {
         didSet {
             guard oldValue.isRunning, !progress.isRunning else { return }
-            if !isThermallyPaused {
-                isInitialLibraryIndexingActive = false
-            }
             if photoChangeScanState.startPendingScanIfPossible(isIndexing: false) {
                 startPhotoChangeScan()
             }
@@ -112,9 +109,7 @@ class IndexingService: ObservableObject {
 
     var shouldShowInitialIndexingExperience: Bool {
         InitialIndexingExperiencePolicy.shouldShow(
-            isInitialLibraryWorkflowActive: isInitialLibraryIndexingActive,
-            isIndexing: progress.isRunning,
-            isThermallyPaused: isThermallyPaused
+            isInitialLibraryWorkflowActive: isInitialLibraryIndexingActive
         )
     }
 
@@ -945,12 +940,21 @@ class IndexingService: ObservableObject {
 
     private func completeInitialIndexingExperience() {
         isInitialLibraryIndexingActive = false
+        persistInitialIndexingExperienceCompletion()
+    }
+
+    private func persistInitialIndexingExperienceCompletion() {
         guard isInitialIndexingExperiencePending || !hasCompletedInitialIndexingExperience else {
             return
         }
         isInitialIndexingExperiencePending = false
         hasCompletedInitialIndexingExperience = true
         InitialIndexingExperienceStore.complete(in: initialIndexingDefaults)
+    }
+
+    private func dismissInterruptedInitialPresentationIfNeeded() {
+        guard !isThermallyPaused else { return }
+        isInitialLibraryIndexingActive = false
     }
 
     private func canStartIndexing(resumeWhenCool: ThermalResumeIntent? = nil) -> Bool {
@@ -1198,11 +1202,13 @@ class IndexingService: ObservableObject {
                     try Task.checkCancellation()
                 } catch is CancellationError {
                     self.progress.isRunning = false
+                    self.dismissInterruptedInitialPresentationIfNeeded()
                     self.clearThermalResumeIntent(ifOwnedBy: resumeIntentID)
                     return .cancelled
                 } catch {
                     logger.error("Failed to clear incompatible index before rebuild: \(error.safeDiagnosticCode)")
                     self.progress.isRunning = false
+                    self.dismissInterruptedInitialPresentationIfNeeded()
                     self.clearThermalResumeIntent(ifOwnedBy: resumeIntentID)
                     return .cancelled
                 }
@@ -1216,6 +1222,7 @@ class IndexingService: ObservableObject {
                 self.librarySession = nil
                 self.endBackgroundTask()
                 self.progress.isRunning = false
+                self.dismissInterruptedInitialPresentationIfNeeded()
                 self.clearThermalResumeIntent(ifOwnedBy: resumeIntentID)
                 return .cancelled
             }
@@ -1240,8 +1247,10 @@ class IndexingService: ObservableObject {
             await self.libraryWorker.indexVideos(session: session)
             guard !Task.isCancelled else {
                 self.progress.isRunning = false
+                self.dismissInterruptedInitialPresentationIfNeeded()
                 return .cancelled
             }
+            self.progress.isRunning = false
             if Self.shouldCompleteEmptyRequiredRebuild(
                 rebuildRequired: self.indexRebuildRequired,
                 hasMediaCandidates: session.hasMediaCandidates
@@ -1254,14 +1263,13 @@ class IndexingService: ObservableObject {
                     self.indexRebuildRequired = false
                 } catch is CancellationError {
                     self.progress.isRunning = false
+                    self.dismissInterruptedInitialPresentationIfNeeded()
                     return .cancelled
                 } catch {
                     logger.error("Failed to complete empty index rebuild: \(error.safeDiagnosticCode)")
                 }
             }
-            if !self.progress.isRunning {
-                self.completeInitialIndexingExperience()
-            }
+            self.persistInitialIndexingExperienceCompletion()
             self.enqueuePostIndexingJobs(workflowID: workflowID)
             await self.enqueueSavedFolderReindexingIfNeeded()
             return .completed
@@ -1474,6 +1482,9 @@ class IndexingService: ObservableObject {
             await self.performPhotoEnrichment()
             if self.progress.phase == .enrichment {
                 self.progress.isRunning = false
+            }
+            if self.isInitialLibraryIndexingActive, !Task.isCancelled {
+                self.completeInitialIndexingExperience()
             }
             return Task.isCancelled ? .cancelled : .completed
         })
@@ -1693,18 +1704,15 @@ class IndexingService: ObservableObject {
             }
             guard !candidates.isEmpty else { break }
 
-            var updates: [PhotoEnrichmentUpdate] = []
-            updates.reserveCapacity(candidates.count)
-            for candidate in candidates {
-                if Task.isCancelled { return }
-                guard let update = await enrichPhoto(candidate), !Task.isCancelled else {
-                    return
+            guard let updates = await PhotoEnrichmentBatchOperation.run(
+                candidates: candidates,
+                prefetchPhotoKitAssets: { identifiers in
+                    await PhotoLibrary.prefetchAssets(localIdentifiers: identifiers)
+                },
+                enrich: { [weak self] candidate in
+                    await self?.enrichPhoto(candidate)
                 }
-                updates.append(update)
-                await Task.yield()
-            }
-
-            guard !Task.isCancelled else { return }
+            ), !Task.isCancelled else { return }
 
             do {
                 let db = database
