@@ -343,6 +343,7 @@ private struct LicenseEntry: Identifiable {
     let name: String
     let url: String
     let license: String
+    let icon: String
     let text: String
 }
 
@@ -352,18 +353,21 @@ struct LicensesView: View {
             name: "SigLIP2",
             url: "github.com/google-research/big_vision",
             license: "Apache License 2.0",
+            icon: "viewfinder",
             text: apacheLicenseText("Google LLC")
         ),
         LicenseEntry(
             name: "SentencePiece",
             url: "github.com/google/sentencepiece",
             license: "Apache License 2.0",
+            icon: "textformat",
             text: apacheLicenseText("Google Inc.")
         ),
         LicenseEntry(
             name: "GRDB.swift",
             url: "github.com/groue/GRDB.swift",
             license: "MIT License",
+            icon: "cylinder",
             text: """
             MIT License
 
@@ -392,6 +396,7 @@ struct LicensesView: View {
             name: "Swift Protobuf",
             url: "github.com/apple/swift-protobuf",
             license: "Apache License 2.0",
+            icon: "chevron.left.forwardslash.chevron.right",
             text: apacheLicenseText("Apple Inc.")
         ),
     ]
@@ -400,34 +405,73 @@ struct LicensesView: View {
         ZStack {
             CelestialBackdrop()
 
-            List {
-                ForEach(entries) { entry in
-                    NavigationLink {
-                        LicenseDetailView(entry: entry)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(entry.name)
-                                .font(Celestial.Typography.bodyEmphasized)
-                                .foregroundStyle(Celestial.Colors.onSurface)
-                            Text(entry.license)
-                                .font(Celestial.Typography.footnote)
-                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        }
-                        .padding(.vertical, 8)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("OPEN-SOURCE SOFTWARE")
+                            .font(Celestial.Typography.eyebrow)
+                            .tracking(1.2)
+                            .foregroundStyle(Celestial.Colors.primaryDim)
+
+                        Text("Memorable is built with open-source tools. Tap a component to read its license.")
+                            .font(Celestial.Typography.supporting)
+                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                            .lineSpacing(3)
                     }
-                    .padding(12)
-                    .celestialGlassCardButtonStyle(
-                        cornerRadius: 16,
-                        tint: Celestial.Colors.surfaceContainerLow.opacity(0.30)
-                    )
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+
+                    VStack(spacing: 0) {
+                        ForEach(entries.indices, id: \.self) { index in
+                            NavigationLink {
+                                LicenseDetailView(entry: entries[index])
+                            } label: {
+                                licenseRow(entries[index])
+                            }
+                            .buttonStyle(.plain)
+
+                            if index < entries.index(before: entries.endIndex) {
+                                CelestialHairline()
+                                    .padding(.leading, 48)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .modifier(GlassPanelModifier(cornerRadius: 20))
                 }
+                .padding(.horizontal, 24)
+                .padding(.top, 18)
+                .padding(.bottom, 28)
             }
-            .scrollContentBackground(.hidden)
+            .scrollBounceBehavior(.basedOnSize)
         }
         .celestialNavigationTitle("Licenses")
+    }
+
+    private func licenseRow(_ entry: LicenseEntry) -> some View {
+        HStack(spacing: 12) {
+            CelestialGlassIcon(
+                systemName: entry.icon,
+                tint: Celestial.Colors.primaryDim,
+                size: 34
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.name)
+                    .font(Celestial.Typography.bodyEmphasized)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text(entry.license)
+                    .font(Celestial.Typography.footnote)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            }
+
+            Spacer(minLength: 8)
+
+            Image(systemName: "chevron.right")
+                .font(Celestial.Typography.captionStrong)
+                .foregroundStyle(Celestial.Colors.outlineVariant)
+                .accessibilityHidden(true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 

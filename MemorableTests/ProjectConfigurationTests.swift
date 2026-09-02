@@ -4,18 +4,23 @@ import XCTest
 final class MainTabNavigationStateTests: XCTestCase {
     func testDockUsesBalancedNativeIcons() {
         XCTAssertEqual(MainTabDestination.search.systemImage, "magnifyingglass")
-        XCTAssertEqual(MainTabDestination.more.systemImage, "line.3.horizontal")
-        XCTAssertEqual(PrimaryDockMetrics.iconSize, 18)
-        XCTAssertEqual(PrimaryDockMetrics.iconFrame, 32)
+        XCTAssertEqual(MainTabDestination.more.systemImage, "ellipsis.circle")
+        XCTAssertEqual(PrimaryDockMetrics.iconSize, 20)
+        XCTAssertEqual(PrimaryDockMetrics.iconFrame, 30)
     }
 
-    func testDockIsCompactWithComfortableVerticalSpaceAndTouchTargets() {
-        XCTAssertLessThan(PrimaryDockMetrics.totalWidth, 280)
-        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.itemWidth, 72)
+    func testDockIsWideWithComfortableVerticalSpaceAndTouchTargets() {
+        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.totalWidth, 320)
+        XCTAssertLessThanOrEqual(PrimaryDockMetrics.totalWidth, 340)
+        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.itemWidth, 96)
         XCTAssertEqual(PrimaryDockMetrics.surpriseWidth, PrimaryDockMetrics.itemWidth)
-        XCTAssertGreaterThan(PrimaryDockMetrics.height, 62)
-        XCTAssertLessThanOrEqual(PrimaryDockMetrics.itemSpacing, 4)
-        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.horizontalPadding, 12)
+        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.height, 70)
+        XCTAssertEqual(PrimaryDockMetrics.itemSpacing, 0)
+        XCTAssertGreaterThanOrEqual(PrimaryDockMetrics.horizontalPadding, 14)
+        XCTAssertLessThanOrEqual(PrimaryDockMetrics.outerInset, 6)
+        XCTAssertLessThanOrEqual(PrimaryDockMetrics.outerGlassTintOpacity, 0.20)
+        XCTAssertLessThanOrEqual(PrimaryDockMetrics.selectionGlassTintOpacity, 0.16)
+        XCTAssertLessThanOrEqual(PrimaryDockMetrics.backdropOpacity, 0.60)
     }
 
     func testUnavailableSurpriseIsNoOpFromMore() {
@@ -44,6 +49,28 @@ final class MainTabNavigationStateTests: XCTestCase {
         XCTAssertTrue(navigation.requestSurprise(isAvailable: true))
         XCTAssertEqual(navigation.destination, .search)
         XCTAssertEqual(navigation.surpriseRequestID, 2)
+    }
+
+    func testRetappingSelectedSearchRequestsSearchHome() {
+        var navigation = MainTabNavigationState(
+            destination: .search,
+            searchHomeRequestID: 7
+        )
+
+        XCTAssertTrue(navigation.requestSearchHome())
+        XCTAssertEqual(navigation.destination, .search)
+        XCTAssertEqual(navigation.searchHomeRequestID, 8)
+    }
+
+    func testSearchHomeRequestIsIgnoredOutsideSearch() {
+        var navigation = MainTabNavigationState(
+            destination: .more,
+            searchHomeRequestID: 7
+        )
+
+        XCTAssertFalse(navigation.requestSearchHome())
+        XCTAssertEqual(navigation.destination, .more)
+        XCTAssertEqual(navigation.searchHomeRequestID, 7)
     }
 }
 
@@ -269,10 +296,61 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertFalse(appSources.contains(".interactive("))
     }
 
+    func testSharedGlassSurfacesUseThePremiumChromeLayer() throws {
+        let glassModifiers = try contents(of: "Memorable/Views/GlassModifiers.swift")
+        let searchBar = try sourceSection(
+            in: glassModifiers,
+            from: "struct GlassSearchBarModifier",
+            to: "struct GlassPanelModifier"
+        )
+        let panel = try sourceSection(
+            in: glassModifiers,
+            from: "struct GlassPanelModifier",
+            to: "struct GlassCircleModifier"
+        )
+        let circle = try sourceSection(
+            in: glassModifiers,
+            from: "struct GlassCircleModifier",
+            to: "struct CelestialGlassIcon"
+        )
+        let capsule = try sourceSection(
+            in: glassModifiers,
+            from: "struct GlassCapsuleModifier",
+            to: "private extension View"
+        )
+
+        XCTAssertTrue(glassModifiers.contains("enum CelestialGlassTokens"))
+        XCTAssertTrue(glassModifiers.contains("func celestialGlassChrome"))
+        XCTAssertTrue(searchBar.contains(".celestialGlassChrome("))
+        XCTAssertTrue(panel.contains(".celestialGlassChrome("))
+        XCTAssertTrue(circle.contains(".celestialGlassChrome("))
+        XCTAssertTrue(capsule.contains(".celestialGlassChrome("))
+    }
+
     func testUpgradeViewRequestsDeferredProductLoading() throws {
         let upgradeView = try contents(of: "Memorable/Views/UpgradeView.swift")
 
         XCTAssertTrue(upgradeView.contains("await proManager.loadProduct()"))
+    }
+
+    func testUpgradeKeepsCommerceActionsOutsideScrollableContent() throws {
+        let upgradeView = try contents(of: "Memorable/Views/UpgradeView.swift")
+        let scrollingContent = try sourceSection(
+            in: upgradeView,
+            from: "ScrollView {",
+            to: ".scrollBounceBehavior(.basedOnSize)"
+        )
+        let purchaseFooter = try sourceSection(
+            in: upgradeView,
+            from: "private var purchaseFooter",
+            to: "private func proFeature"
+        )
+
+        XCTAssertTrue(upgradeView.contains(".safeAreaInset(edge: .bottom"))
+        XCTAssertFalse(scrollingContent.contains("await proManager.purchase()"))
+        XCTAssertFalse(scrollingContent.contains("await proManager.restorePurchases()"))
+        XCTAssertTrue(purchaseFooter.contains("await proManager.purchase()"))
+        XCTAssertTrue(purchaseFooter.contains("await proManager.restorePurchases()"))
     }
 
     func testPrivacyPolicyIsBundledAndAccessibleSeparatelyFromLicenses() throws {
@@ -292,6 +370,21 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(moreView.contains("forResource: \"PRIVACY_POLICY\""))
         XCTAssertTrue(bundledPolicy.contains("The developer does not operate a backend"))
         XCTAssertTrue(bundledPolicy.contains("only after you tap Share"))
+    }
+
+    func testLicensesUsesOneGroupedGlassPanelInsteadOfListStyledCards() throws {
+        let moreView = try contents(of: "Memorable/Views/MoreView.swift")
+        let licensesView = try sourceSection(
+            in: moreView,
+            from: "struct LicensesView: View",
+            to: "private struct LicenseDetailView"
+        )
+
+        XCTAssertTrue(licensesView.contains("ScrollView"))
+        XCTAssertTrue(licensesView.contains("GlassPanelModifier(cornerRadius: 20)"))
+        XCTAssertTrue(licensesView.contains("CelestialGlassIcon("))
+        XCTAssertFalse(licensesView.contains("List {"))
+        XCTAssertFalse(licensesView.contains(".celestialGlassCardButtonStyle("))
     }
 
     func testPrimaryNavigationHasSingleOwnersForSurpriseMemoriesAndSmartAlbums() throws {
@@ -317,6 +410,28 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertFalse(searchView.contains("smartAlbums.prefix("))
     }
 
+    func testSearchDockReselectReturnsToSearchHistory() throws {
+        let mainTabView = try contents(of: "Memorable/Views/MainTabView.swift")
+        let searchView = try contents(of: "Memorable/Views/SearchView.swift")
+
+        XCTAssertTrue(mainTabView.contains("navigation.requestSearchHome()"))
+        XCTAssertTrue(mainTabView.contains("searchHomeRequestID: navigation.searchHomeRequestID"))
+        XCTAssertTrue(searchView.contains(".onChange(of: searchHomeRequestID)"))
+        XCTAssertTrue(searchView.contains("viewModel.setQueryText(\"\")"))
+    }
+
+    func testDockUsesOneSharedGlyphTreatmentWithoutAlignmentOffsets() throws {
+        let mainTabView = try contents(of: "Memorable/Views/MainTabView.swift")
+
+        XCTAssertTrue(mainTabView.contains("private struct PrimaryDockGlyph"))
+        XCTAssertTrue(mainTabView.contains("PrimaryDockSelectionPill(isSelected: isSelected)"))
+        XCTAssertTrue(mainTabView.contains("private var dockSpecularOutline"))
+        XCTAssertTrue(mainTabView.contains("systemName: \"sparkles\""))
+        XCTAssertFalse(mainTabView.contains("wand.and.stars"))
+        XCTAssertFalse(mainTabView.contains("isHighlighted:"))
+        XCTAssertFalse(mainTabView.contains(".offset(y: tab == .more"))
+    }
+
     func testUpgradeUsesOneAccessibleDismissAction() throws {
         let upgradeView = try contents(of: "Memorable/Views/UpgradeView.swift")
 
@@ -333,6 +448,20 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(sourceManager.contains(".celestialNavigationTitle(\"Photo Sources\")"))
         XCTAssertTrue(theme.contains(".navigationBarTitleDisplayMode(.inline)"))
         XCTAssertTrue(theme.contains(".toolbar(.visible, for: .navigationBar)"))
+    }
+
+    func testPhotoSourcesEmptyFolderStateUsesOneActionableGlassPanel() throws {
+        let sourceManager = try contents(of: "Memorable/Views/SourceManagerView.swift")
+        let emptyFoldersPanel = try sourceSection(
+            in: sourceManager,
+            from: "private var emptyFoldersPanel",
+            to: "private func requestFolderPicker"
+        )
+
+        XCTAssertTrue(emptyFoldersPanel.contains("CelestialGlassIcon("))
+        XCTAssertTrue(emptyFoldersPanel.contains("GlassPanelModifier(cornerRadius: 16)"))
+        XCTAssertTrue(emptyFoldersPanel.contains("Button(action: requestFolderPicker)"))
+        XCTAssertTrue(emptyFoldersPanel.contains("CelestialHairline()"))
     }
 
     func testPushedScreensCannotBypassTheSharedNavigationPolicy() throws {

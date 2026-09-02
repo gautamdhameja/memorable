@@ -39,6 +39,23 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testClearingQueryReturnsToHistoryWithoutDeletingIt() async {
+        let model = makeModel(search: { _ in Self.response(ids: ["surprise-result"]) })
+        model.setSearchHistory(["previous search"])
+        model.setQueryText("hiking trail")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        model.setQueryText("")
+
+        XCTAssertTrue(model.queryText.isEmpty)
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertTrue(model.lastResults.isEmpty)
+        XCTAssertNil(model.lastSearchedQuery)
+        XCTAssertEqual(model.searchHistory, ["previous search"])
+    }
+
+    @MainActor
     func testOnlyNewerSubmittedSearchSupersedesOlderSearch() async throws {
         let searcher = ControlledSearcher()
         let model = makeModel(search: searcher.search)

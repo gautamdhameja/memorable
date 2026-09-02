@@ -14,19 +14,23 @@ enum MainTabDestination: Int {
     var systemImage: String {
         switch self {
         case .search: return "magnifyingglass"
-        case .more: return "line.3.horizontal"
+        case .more: return "ellipsis.circle"
         }
     }
 }
 
 enum PrimaryDockMetrics {
-    static let itemWidth: CGFloat = 76
+    static let itemWidth: CGFloat = 100
     static let surpriseWidth: CGFloat = itemWidth
-    static let itemSpacing: CGFloat = 2
-    static let horizontalPadding: CGFloat = 14
-    static let height: CGFloat = 68
-    static let iconFrame: CGFloat = 32
-    static let iconSize: CGFloat = 18
+    static let itemSpacing: CGFloat = 0
+    static let horizontalPadding: CGFloat = 16
+    static let outerInset: CGFloat = 4
+    static let height: CGFloat = 72
+    static let iconFrame: CGFloat = 30
+    static let iconSize: CGFloat = 20
+    static let outerGlassTintOpacity = 0.16
+    static let selectionGlassTintOpacity = 0.14
+    static let backdropOpacity = 0.52
 
     static var totalWidth: CGFloat {
         (itemWidth * 2) + surpriseWidth + (itemSpacing * 2) + (horizontalPadding * 2)
@@ -36,13 +40,16 @@ enum PrimaryDockMetrics {
 struct MainTabNavigationState {
     var destination: MainTabDestination
     private(set) var surpriseRequestID: Int
+    private(set) var searchHomeRequestID: Int
 
     init(
         destination: MainTabDestination = .search,
-        surpriseRequestID: Int = 0
+        surpriseRequestID: Int = 0,
+        searchHomeRequestID: Int = 0
     ) {
         self.destination = destination
         self.surpriseRequestID = surpriseRequestID
+        self.searchHomeRequestID = searchHomeRequestID
     }
 
     @discardableResult
@@ -50,6 +57,13 @@ struct MainTabNavigationState {
         guard isAvailable else { return false }
         destination = .search
         surpriseRequestID &+= 1
+        return true
+    }
+
+    @discardableResult
+    mutating func requestSearchHome() -> Bool {
+        guard destination == .search else { return false }
+        searchHomeRequestID &+= 1
         return true
     }
 }
@@ -71,7 +85,8 @@ struct MainTabView: View {
                     searchEngine: searchEngine,
                     semanticRuntime: semanticRuntime,
                     captionService: captionService,
-                    surpriseRequestID: navigation.surpriseRequestID
+                    surpriseRequestID: navigation.surpriseRequestID,
+                    searchHomeRequestID: navigation.searchHomeRequestID
                 )
                 .tag(MainTabDestination.search)
             } else {
@@ -105,28 +120,35 @@ struct MainTabView: View {
                 GlassEffectContainer(spacing: PrimaryDockMetrics.itemSpacing) {
                     dockContents
                         .glassEffect(
-                            .regular.tint(Celestial.Colors.surfaceContainerLow.opacity(0.34)),
-                            in: .rect(cornerRadius: 24)
+                            .regular.tint(
+                                Celestial.Colors.surfaceContainerLow.opacity(
+                                    PrimaryDockMetrics.outerGlassTintOpacity
+                                )
+                            ),
+                            in: .rect(cornerRadius: 30)
                         )
                 }
             } else {
                 dockContents
                     .background(.ultraThinMaterial, in: dockShape)
                     .background(
-                        Celestial.Colors.surfaceContainerLow.opacity(0.72),
+                        Celestial.Colors.surfaceContainerLow.opacity(0.42),
                         in: dockShape
-                    )
-                    .overlay(
-                        dockShape.stroke(Color.white.opacity(0.12), lineWidth: 0.75)
                     )
             }
         }
-        .padding(.horizontal, 14)
+        .overlay { dockSpecularOutline }
+        .shadow(color: Color.black.opacity(0.30), radius: 16, y: 8)
+        .shadow(color: Celestial.Colors.primary.opacity(0.07), radius: 12, y: -3)
+        .padding(.horizontal, PrimaryDockMetrics.outerInset)
         .padding(.top, 8)
         .padding(.bottom, 2)
         .background(
             LinearGradient(
-                colors: [Celestial.Colors.background.opacity(0), Celestial.Colors.background.opacity(0.90)],
+                colors: [
+                    Celestial.Colors.background.opacity(0),
+                    Celestial.Colors.background.opacity(PrimaryDockMetrics.backdropOpacity),
+                ],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -167,7 +189,24 @@ struct MainTabView: View {
     }
 
     private var dockShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 24, style: .continuous)
+        RoundedRectangle(cornerRadius: 30, style: .continuous)
+    }
+
+    private var dockSpecularOutline: some View {
+        dockShape
+            .stroke(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.26),
+                        Celestial.Colors.primary.opacity(0.11),
+                        Color.white.opacity(0.025),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 0.8
+            )
+            .allowsHitTesting(false)
     }
 
     private func dockButton(_ tab: MainTabDestination) -> some View {
@@ -175,37 +214,26 @@ struct MainTabView: View {
         let hasNewPhotos = tab == .more && (indexingService?.newPhotosAvailable ?? false)
 
         return Button {
-            guard navigation.destination != tab else { return }
+            if navigation.destination == tab {
+                guard tab == .search else { return }
+                Haptics.selection()
+                withAnimation(.easeOut(duration: 0.16)) {
+                    _ = navigation.requestSearchHome()
+                }
+                return
+            }
             Haptics.selection()
             withAnimation(.easeOut(duration: 0.16)) {
                 navigation.destination = tab
             }
         } label: {
             VStack(spacing: 4) {
-                ZStack {
-                    dockIconLens(isSelected: isSelected)
-
-                    Image(systemName: tab.systemImage)
-                        .font(
-                            .system(
-                                size: PrimaryDockMetrics.iconSize,
-                                weight: isSelected ? .semibold : .medium
-                            )
-                        )
-                        .symbolRenderingMode(.monochrome)
-                        .offset(y: tab == .more ? 2 : 0)
-                        .overlay(alignment: .topTrailing) {
-                            if hasNewPhotos {
-                                Circle()
-                                    .fill(Celestial.Colors.emerald)
-                                    .frame(width: 6, height: 6)
-                                    .offset(x: 4, y: -3)
-                            }
-                        }
-                }
-                .frame(
-                    width: PrimaryDockMetrics.iconFrame,
-                    height: PrimaryDockMetrics.iconFrame
+                PrimaryDockGlyph(
+                    systemName: tab.systemImage,
+                    tint: isSelected
+                        ? Celestial.Colors.primary
+                        : Celestial.Colors.onSurfaceVariant,
+                    showsBadge: hasNewPhotos
                 )
 
                 Text(tab.title)
@@ -214,14 +242,17 @@ struct MainTabView: View {
                             ? Celestial.Typography.microStrong
                             : Celestial.Typography.microEmphasized
                     )
+                    .foregroundStyle(
+                        isSelected
+                            ? Celestial.Colors.primary
+                            : Celestial.Colors.onSurfaceVariant
+                    )
             }
-            .foregroundStyle(
-                isSelected
-                    ? Celestial.Colors.primary
-                    : Celestial.Colors.onSurfaceVariant
-            )
             .frame(width: PrimaryDockMetrics.itemWidth)
-            .frame(minHeight: 56)
+            .frame(height: 60)
+            .background {
+                PrimaryDockSelectionPill(isSelected: isSelected)
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -229,40 +260,77 @@ struct MainTabView: View {
         .accessibilityValue(isSelected ? "Selected" : "")
         .accessibilityHint(hasNewPhotos ? "New photos are available" : "")
     }
+}
+
+private struct PrimaryDockGlyph: View {
+    let systemName: String
+    let tint: Color
+    var showsBadge = false
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: PrimaryDockMetrics.iconSize, weight: .semibold))
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(tint)
+            .frame(width: 24, height: 24)
+        .frame(
+            width: PrimaryDockMetrics.iconFrame,
+            height: PrimaryDockMetrics.iconFrame
+        )
+        .overlay(alignment: .topTrailing) {
+            if showsBadge {
+                Circle()
+                    .fill(Celestial.Colors.emerald)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 1, y: -1)
+            }
+        }
+    }
+}
+
+private struct PrimaryDockSelectionPill: View {
+    let isSelected: Bool
 
     @ViewBuilder
-    private func dockIconLens(isSelected: Bool) -> some View {
-        if #available(iOS 26.0, *) {
-            Circle()
-                .fill(.clear)
-                .frame(width: 32, height: 32)
-                .glassEffect(
-                    .regular.tint(
-                        isSelected
-                            ? Celestial.Colors.primaryDim.opacity(0.22)
-                            : Celestial.Colors.surfaceContainerHigh.opacity(0.10)
-                    ),
-                    in: .circle
-                )
-        } else {
-            Circle()
-                .fill(.ultraThinMaterial)
-                .background(
-                    isSelected
-                        ? Celestial.Colors.primaryDim.opacity(0.18)
-                        : Celestial.Colors.surfaceContainerHigh.opacity(0.10),
-                    in: Circle()
-                )
-                .overlay(
-                    Circle()
-                        .stroke(
-                            isSelected
-                                ? Celestial.Colors.primary.opacity(0.34)
-                                : Color.white.opacity(0.08),
-                            lineWidth: 0.75
+    var body: some View {
+        if isSelected {
+            Group {
+                if #available(iOS 26.0, *) {
+                    Capsule()
+                        .fill(.clear)
+                        .glassEffect(
+                            .regular.tint(
+                                Celestial.Colors.onSurface.opacity(
+                                    PrimaryDockMetrics.selectionGlassTintOpacity
+                                )
+                            ),
+                            in: .capsule
                         )
-                )
-                .frame(width: 32, height: 32)
+                } else {
+                    Capsule()
+                        .fill(.ultraThinMaterial)
+                        .background(
+                            Celestial.Colors.surfaceContainerHighest.opacity(0.46),
+                            in: Capsule()
+                        )
+                }
+            }
+            .overlay {
+                Capsule()
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.22),
+                                Celestial.Colors.primary.opacity(0.08),
+                                Color.white.opacity(0.035),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 0.7
+                    )
+            }
+            .shadow(color: Color.black.opacity(0.18), radius: 7, y: 3)
         }
     }
 }
@@ -307,16 +375,14 @@ private struct SurpriseDockLabel: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            SurpriseDockIcon()
-                .frame(
-                    width: PrimaryDockMetrics.iconFrame,
-                    height: PrimaryDockMetrics.iconFrame
-                )
-                .modifier(
-                    GlassCircleModifier(
-                        tint: Celestial.Colors.amber.opacity(0.16)
-                    )
-                )
+            PrimaryDockGlyph(
+                systemName: "sparkles",
+                tint: Celestial.Colors.amber.opacity(isAvailable ? 1 : 0.38)
+            )
+            .shadow(
+                color: Celestial.Colors.amber.opacity(isAvailable ? 0.38 : 0),
+                radius: isAvailable ? 4 : 0
+            )
 
             Text("Surprise me")
                 .font(Celestial.Typography.microEmphasized)
@@ -327,15 +393,8 @@ private struct SurpriseDockLabel: View {
             Celestial.Colors.amber.opacity(isAvailable ? 1 : 0.38)
         )
         .frame(width: PrimaryDockMetrics.surpriseWidth)
-        .frame(minHeight: 56)
+        .frame(height: 60)
         .contentShape(Rectangle())
-    }
-}
-
-private struct SurpriseDockIcon: View {
-    var body: some View {
-        Image(systemName: "wand.and.stars")
-            .font(.system(size: PrimaryDockMetrics.iconSize, weight: .semibold))
     }
 }
 

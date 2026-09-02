@@ -20,124 +20,53 @@ struct UpgradeView: View {
                         .font(Celestial.Typography.eyebrow)
                         .tracking(1.4)
                         .foregroundStyle(Celestial.Colors.amber)
-                        .padding(.top, 34)
+                        .padding(.top, 26)
 
-                    Text("Search more local\nphotos and videos")
+                    Text("Unlock your whole library")
                         .font(Celestial.Typography.title)
                         .foregroundStyle(Celestial.Colors.onSurface)
-                        .padding(.top, 16)
+                        .padding(.top, 12)
 
-                    Text("Move beyond the free 500-item index and search all photos and videos that are locally available to Memorable.")
-                        .font(Celestial.Typography.body)
+                    Text("Move beyond the free 500-item index and get every way Memorable can help you find the right photo.")
+                        .font(Celestial.Typography.supporting)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        .lineSpacing(5)
-                        .padding(.top, 14)
+                        .lineSpacing(3)
+                        .padding(.top, 10)
 
                     VStack(spacing: 0) {
-                        proFeature("Expanded local search", detail: "Search every locally available indexed photo and video")
-                        proFeature("Find similar", detail: "Start from a photo instead of a description")
-                        proFeature("Find duplicates", detail: "Review near-identical photos before removing either copy")
-                        proFeature("Negative search", detail: "Leave things out, like “beach -crowds”")
-                        proFeature("Folder sources", detail: "Index photos outside the Photos library")
-                        proFeature("Smarter dates and places", detail: "Understand descriptions like “last winter in Berlin”")
+                        proFeature(
+                            "Search everything",
+                            detail: "Every locally available photo and video, including folders",
+                            icon: "photo.stack"
+                        )
+                        proFeature(
+                            "Find exactly what you mean",
+                            detail: "Similar photos, exclusions, natural dates, and places",
+                            icon: "sparkles"
+                        )
+                        proFeature(
+                            "Clean up duplicates",
+                            detail: "Review near-identical photos safely before removing a copy",
+                            icon: "square.on.square"
+                        )
                         CelestialHairline()
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 14)
                     .modifier(
                         GlassPanelModifier(
                             cornerRadius: 20,
                             tint: Celestial.Colors.amber.opacity(0.08)
                         )
                     )
-                    .padding(.top, 30)
-
-                    Text("One-time purchase. No subscription.")
-                        .font(Celestial.Typography.caption)
-                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 30)
-
-                    Button(action: {
-                        Task {
-                            await proManager.purchase()
-                            if proManager.isPro { Haptics.success() }
-                        }
-                    }) {
-                        HStack(spacing: 10) {
-                            if proManager.isPurchasing || proManager.isLoadingProduct {
-                                ProgressView()
-                                    .tint(Celestial.Colors.onPrimaryContainer)
-                                    .controlSize(.regular)
-                            }
-                            if proManager.isPurchasing {
-                                Text("Purchasing Pro...")
-                            } else if proManager.isLoadingProduct {
-                                Text("Connecting to App Store...")
-                            } else if let product = proManager.product {
-                                Text("Unlock Pro · \(product.displayPrice)")
-                            } else if proManager.hasProductLoadFailed {
-                                Text("Try Again")
-                            } else {
-                                Text("Upgrade to Pro")
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .celestialPrimaryButtonStyle(
-                        tint: Celestial.Colors.amber,
-                        foreground: Celestial.Colors.surfaceDim
-                    )
-                    .disabled(proManager.isCommerceBusy)
-                    .accessibilityLabel(
-                        proManager.isPurchasing ? "Purchasing Pro" : "Upgrade to Memorable Pro"
-                    )
-                    .padding(.top, 14)
-
-                    if proManager.hasProductLoadFailed {
-                        Text("Unable to connect to the App Store. Please check your connection and try again.")
-                            .font(Celestial.Typography.caption)
-                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 8)
-                    }
-
-                    Button(action: {
-                        Task { await proManager.restorePurchases() }
-                    }) {
-                        if proManager.isRestoring {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .tint(Celestial.Colors.primaryDim)
-                                    .controlSize(.small)
-                                Text("Restoring Purchase...")
-                            }
-                        } else {
-                            Text("Restore Purchase")
-                        }
-                    }
-                    .celestialSecondaryButtonStyle()
-                    .disabled(proManager.isCommerceBusy)
-                    .accessibilityLabel(
-                        proManager.isRestoring ? "Restoring Purchase" : "Restore Purchase"
-                    )
-
-                    if let message = proManager.restoreMessage {
-                        Text(message)
-                            .font(Celestial.Typography.caption)
-                            .foregroundStyle(message.contains("success") ? Celestial.Colors.primaryDim : Celestial.Colors.onSurfaceVariant)
-                    }
-
-                    if let error = proManager.purchaseError {
-                        Text(error)
-                            .font(Celestial.Typography.caption)
-                            .foregroundStyle(Celestial.Colors.error)
-                            .multilineTextAlignment(.center)
-                    }
-
+                    .padding(.top, 22)
                 }
                 .padding(.horizontal, 26)
-                .padding(.bottom, 24)
+                .padding(.bottom, 20)
             }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            purchaseFooter
         }
         .preferredColorScheme(.dark)
         .overlay(alignment: .topTrailing) {
@@ -160,17 +89,124 @@ struct UpgradeView: View {
         }
     }
 
-    private func proFeature(_ title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(Celestial.Typography.bodyEmphasized)
-                .foregroundStyle(Celestial.Colors.onSurface)
-            Text(detail)
-                .font(Celestial.Typography.caption)
-                .foregroundStyle(Celestial.Colors.outline)
+    private var purchaseFooter: some View {
+        VStack(spacing: 10) {
+            if proManager.hasProductLoadFailed {
+                Text("Couldn't reach the App Store. Check your connection and try again.")
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            }
+
+            if let message = proManager.restoreMessage {
+                Text(message)
+                    .foregroundStyle(
+                        message.contains("success")
+                            ? Celestial.Colors.primaryDim
+                            : Celestial.Colors.onSurfaceVariant
+                    )
+            }
+
+            if let error = proManager.purchaseError {
+                Text(error)
+                    .foregroundStyle(Celestial.Colors.error)
+            }
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("One-time purchase")
+                        .font(Celestial.Typography.captionStrong)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                    Text("No subscription")
+                        .font(Celestial.Typography.micro)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                }
+
+                Spacer(minLength: 8)
+
+                Button(action: {
+                    Task { await proManager.restorePurchases() }
+                }) {
+                    HStack(spacing: 6) {
+                        if proManager.isRestoring {
+                            ProgressView()
+                                .tint(Celestial.Colors.amber)
+                                .controlSize(.small)
+                        }
+                        Text(proManager.isRestoring ? "Restoring..." : "Restore")
+                    }
+                }
+                .celestialGlassCapsuleButtonStyle(
+                    tint: Celestial.Colors.amber.opacity(0.18),
+                    foreground: Celestial.Colors.amber
+                )
+                .disabled(proManager.isCommerceBusy)
+                .accessibilityLabel(
+                    proManager.isRestoring ? "Restoring Purchase" : "Restore Purchase"
+                )
+            }
+
+            Button(action: {
+                Task {
+                    await proManager.purchase()
+                    if proManager.isPro { Haptics.success() }
+                }
+            }) {
+                HStack(spacing: 10) {
+                    if proManager.isPurchasing || proManager.isLoadingProduct {
+                        ProgressView()
+                            .tint(Celestial.Colors.onPrimaryContainer)
+                            .controlSize(.regular)
+                    }
+                    if proManager.isPurchasing {
+                        Text("Purchasing Pro...")
+                    } else if proManager.isLoadingProduct {
+                        Text("Connecting to App Store...")
+                    } else if let product = proManager.product {
+                        Text("Unlock Pro · \(product.displayPrice)")
+                    } else if proManager.hasProductLoadFailed {
+                        Text("Try Again")
+                    } else {
+                        Text("Upgrade to Pro")
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .celestialPrimaryButtonStyle(
+                tint: Celestial.Colors.amber,
+                foreground: Celestial.Colors.surfaceDim
+            )
+            .disabled(proManager.isCommerceBusy)
+            .accessibilityLabel(
+                proManager.isPurchasing ? "Purchasing Pro" : "Upgrade to Memorable Pro"
+            )
+        }
+        .font(Celestial.Typography.caption)
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 26)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) { CelestialHairline() }
+    }
+
+    private func proFeature(_ title: String, detail: String, icon: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            CelestialGlassIcon(
+                systemName: icon,
+                tint: Celestial.Colors.amber,
+                size: 32
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(Celestial.Typography.supportingEmphasized)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text(detail)
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.outline)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 16)
+        .padding(.vertical, 13)
         .overlay(alignment: .top) { CelestialHairline() }
     }
 }

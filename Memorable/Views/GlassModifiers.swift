@@ -1,22 +1,42 @@
 import SwiftUI
 
+enum CelestialGlassTokens {
+    static let searchTintOpacity = 0.16
+    static let panelTintOpacity = 0.18
+    static let circleTintOpacity = 0.16
+    static let interactiveHighlightOpacity = 0.22
+    static let passiveHighlightOpacity = 0.16
+    static let shadowOpacity = 0.18
+}
+
 struct GlassSearchBarModifier: ViewModifier {
     var cornerRadius: CGFloat = Celestial.sharedCornerRadius
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
         if #available(iOS 26.0, *) {
             content
                 .glassEffect(
-                    .regular.tint(Celestial.Colors.surfaceContainer.opacity(0.34)),
+                    .regular.tint(
+                        Celestial.Colors.surfaceContainer.opacity(
+                            CelestialGlassTokens.searchTintOpacity
+                        )
+                    ),
                     in: .rect(cornerRadius: cornerRadius)
+                )
+                .celestialGlassChrome(
+                    in: shape,
+                    highlightOpacity: CelestialGlassTokens.interactiveHighlightOpacity,
+                    shadowRadius: 12,
+                    shadowY: 5
                 )
         } else {
             content
                 .celestialMaterialSurface(
                     cornerRadius: cornerRadius,
-                    tint: Celestial.Colors.surfaceContainer.opacity(0.58),
-                    stroke: Celestial.Colors.primaryDim.opacity(0.30)
+                    tint: Celestial.Colors.surfaceContainer.opacity(0.42)
                 )
         }
     }
@@ -24,29 +44,40 @@ struct GlassSearchBarModifier: ViewModifier {
 
 struct GlassPanelModifier: ViewModifier {
     var cornerRadius: CGFloat = 20
-    var tint: Color = Celestial.Colors.surfaceContainerLow.opacity(0.30)
+    var tint: Color = Celestial.Colors.surfaceContainerLow.opacity(
+        CelestialGlassTokens.panelTintOpacity
+    )
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
         if #available(iOS 26.0, *) {
             content
                 .glassEffect(
                     .regular.tint(tint),
                     in: .rect(cornerRadius: cornerRadius)
                 )
+                .celestialGlassChrome(
+                    in: shape,
+                    highlightOpacity: CelestialGlassTokens.passiveHighlightOpacity,
+                    shadowRadius: 11,
+                    shadowY: 5
+                )
         } else {
             content
                 .celestialMaterialSurface(
                     cornerRadius: cornerRadius,
-                    tint: tint.opacity(0.72),
-                    stroke: Celestial.Colors.hairline
+                    tint: tint.opacity(0.62)
                 )
         }
     }
 }
 
 struct GlassCircleModifier: ViewModifier {
-    var tint: Color = Celestial.Colors.surfaceContainerLow.opacity(0.30)
+    var tint: Color = Celestial.Colors.surfaceContainerLow.opacity(
+        CelestialGlassTokens.circleTintOpacity
+    )
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -56,13 +87,21 @@ struct GlassCircleModifier: ViewModifier {
                     .regular.tint(tint),
                     in: .circle
                 )
+                .celestialGlassChrome(
+                    in: Circle(),
+                    highlightOpacity: CelestialGlassTokens.interactiveHighlightOpacity,
+                    shadowRadius: 7,
+                    shadowY: 3
+                )
         } else {
             content
                 .background(.ultraThinMaterial, in: Circle())
-                .background(tint.opacity(0.74), in: Circle())
-                .overlay(
-                    Circle()
-                        .stroke(Color.white.opacity(0.15), lineWidth: 0.75)
+                .background(tint.opacity(0.58), in: Circle())
+                .celestialGlassChrome(
+                    in: Circle(),
+                    highlightOpacity: CelestialGlassTokens.interactiveHighlightOpacity,
+                    shadowRadius: 7,
+                    shadowY: 3
                 )
         }
     }
@@ -320,13 +359,21 @@ struct GlassCapsuleModifier: ViewModifier {
                     .regular.tint(tint),
                     in: .capsule
                 )
+                .celestialGlassChrome(
+                    in: Capsule(),
+                    highlightOpacity: CelestialGlassTokens.interactiveHighlightOpacity,
+                    shadowRadius: 7,
+                    shadowY: 3
+                )
         } else {
             content
                 .background(.ultraThinMaterial, in: Capsule())
                 .background(tint, in: Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(Color.white.opacity(0.16), lineWidth: 0.75)
+                .celestialGlassChrome(
+                    in: Capsule(),
+                    highlightOpacity: CelestialGlassTokens.interactiveHighlightOpacity,
+                    shadowRadius: 7,
+                    shadowY: 3
                 )
         }
     }
@@ -335,13 +382,46 @@ struct GlassCapsuleModifier: ViewModifier {
 private extension View {
     func celestialMaterialSurface(
         cornerRadius: CGFloat,
-        tint: Color,
-        stroke: Color
+        tint: Color
     ) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
         return background(.ultraThinMaterial, in: shape)
             .background(tint, in: shape)
-            .overlay(shape.stroke(stroke, lineWidth: 0.75))
+            .celestialGlassChrome(
+                in: shape,
+                highlightOpacity: CelestialGlassTokens.passiveHighlightOpacity,
+                shadowRadius: 10,
+                shadowY: 4
+            )
+    }
+
+    func celestialGlassChrome<S: Shape>(
+        in shape: S,
+        highlightOpacity: Double,
+        shadowRadius: CGFloat,
+        shadowY: CGFloat
+    ) -> some View {
+        overlay {
+            shape
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(highlightOpacity),
+                            Celestial.Colors.primary.opacity(highlightOpacity * 0.36),
+                            Color.white.opacity(highlightOpacity * 0.12),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.75
+                )
+                .allowsHitTesting(false)
+        }
+        .shadow(
+            color: Color.black.opacity(CelestialGlassTokens.shadowOpacity),
+            radius: shadowRadius,
+            y: shadowY
+        )
     }
 }

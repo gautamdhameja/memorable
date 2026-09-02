@@ -12,6 +12,10 @@ struct SourceManagerView: View {
     @State private var deleteError: String?
     @ObservedObject private var proManager = ProManager.shared
 
+    private var folderSources: [PhotoSource] {
+        sources.filter { $0.type == PhotoSourceType.folder.rawValue }
+    }
+
     var body: some View {
         ZStack {
             CelestialBackdrop()
@@ -61,91 +65,87 @@ struct SourceManagerView: View {
                 }
 
                 Section {
-                    if sources.filter({ $0.type == PhotoSourceType.folder.rawValue }).isEmpty {
-                        Text("No folders added")
-                            .font(Celestial.Typography.supporting)
-                            .foregroundStyle(Celestial.Colors.outline)
+                    if folderSources.isEmpty {
+                        emptyFoldersPanel
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    } else {
+                        ForEach(folderSources) { source in
+                            HStack(spacing: 14) {
+                                CelestialGlassIcon(
+                                    systemName: "folder",
+                                    tint: Celestial.Colors.tertiaryDim,
+                                    size: 34
+                                )
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(source.name)
+                                        .font(Celestial.Typography.bodyEmphasized)
+                                        .foregroundStyle(Celestial.Colors.onSurface)
+                                    Text("\(source.photoCount) photos")
+                                        .font(Celestial.Typography.caption)
+                                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                }
+                                Spacer()
+                                Button {
+                                    if ProFeatureAccessPolicy(isPro: proManager.isPro)
+                                        .allowsFolderRefresh {
+                                        indexingService.reindexFolderSource(source)
+                                    } else {
+                                        showUpgrade = true
+                                    }
+                                } label: {
+                                    Image(
+                                        systemName: proManager.isPro
+                                            ? "arrow.clockwise.circle"
+                                            : "lock.circle"
+                                    )
+                                    .foregroundStyle(
+                                        proManager.isPro
+                                            ? Celestial.Colors.primaryDim
+                                            : Celestial.Colors.amber
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(indexingService.progress.isRunning)
+                                .accessibilityLabel(
+                                    proManager.isPro
+                                        ? "Refresh \(source.name)"
+                                        : "Refresh \(source.name), Pro feature"
+                                )
+                            }
                             .padding(12)
                             .modifier(GlassPanelModifier(cornerRadius: 16))
                             .listRowBackground(Color.clear)
-                    }
-
-                    ForEach(sources.filter { $0.type == PhotoSourceType.folder.rawValue }) { source in
-                        HStack(spacing: 14) {
-                            CelestialGlassIcon(
-                                systemName: "folder",
-                                tint: Celestial.Colors.tertiaryDim,
-                                size: 34
-                            )
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(source.name)
-                                    .font(Celestial.Typography.bodyEmphasized)
-                                    .foregroundStyle(Celestial.Colors.onSurface)
-                                Text("\(source.photoCount) photos")
-                                    .font(Celestial.Typography.caption)
-                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                            }
-                            Spacer()
-                            Button {
-                                if ProFeatureAccessPolicy(isPro: proManager.isPro)
-                                    .allowsFolderRefresh {
-                                    indexingService.reindexFolderSource(source)
-                                } else {
-                                    showUpgrade = true
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        }
+                        .onDelete { offsets in
+                            let selectedSources = offsets.map { folderSources[$0] }
+                            Task {
+                                for source in selectedSources {
+                                    do {
+                                        try await indexingService.deleteFolderSource(id: source.id)
+                                    } catch {
+                                        deleteError = "Failed to delete \(source.name): \(error.localizedDescription)"
+                                        logger.error("Failed to delete a source: \(error.safeDiagnosticCode)")
+                                    }
                                 }
-                            } label: {
-                                Image(
-                                    systemName: proManager.isPro
-                                        ? "arrow.clockwise.circle"
-                                        : "lock.circle"
-                                )
-                                .foregroundStyle(
-                                    proManager.isPro
-                                        ? Celestial.Colors.primaryDim
-                                        : Celestial.Colors.amber
-                                )
+                                await loadSources()
                             }
-                            .buttonStyle(.plain)
-                            .disabled(indexingService.progress.isRunning)
-                            .accessibilityLabel(
-                                proManager.isPro
-                                    ? "Refresh \(source.name)"
-                                    : "Refresh \(source.name), Pro feature"
+                        }
+
+                        Button(action: requestFolderPicker) {
+                            Label(
+                                proManager.isPro ? "Add Folder" : "Add Folder (Pro)",
+                                systemImage: "plus.circle"
                             )
                         }
-                        .padding(12)
-                        .modifier(GlassPanelModifier(cornerRadius: 16))
+                        .celestialSecondaryButtonStyle()
                         .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        .listRowSeparator(.hidden)
+                        .disabled(!database.allowsIndexingWrites)
                     }
-                    .onDelete { offsets in
-                        let folderSources = sources.filter { $0.type == PhotoSourceType.folder.rawValue }
-                        let selectedSources = offsets.map { folderSources[$0] }
-                        Task {
-                            for source in selectedSources {
-                                do {
-                                    try await indexingService.deleteFolderSource(id: source.id)
-                                } catch {
-                                    deleteError = "Failed to delete \(source.name): \(error.localizedDescription)"
-                                    logger.error("Failed to delete a source: \(error.safeDiagnosticCode)")
-                                }
-                            }
-                            await loadSources()
-                        }
-                    }
-
-                    Button(action: {
-                        if proManager.isPro {
-                            showFolderPicker = true
-                        } else {
-                            showUpgrade = true
-                        }
-                    }) {
-                        Label(proManager.isPro ? "Add Folder" : "Add Folder (Pro)", systemImage: "plus.circle")
-                    }
-                    .celestialSecondaryButtonStyle()
-                    .listRowBackground(Color.clear)
-                    .disabled(!database.allowsIndexingWrites)
                 } header: {
                     Text("Folders")
                         .font(Celestial.Typography.eyebrow)
@@ -193,6 +193,63 @@ struct SourceManagerView: View {
             }
         } message: {
             Text(deleteError ?? indexingService.folderIndexingError ?? "")
+        }
+    }
+
+    private var emptyFoldersPanel: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                CelestialGlassIcon(
+                    systemName: "folder",
+                    tint: Celestial.Colors.onSurfaceVariant,
+                    size: 34
+                )
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("No folders yet")
+                        .font(Celestial.Typography.bodyEmphasized)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                    Text("Add photos stored outside Apple Photos")
+                        .font(Celestial.Typography.caption)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 68)
+
+            CelestialHairline()
+                .padding(.leading, 46)
+
+            Button(action: requestFolderPicker) {
+                HStack(spacing: 10) {
+                    Image(systemName: proManager.isPro ? "plus" : "lock")
+                        .font(Celestial.Typography.captionStrong)
+                    Text(proManager.isPro ? "Add Folder" : "Add Folder · Pro")
+                        .font(Celestial.Typography.supportingEmphasized)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(Celestial.Typography.captionStrong)
+                        .foregroundStyle(Celestial.Colors.outlineVariant)
+                }
+                .foregroundStyle(
+                    proManager.isPro
+                        ? Celestial.Colors.primaryDim
+                        : Celestial.Colors.amber
+                )
+                .frame(minHeight: 54)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!database.allowsIndexingWrites)
+        }
+        .padding(.horizontal, 12)
+        .modifier(GlassPanelModifier(cornerRadius: 16))
+    }
+
+    private func requestFolderPicker() {
+        if proManager.isPro {
+            showFolderPicker = true
+        } else {
+            showUpgrade = true
         }
     }
 

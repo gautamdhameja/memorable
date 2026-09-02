@@ -8,6 +8,7 @@ struct SearchView: View {
     @ObservedObject var semanticRuntime: SemanticSearchRuntime
     let captionService: PhotoCaptionService
     let surpriseRequestID: Int
+    let searchHomeRequestID: Int
 
     @StateObject private var viewModel: SearchViewModel
     @State private var selectedPhoto: SearchResult?
@@ -40,13 +41,15 @@ struct SearchView: View {
         searchEngine: SearchEngine,
         semanticRuntime: SemanticSearchRuntime,
         captionService: PhotoCaptionService,
-        surpriseRequestID: Int
+        surpriseRequestID: Int,
+        searchHomeRequestID: Int
     ) {
         self.indexingService = indexingService
         self.searchEngine = searchEngine
         self.semanticRuntime = semanticRuntime
         self.captionService = captionService
         self.surpriseRequestID = surpriseRequestID
+        self.searchHomeRequestID = searchHomeRequestID
         _viewModel = StateObject(wrappedValue: SearchViewModel(dependencies: .init(
             prioritizeUserSearch: { indexingService.prioritizeUserSearch() },
             isSemanticSearchReady: { semanticRuntime.readiness.isSemanticSearchReady },
@@ -373,6 +376,10 @@ struct SearchView: View {
             }
             .onChange(of: surpriseRequestID) { _, _ in
                 performSurpriseSearch()
+            }
+            .onChange(of: searchHomeRequestID) { _, _ in
+                cancelFindSimilar()
+                viewModel.setQueryText("")
             }
             .onChange(of: scenePhase) {
                 if scenePhase == .active {
