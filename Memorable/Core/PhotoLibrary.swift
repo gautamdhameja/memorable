@@ -458,9 +458,18 @@ class PhotoLibrary {
         return await PHPhotoLibrary.requestAuthorization(for: .readWrite)
     }
 
-    // Get a UIImage from a PHAsset at a specific size for embedding
-    static func loadImage(for asset: PHAsset, targetSize: CGSize = CGSize(width: 224, height: 224)) async -> UIImage? {
-        await requestImage(for: asset, targetSize: targetSize, contentMode: .aspectFill, options: imageRequestOptions())
+    // Get a UIImage from a PHAsset at a specific size.
+    static func loadImage(
+        for asset: PHAsset,
+        targetSize: CGSize = CGSize(width: 224, height: 224),
+        contentMode: PHImageContentMode = .aspectFill
+    ) async -> UIImage? {
+        await requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: contentMode,
+            options: imageRequestOptions()
+        )
     }
 
     /// Loads either a PhotoKit result or a validated security-scoped folder
@@ -468,6 +477,30 @@ class PhotoLibrary {
     static func loadImage(
         for result: SearchResult,
         targetSize: CGSize
+    ) async -> UIImage? {
+        await loadImage(
+            for: result,
+            targetSize: targetSize,
+            photoContentMode: .aspectFill
+        )
+    }
+
+    /// Loads a display-sized image without cropping its original aspect ratio.
+    static func loadPreviewImage(
+        for result: SearchResult,
+        targetSize: CGSize
+    ) async -> UIImage? {
+        await loadImage(
+            for: result,
+            targetSize: targetSize,
+            photoContentMode: .aspectFit
+        )
+    }
+
+    private static func loadImage(
+        for result: SearchResult,
+        targetSize: CGSize,
+        photoContentMode: PHImageContentMode
     ) async -> UIImage? {
         if result.sourceId != PhotoSourceType.photokit.rawValue {
             let isPro = await MainActor.run { ProManager.shared.isPro }
@@ -493,7 +526,11 @@ class PhotoLibrary {
                 targetSize: targetSize
             )
         }
-        return await loadImage(for: asset, targetSize: targetSize)
+        return await loadImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: photoContentMode
+        )
     }
 
     // Get a UIImage from a PHAsset for indexing. Embedding quality depends on

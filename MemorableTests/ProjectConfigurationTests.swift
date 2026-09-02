@@ -409,6 +409,31 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(facets.contains("GlassCapsuleModifier("))
     }
 
+    func testSearchResultsScrollUsesContentSizedBounceAndInteractiveKeyboardDismissal() throws {
+        let searchView = try contents(of: "Memorable/Views/SearchView.swift")
+        let resultsScroll = try sourceSection(
+            in: searchView,
+            from: "ScrollView {",
+            to: "} // VStack"
+        )
+
+        XCTAssertTrue(resultsScroll.contains(".scrollBounceBehavior(.basedOnSize)"))
+        XCTAssertTrue(resultsScroll.contains(".scrollDismissesKeyboard(.interactively)"))
+    }
+
+    func testPhotoViewerRequestsAnUncroppedPreviewImage() throws {
+        let photoLibrary = try contents(of: "Memorable/Core/PhotoLibrary.swift")
+        let previewLoader = try sourceSection(
+            in: photoLibrary,
+            from: "static func loadPreviewImage(",
+            to: "private static func loadImage("
+        )
+        let zoomableImage = try contents(of: "Memorable/Views/ZoomableAsyncImage.swift")
+
+        XCTAssertTrue(previewLoader.contains("photoContentMode: .aspectFit"))
+        XCTAssertTrue(zoomableImage.contains("PhotoLibrary.loadPreviewImage("))
+    }
+
     func testValidatedSuggestionsAreExclusiveWithSearchHistory() throws {
         let searchView = try contents(of: "Memorable/Views/SearchView.swift")
         let homeView = try sourceSection(

@@ -256,6 +256,8 @@ struct SearchView: View {
                             .padding(.bottom, 40)
                         }
                     }
+                    .scrollDismissesKeyboard(.interactively)
+                    .scrollBounceBehavior(.basedOnSize)
                 } // VStack
             }
             .toolbar(.hidden, for: .navigationBar)

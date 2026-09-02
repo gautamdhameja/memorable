@@ -154,7 +154,7 @@ struct ZoomableAsyncImage: View {
         imageLoadGeneration &+= 1
         let generation = imageLoadGeneration
         let targetSize = displayTargetSize()
-        let loaded = await PhotoLibrary.loadImage(for: result, targetSize: targetSize)
+        let loaded = await PhotoLibrary.loadPreviewImage(for: result, targetSize: targetSize)
         if ImageLoadGenerationPolicy.acceptsCompletion(
             startedGeneration: generation,
             currentGeneration: imageLoadGeneration,
