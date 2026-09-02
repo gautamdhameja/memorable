@@ -264,7 +264,7 @@ struct MoreView: View {
                 }
             } else {
                 Button(action: { showUpgrade = true }) {
-                    HStack {
+                    HStack(spacing: 14) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Memorable Pro")
                                 .font(Celestial.Typography.bodyEmphasized)
@@ -272,13 +272,25 @@ struct MoreView: View {
                             Text("Search all locally available media. One-time purchase.")
                                 .font(Celestial.Typography.caption)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                .multilineTextAlignment(.leading)
                         }
-                        Spacer()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
                         Text("Upgrade")
                             .font(Celestial.Typography.button)
                             .foregroundStyle(Celestial.Colors.amber)
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 36)
+                            .modifier(
+                                GlassCapsuleModifier(
+                                    tint: Celestial.Colors.amber.opacity(0.12)
+                                )
+                            )
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
         }
         .padding(18)
