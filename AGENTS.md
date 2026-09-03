@@ -62,7 +62,7 @@ When I report a bug, follow this exact sequence:
 
 ## App overview
 
-**Memorable** -- on-device AI photo and video search for iOS. Uses SigLIP2 (Google, Apache 2.0 licensed) to encode locally available photos, video frames, and query text into embeddings. It stores embeddings and searchable metadata in SQLite. The app has no developer-operated backend, analytics, telemetry, tracking, automatic media or query upload, or crash-log uploader. A photo is copied unchanged to another app or service only after the user taps Share and chooses a destination; the file can include source metadata. AI models are bundled in the app. Indexed media coordinates can be reverse-geocoded with CLGeocoder; photo contents and search queries are not sent with those requests.
+**Memorable** -- on-device AI photo and video search for iOS. Uses SigLIP2 (Google, Apache 2.0 licensed) to encode locally available photos, video frames, and query text into embeddings. It stores embeddings and searchable metadata in SQLite. The app has no developer-operated backend, analytics, telemetry, tracking, automatic media or query upload, or crash-log uploader. A photo is copied unchanged to another app or service only after the user taps Share and chooses a destination; the file can include source metadata. AI models are bundled in the app. Indexed media coordinates can be reverse-geocoded with Apple's MapKit/Core Location service; photo contents and search queries are not sent with those requests.
 
 - Bundle ID: `com.blockdeep.memorable` (change for personal signing)
 - Minimum: iOS 17.0, iPhone with A14 chip
@@ -185,7 +185,7 @@ In `loadAllVideoEmbeddings()`, metadata (videoId, localId, date, position) must 
 User query
   → QueryParser (Foundation Models on iOS 26+, else NSDataDetector + NLTagger)
   → Extract: visual text, date range, location name, negative terms
-  → Match location text locally against stored reverse-geocoded metadata
+  → Match location text locally against stored metadata and bundled GPS geometry
   → Direct text encoding via SigLIP2 (no prompt templates, raw query only)
   → Score the resident fast window, then any remaining 512-media database pages
   → Location/time-of-day/OCR/scene-label boosts (additive, tuned for SigLIP2)
@@ -207,6 +207,8 @@ Two-pass indexing: photos first, then videos.
 
 **Deferred enrichment:** After base indexing is idle, incomplete photo rows are enriched in bounded batches with OCR, screenshot OCR, blur scoring, and scene labels. Enrichment state is persisted per photo; folder-source enrichment reopens the saved security-scoped bookmark and validates paths before reading files.
 
+**Location enrichment:** GPS-bearing media is searchable by unambiguous city, region, and country before reverse geocoding completes, using a bundled read-only gazetteer and local point-in-polygon checks. While the app is active, deferred reverse geocoding groups nearby coordinates, reuses a persistent cache, writes metadata in batches, and retries transient failures with bounded backoff. It cancels when the app becomes inactive.
+
 ## Design system -- Celestial theme
 
 Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.swift`. New York serif is reserved for the Memorable brand, memories, onboarding storytelling, and editorial moments. SF Pro is used for navigation, utility headings, controls, body copy, captions, and technical UI. All text roles use semantic Dynamic Type styles. Pushed and modal navigation screens use the shared inline `celestialNavigationTitle` treatment. Custom elements include the capsule search bar, rounded thumbnails, and Liquid Glass surfaces.
@@ -217,7 +219,7 @@ Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.sw
 - In DEBUG builds: `isPro = true` (all features unlocked for testing)
 - In RELEASE: `isPro = false` until StoreKit purchase verified
 - Free tier: 500 indexed photos/videos, basic search only
-- Pro: all locally available indexed media, Find Similar, negative search, up to 32 newly added folder sources, smart query parsing, and date/location boost
+- Pro: all locally available indexed media, Find Similar, negative search, up to 32 newly added folder sources, smart query parsing, and date/location filters
 - Search keeps 8,000 media items in the resident fast window and scans remaining media in bounded 512-media database pages
 - Existing installations with more than 32 folder sources keep all sources visible and removable
 - Refund handling: `verifyEntitlement()` checks `revocationDate` on every launch

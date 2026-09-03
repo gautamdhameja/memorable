@@ -493,13 +493,23 @@ protocol DatabaseProtocol: Sendable {
     ) throws -> FreeTierReconciliationResult
 
     // Location backfill
-    func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
-    func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
+    func photosNeedingLocationBackfill(
+        after localIdentifier: String?,
+        limit: Int
+    ) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
+    func videosNeedingLocationBackfill(
+        after localIdentifier: String?,
+        limit: Int
+    ) throws -> [(localIdentifier: String, lat: Double, lon: Double)]
     func geocodingCounts() throws -> GeocodingCounts
     func updatePhotoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws
     func updateVideoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws
     func updatePhotoLocations(_ updates: [LocationBackfillUpdate]) throws
     func updateVideoLocations(_ updates: [LocationBackfillUpdate]) throws
+    func deferPhotoLocationBackfill(localIdentifiers: [String], until: Date) throws
+    func deferVideoLocationBackfill(localIdentifiers: [String], until: Date) throws
+    func reverseGeocodeLocations(bucketKeys: [String]) throws -> [String: LocationStrings]
+    func saveReverseGeocodeLocation(_ location: LocationStrings, bucketKey: String) throws
 
     // Sources
     func insertSource(_ source: PhotoSource) throws
@@ -1345,6 +1355,50 @@ final class AppDatabase: DatabaseProtocol, Sendable {
                 on: "indexed_photos",
                 columns: ["isScreenshot", "isDocumentImage", "creationDate"]
             )
+        }
+
+        // Reuse reverse-geocoded location strings across launches and across
+        // media captured in the same approximately one-kilometer coordinate cell.
+        migrator.registerMigration("v12-persistent-reverse-geocode-cache") { db in
+            try db.create(table: "reverse_geocode_cache") { t in
+                t.column("bucketKey", .text).primaryKey()
+                t.column("city", .text)
+                t.column("state", .text)
+                t.column("country", .text)
+                t.column("name", .text)
+                t.column("resolvedAt", .datetime).notNull()
+            }
+        }
+
+        // Geocoding walks unresolved rows in stable identifier order. Partial
+        // indexes keep that keyset scan bounded even for very large libraries.
+        migrator.registerMigration("v13-geocoding-keyset-indexes") { db in
+            try db.execute(
+                sql: """
+                    CREATE INDEX idx_photos_pending_geocoding
+                    ON indexed_photos(localIdentifier)
+                    WHERE latitude BETWEEN -90 AND 90
+                      AND longitude BETWEEN -180 AND 180
+                      AND (locationCity IS NULL OR locationCity = '');
+                    CREATE INDEX idx_videos_pending_geocoding
+                    ON indexed_videos(localIdentifier)
+                    WHERE latitude BETWEEN -90 AND 90
+                      AND longitude BETWEEN -180 AND 180
+                      AND (locationCity IS NULL OR locationCity = '')
+                """
+            )
+        }
+
+        // Persist explicit geocoder no-result outcomes. These rows are omitted
+        // from pending work until a deliberate retry date, so one permanently
+        // unresolvable coordinate cannot keep progress visible across launches.
+        migrator.registerMigration("v14-geocoding-no-result-retry") { db in
+            try db.alter(table: "indexed_photos") { t in
+                t.add(column: "locationRetryAfter", .datetime)
+            }
+            try db.alter(table: "indexed_videos") { t in
+                t.add(column: "locationRetryAfter", .datetime)
+            }
         }
 
         return migrator

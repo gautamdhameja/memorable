@@ -11,7 +11,9 @@ struct MemorableApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if appState.isDeviceSupported {
+                if isSimulatorDatasetHarnessProcess {
+                    Color.black.ignoresSafeArea()
+                } else if appState.isDeviceSupported {
                     ContentView()
                 } else {
                     UnsupportedDeviceView()
@@ -25,6 +27,14 @@ struct MemorableApp: App {
                 appState.handleMemoryWarning()
             }
         }
+    }
+
+    private var isSimulatorDatasetHarnessProcess: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        ProcessInfo.processInfo.environment["MEMORABLE_DATASET_HARNESS"] == "1"
+        #else
+        false
+        #endif
     }
 }
 
@@ -80,6 +90,7 @@ class AppState: ObservableObject {
     private var captionPreparationTask: Task<Void, Never>?
     private var modelPrewarmTask: Task<PrewarmedModels, Error>?
     private var modelPrewarmGeneration: UInt64 = 0
+    private var isApplicationActive = false
     private let requestPhotoAuthorization: () async -> PHAuthorizationStatus
     private let currentPhotoAuthorization: () -> PHAuthorizationStatus
     private let deviceSupportProvider: () -> Bool
@@ -133,6 +144,11 @@ class AppState: ObservableObject {
             isInitializing: isInitializing
         ) else { return }
         await initialize(knownAuthorizationStatus: refreshedStatus)
+    }
+
+    func setApplicationActive(_ isActive: Bool) {
+        isApplicationActive = isActive
+        indexingService?.setApplicationActive(isActive)
     }
 
     private func initialize(knownAuthorizationStatus: PHAuthorizationStatus?) async {
@@ -316,6 +332,7 @@ class AppState: ObservableObject {
                 searchEngine = search
                 indexingService = indexing
                 wireIndexingCallbacks(indexing)
+                indexing.setApplicationActive(isApplicationActive)
                 semanticRuntime.markSemanticModelReady()
                 semanticRuntime.markIndexWarming(
                     promoted: currentWarmupPriority == .userInitiatedSearch

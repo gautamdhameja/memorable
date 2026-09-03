@@ -1,6 +1,7 @@
 import XCTest
 import GRDB
 import os
+import CoreLocation
 @testable import Memorable
 
 private final class FailingResetFileManager: FileManager, @unchecked Sendable {
@@ -381,6 +382,402 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(geocodingCounts.remaining, 0)
         XCTAssertEqual(geocodingCounts.indexedPhotos, 1)
         XCTAssertEqual(geocodingCounts.indexedVideos, 1)
+    }
+
+    func testReverseGeocodeCachePersistsResolvedLocationByCoordinateBucket() throws {
+        let queue = try DatabaseQueue()
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let location = LocationStrings(
+            city: "San Francisco",
+            state: "CA",
+            country: "United States",
+            name: "Mission District"
+        )
+
+        try database.saveReverseGeocodeLocation(location, bucketKey: "37.77,-122.42")
+        let cached = try XCTUnwrap(database.reverseGeocodeLocation(bucketKey: "37.77,-122.42"))
+
+        XCTAssertEqual(cached.city, "San Francisco")
+        XCTAssertEqual(cached.state, "CA")
+        XCTAssertEqual(cached.country, "United States")
+        XCTAssertEqual(cached.name, "Mission District")
+        XCTAssertNil(try database.reverseGeocodeLocation(bucketKey: "48.85,2.35"))
+
+        try database.saveReverseGeocodeLocation(location, bucketKey: "second-bucket")
+        XCTAssertEqual(
+            Set(try database.reverseGeocodeLocations(
+                bucketKeys: ["37.77,-122.42", "second-bucket", "missing"]
+            ).keys),
+            Set(["37.77,-122.42", "second-bucket"])
+        )
+
+        try queue.write { db in
+            try db.execute(
+                sql: "UPDATE reverse_geocode_cache SET resolvedAt = ? WHERE bucketKey = ?",
+                arguments: [Date.distantPast, "37.77,-122.42"]
+            )
+        }
+        XCTAssertNil(try database.reverseGeocodeLocation(bucketKey: "37.77,-122.42"))
+    }
+
+    func testLocationBackfillUsesStableKeysetPagination() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var photos = ["photo-a", "photo-b", "photo-c"].map {
+            makePhoto(localIdentifier: $0)
+        }
+        for index in photos.indices {
+            photos[index].latitude = 37.77 + Double(index) * 0.01
+            photos[index].longitude = -122.42
+        }
+        try database.insertPhotos(photos, completingRequiredRebuild: false)
+
+        let firstPage = try database.photosNeedingLocationBackfill(after: nil, limit: 2)
+        let secondPage = try database.photosNeedingLocationBackfill(
+            after: firstPage.last?.localIdentifier,
+            limit: 2
+        )
+
+        XCTAssertEqual(firstPage.map(\.localIdentifier), ["photo-a", "photo-b"])
+        XCTAssertEqual(secondPage.map(\.localIdentifier), ["photo-c"])
+    }
+
+    @MainActor
+    func testGeocodingWorkerResolvesOneRequestForMediaInSameCoordinateBucket() async throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var first = makePhoto(localIdentifier: "nearby-1")
+        first.latitude = 37.77490
+        first.longitude = -122.41940
+        var second = makePhoto(localIdentifier: "nearby-2")
+        second.latitude = 37.77491
+        second.longitude = -122.41941
+        try database.insertPhotos([first, second], completingRequiredRebuild: false)
+        let backend = CountingLocationGeocoder()
+        let worker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0),
+            fetchBatchSize: 10,
+            writeBatchSize: 2
+        )
+
+        var progressSnapshots: [GeocodingProgressSnapshot] = []
+        let result = await worker.run { progressSnapshots.append($0) }
+
+        XCTAssertFalse(result.wasCancelled)
+        XCTAssertEqual(result.completed, 2)
+        XCTAssertEqual(backend.requestCount, 1)
+        XCTAssertEqual(try database.geocodingCounts().remaining, 0)
+        XCTAssertEqual(progressSnapshots.last?.completed, 2)
+        XCTAssertEqual(progressSnapshots.last?.total, 2)
+    }
+
+    @MainActor
+    func testFailedCoordinateDoesNotBlockLaterGeocodingPages() async throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var failed = makePhoto(localIdentifier: "a-failed")
+        failed.latitude = 0
+        failed.longitude = 0
+        var valid = makePhoto(localIdentifier: "b-valid")
+        valid.latitude = 48.8566
+        valid.longitude = 2.3522
+        try database.insertPhotos([failed, valid], completingRequiredRebuild: false)
+        let backend = SelectiveLocationGeocoder()
+        let worker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0),
+            fetchBatchSize: 1,
+            writeBatchSize: 1
+        )
+
+        let result = await worker.run { _ in }
+
+        XCTAssertFalse(result.wasCancelled)
+        XCTAssertEqual(result.completed, 1)
+        XCTAssertEqual(backend.requestCount, 2)
+        XCTAssertEqual(try database.geocodingCounts().remaining, 0)
+    }
+
+    @MainActor
+    func testPermanentNoResultsDoNotTriggerTransientFailureBreaker() async throws {
+        let queue = try DatabaseQueue()
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var photos = (0..<4).map { makePhoto(localIdentifier: "photo-\($0)") }
+        for index in 0..<3 {
+            photos[index].latitude = 0
+            photos[index].longitude = -3 + Double(index)
+        }
+        photos[3].latitude = 48.8566
+        photos[3].longitude = 2.3522
+        try database.insertPhotos(photos, completingRequiredRebuild: false)
+        let backend = SelectiveLocationGeocoder()
+        let worker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0),
+            fetchBatchSize: 1,
+            writeBatchSize: 1
+        )
+
+        let result = await worker.run { _ in }
+
+        XCTAssertFalse(result.wasCancelled)
+        XCTAssertEqual(result.completed, 1)
+        XCTAssertEqual(backend.requestCount, 4)
+        XCTAssertEqual(try database.geocodingCounts().remaining, 0)
+
+        let secondWorker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0),
+            fetchBatchSize: 1,
+            writeBatchSize: 1
+        )
+        _ = await secondWorker.run { _ in }
+        XCTAssertEqual(backend.requestCount, 4, "Persisted no-result rows must not be resubmitted")
+
+        try await queue.write { db in
+            try db.execute(
+                sql: "UPDATE indexed_photos SET locationRetryAfter = ? WHERE locationCity IS NULL",
+                arguments: [Date.distantPast]
+            )
+        }
+        XCTAssertEqual(try database.geocodingCounts().remaining, 3)
+    }
+
+    @MainActor
+    func testNoResultBucketIsDeferredAcrossPagesAndMediaTypes() async throws {
+        let queue = try DatabaseQueue()
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var photos = (0..<3).map { makePhoto(localIdentifier: "photo-\($0)") }
+        for index in photos.indices {
+            photos[index].latitude = 0
+            photos[index].longitude = 0
+        }
+        try database.insertPhotos(photos, completingRequiredRebuild: false)
+        var video = makeVideo(localIdentifier: "video-0")
+        video.latitude = 0
+        video.longitude = 0
+        try database.insertVideo(
+            video,
+            [makeFrame(videoId: video.id, position: 0.5)],
+            completingRequiredRebuild: false
+        )
+        let backend = SelectiveLocationGeocoder()
+        let worker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0),
+            fetchBatchSize: 1,
+            writeBatchSize: 1
+        )
+
+        let result = await worker.run { _ in }
+
+        XCTAssertFalse(result.wasCancelled)
+        XCTAssertEqual(result.completed, 0)
+        XCTAssertEqual(backend.requestCount, 1)
+        XCTAssertEqual(try database.geocodingCounts().remaining, 0)
+
+        try await queue.write { db in
+            try db.execute(sql: "UPDATE indexed_photos SET locationRetryAfter = ?", arguments: [Date.distantPast])
+            try db.execute(sql: "UPDATE indexed_videos SET locationRetryAfter = ?", arguments: [Date.distantPast])
+        }
+        XCTAssertEqual(try database.photosNeedingLocationBackfill(after: nil, limit: 10).count, 3)
+        XCTAssertEqual(try database.videosNeedingLocationBackfill(after: nil, limit: 10).count, 1)
+
+        let retryWorker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0),
+            fetchBatchSize: 1,
+            writeBatchSize: 1
+        )
+        _ = await retryWorker.run { _ in }
+        XCTAssertEqual(backend.requestCount, 2)
+        XCTAssertEqual(try database.geocodingCounts().remaining, 0)
+    }
+
+    @MainActor
+    func testGeocodingWorkerStopsAfterRepeatedTransientServiceFailures() async throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var photos = (0..<5).map { makePhoto(localIdentifier: "photo-\($0)") }
+        for index in photos.indices {
+            photos[index].latitude = 40 + Double(index)
+            photos[index].longitude = -120 + Double(index)
+        }
+        try database.insertPhotos(photos, completingRequiredRebuild: false)
+        let backend = FailingLocationGeocoder()
+        let worker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0),
+            fetchBatchSize: 10,
+            writeBatchSize: 2
+        )
+
+        let result = await worker.run { _ in }
+
+        XCTAssertFalse(result.wasCancelled)
+        XCTAssertEqual(result.completed, 0)
+        XCTAssertEqual(backend.requestCount, 3)
+        XCTAssertEqual(try database.geocodingCounts().remaining, 5)
+    }
+
+    @MainActor
+    func testVideoGeocodingPaginatesPastFailureAndReusesCoordinateBucket() async throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var failed = makeVideo(localIdentifier: "a-failed")
+        failed.latitude = 0
+        failed.longitude = 0
+        var firstParis = makeVideo(localIdentifier: "b-paris")
+        firstParis.latitude = 48.8566
+        firstParis.longitude = 2.3522
+        var secondParis = makeVideo(localIdentifier: "c-paris")
+        secondParis.latitude = 48.8566
+        secondParis.longitude = 2.3522
+        for video in [failed, firstParis, secondParis] {
+            try database.insertVideo(
+                video,
+                [makeFrame(videoId: video.id, position: 0.5)],
+                completingRequiredRebuild: false
+            )
+        }
+        let backend = SelectiveLocationGeocoder()
+        let worker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0),
+            fetchBatchSize: 1,
+            writeBatchSize: 1
+        )
+
+        let result = await worker.run { _ in }
+
+        XCTAssertFalse(result.wasCancelled)
+        XCTAssertEqual(result.completed, 2)
+        XCTAssertEqual(backend.requestCount, 2)
+        XCTAssertEqual(try database.geocodingCounts().remaining, 0)
+    }
+
+    @MainActor
+    func testGeocodingWorkerReusesFreshPersistentCacheAndRefreshesExpiredEntry() async throws {
+        let queue = try DatabaseQueue()
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let latitude = 37.7749
+        let longitude = -122.4194
+        let bucketKey = LocationCoordinateBucket.key(
+            latitude: latitude,
+            longitude: longitude
+        )
+        try database.saveReverseGeocodeLocation(
+            LocationStrings(
+                city: "San Francisco",
+                state: "CA",
+                country: "United States",
+                name: "Mission"
+            ),
+            bucketKey: bucketKey
+        )
+        var first = makePhoto(localIdentifier: "first")
+        first.latitude = latitude
+        first.longitude = longitude
+        try database.insertPhoto(first)
+        let backend = CountingLocationGeocoder()
+        let firstWorker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0)
+        )
+
+        let firstResult = await firstWorker.run { _ in }
+
+        XCTAssertEqual(firstResult.completed, 1)
+        XCTAssertEqual(backend.requestCount, 0)
+
+        try await queue.write { db in
+            try db.execute(
+                sql: "UPDATE reverse_geocode_cache SET resolvedAt = ? WHERE bucketKey = ?",
+                arguments: [Date.distantPast, bucketKey]
+            )
+        }
+        XCTAssertTrue(try database.reverseGeocodeLocations(
+            bucketKeys: [bucketKey]
+        ).isEmpty)
+
+        var second = makePhoto(localIdentifier: "second")
+        second.latitude = latitude
+        second.longitude = longitude
+        try database.insertPhoto(second)
+        let secondWorker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0)
+        )
+
+        let secondResult = await secondWorker.run { _ in }
+
+        XCTAssertEqual(secondResult.completed, 1)
+        XCTAssertEqual(backend.requestCount, 1)
+        XCTAssertFalse(try database.reverseGeocodeLocations(
+            bucketKeys: [bucketKey]
+        ).isEmpty)
+    }
+
+    @MainActor
+    func testFailedLocationBatchWriteDoesNotPublishSearchOverlay() async throws {
+        let queue = try DatabaseQueue()
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var photo = makePhoto(localIdentifier: "write-failure")
+        photo.latitude = 37.7749
+        photo.longitude = -122.4194
+        try database.insertPhoto(photo)
+        try await queue.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER reject_location_update
+                BEFORE UPDATE OF locationCity ON indexed_photos
+                BEGIN
+                    SELECT RAISE(ABORT, 'injected location write failure');
+                END
+            """)
+        }
+        let backend = CountingLocationGeocoder()
+        let worker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0)
+        )
+        let publishedUpdateCount = OSAllocatedUnfairLock(initialState: 0)
+
+        let result = await worker.run(
+            progress: { _ in },
+            locationsUpdated: { updates in
+                publishedUpdateCount.withLock { $0 += updates.count }
+            }
+        )
+
+        XCTAssertEqual(result.completed, 0)
+        XCTAssertEqual(publishedUpdateCount.withLock { $0 }, 0)
+        XCTAssertEqual(try database.geocodingCounts().remaining, 1)
     }
 
     func testSearchIndexContentRevisionChangesForSameCountReplacement() throws {
@@ -2125,6 +2522,62 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(try database.indexRebuildRequired())
     }
 
+}
+
+@MainActor
+private final class CountingLocationGeocoder: LocationGeocoding {
+    private(set) var requestCount = 0
+
+    func resolve(
+        _ location: CLLocation,
+        preferredLocale: Locale
+    ) async throws -> LocationStrings? {
+        requestCount += 1
+        return LocationStrings(
+            city: "San Francisco",
+            state: "California",
+            country: "United States",
+            name: "San Francisco"
+        )
+    }
+
+    func cancel() {}
+}
+
+@MainActor
+private final class SelectiveLocationGeocoder: LocationGeocoding {
+    private(set) var requestCount = 0
+
+    func resolve(
+        _ location: CLLocation,
+        preferredLocale: Locale
+    ) async throws -> LocationStrings? {
+        requestCount += 1
+        guard location.coordinate.longitude > 1 else { return nil }
+        return LocationStrings(
+            city: "Paris",
+            state: "Île-de-France",
+            country: "France",
+            name: "Paris"
+        )
+    }
+
+    func cancel() {}
+}
+
+@MainActor
+private final class FailingLocationGeocoder: LocationGeocoding {
+    private(set) var requestCount = 0
+
+    func resolve(
+        _ location: CLLocation,
+        preferredLocale: Locale
+    ) async throws -> LocationStrings? {
+        requestCount += 1
+        throw URLError(.cannotConnectToHost)
+    }
+
+    func cancel() {}
 }
 
 private enum StubMigrationError: Error {

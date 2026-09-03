@@ -47,6 +47,7 @@ final class SearchViewModel: ObservableObject {
     @Published private(set) var results: [SearchResult] = []
     @Published private(set) var fallbackResults: [SearchResult] = []
     @Published private(set) var filterSummary: FilterSummary?
+    @Published private(set) var restrictionSummary: SearchRestrictionSummary?
     @Published private(set) var isSearching = false
     @Published private(set) var searchError: String?
     @Published private(set) var lastSearchedQuery: String?
@@ -113,6 +114,7 @@ final class SearchViewModel: ObservableObject {
         results = []
         fallbackResults = []
         filterSummary = nil
+        restrictionSummary = nil
         searchError = nil
         lastSearchedQuery = nil
         lastResults = []
@@ -207,6 +209,7 @@ final class SearchViewModel: ObservableObject {
         results = []
         fallbackResults = []
         lastResults = []
+        restrictionSummary = nil
         screenshotIDs = []
     }
 
@@ -351,6 +354,7 @@ final class SearchViewModel: ObservableObject {
             lastSearchedQuery = query
             fallbackResults = response.fallbackResults
             filterSummary = response.filtersApplied
+            restrictionSummary = response.restrictionSummary
             mediaFilter = .all
             searchTimeMs = Int((dependencies.now() - startTime) * 1_000)
             startScreenshotDetection(for: response.results)

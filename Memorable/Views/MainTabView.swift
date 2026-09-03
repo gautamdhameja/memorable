@@ -90,7 +90,7 @@ struct MainTabView: View {
                 )
                 .tag(MainTabDestination.search)
             } else {
-                SemanticWarmupView(semanticRuntime: semanticRuntime, retry: retrySemanticWarmup)
+                SearchPreparationShell(semanticRuntime: semanticRuntime, retry: retrySemanticWarmup)
                     .tag(MainTabDestination.search)
             }
 
@@ -102,7 +102,7 @@ struct MainTabView: View {
                 )
                     .tag(MainTabDestination.more)
             } else {
-                SemanticWarmupView(semanticRuntime: semanticRuntime, retry: retrySemanticWarmup)
+                SearchPreparationShell(semanticRuntime: semanticRuntime, retry: retrySemanticWarmup)
                     .tag(MainTabDestination.more)
             }
         }
@@ -398,7 +398,7 @@ private struct SurpriseDockLabel: View {
     }
 }
 
-private struct SemanticWarmupView: View {
+private struct SearchPreparationShell: View {
     @ObservedObject var semanticRuntime: SemanticSearchRuntime
     let retry: () -> Void
 
@@ -406,27 +406,46 @@ private struct SemanticWarmupView: View {
         NavigationStack {
             ZStack {
                 CelestialBackdrop()
-                VStack(spacing: 16) {
-                    if case .failed = semanticRuntime.phase {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 32, weight: .thin))
-                            .foregroundStyle(Celestial.Colors.error)
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Memorable")
+                            .font(Celestial.Typography.brand)
+                            .foregroundStyle(Celestial.Colors.onSurface)
+                        Spacer()
+                    }
+                    .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                    .padding(.top, 8)
+
+                    HStack(spacing: 12) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(Celestial.Colors.primaryFixedDim)
                             .accessibilityHidden(true)
-                    } else {
-                        ProgressView()
-                            .tint(Celestial.Colors.primaryDim)
+                        Text(statusText)
+                            .font(Celestial.Typography.body)
+                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        Spacer()
                     }
-                    Text(statusText)
-                        .font(Celestial.Typography.supporting)
-                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
+                    .frame(minHeight: 52)
+                    .modifier(GlassSearchBarModifier(cornerRadius: 13))
+                    .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                    .padding(.top, 20)
+
                     if case .failed = semanticRuntime.phase {
-                        Button("Try Again", action: retry)
-                            .celestialPrimaryButtonStyle()
+                        VStack(alignment: .leading, spacing: Celestial.Spacing.contentGap) {
+                            Text("Search setup needs attention")
+                                .font(Celestial.Typography.interfaceTitle3)
+                                .foregroundStyle(Celestial.Colors.onSurface)
+                            Button("Try Again", action: retry)
+                                .celestialPrimaryButtonStyle()
+                        }
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                        .padding(.top, Celestial.Spacing.sectionGap)
                     }
+
+                    Spacer()
                 }
-                .padding(.horizontal, 24)
             }
-            .celestialNavigationTitle("Memorable")
         }
     }
 

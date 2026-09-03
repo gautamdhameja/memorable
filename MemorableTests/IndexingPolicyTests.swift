@@ -1,6 +1,7 @@
 import XCTest
 import GRDB
 import CoreML
+import CoreLocation
 import os
 @testable import Memorable
 
@@ -786,6 +787,263 @@ final class IndexingPolicyTests: XCTestCase {
     }
 
     @MainActor
+    func testIncompleteGeocodingIsVisibleAsSoonAsExistingIndexLoads() async {
+        let database = SearchFixtureDatabase(
+            photos: [surpriseFixturePhoto()],
+            geocodingCounts: GeocodingCounts(
+                totalWithGPS: 10,
+                remaining: 4,
+                indexedPhotos: 1,
+                indexedVideos: 0
+            )
+        )
+        let service = makeSurpriseLaunchService(
+            database: database,
+            cachedState: SurpriseQueryCache.State(
+                validatedQueries: [],
+                lastValidatedCount: 0
+            )
+        )
+
+        let loaded = await service.checkAndLoadExistingIndex(
+            scheduleAutoResume: true,
+            scheduleOrphanCleanup: false
+        )
+
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(service.geocodingProgress?.completed, 6)
+        XCTAssertEqual(service.geocodingProgress?.total, 10)
+        XCTAssertEqual(service.geocodingProgress?.phase, .queued)
+        service.stopIndexing()
+    }
+
+    @MainActor
+    func testGeocodingWaitsForActivationCancelsOnBackgroundAndResumesOnce() async throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var photo = makeOrphanPolicyPhoto(localIdentifier: "location-photo")
+        photo.latitude = 48.8566
+        photo.longitude = 2.3522
+        try database.insertPhoto(photo)
+        let backend = LifecycleLocationGeocoder()
+        let worker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0)
+        )
+        let searchEngine = SearchEngine(
+            textEncoder: FakeTextEncoder([:]),
+            database: database
+        )
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: searchEngine,
+            database: database,
+            surpriseQueryCacheLoader: {
+                SurpriseQueryCache.State(validatedQueries: [], lastValidatedCount: 0)
+            },
+            geocodingWorker: worker
+        )
+
+        let loaded = await service.checkAndLoadExistingIndex(
+            scheduleAutoResume: false,
+            scheduleOrphanCleanup: false
+        )
+        for _ in 0..<100 { await Task.yield() }
+
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(backend.requestCount, 0)
+        XCTAssertEqual(service.geocodingProgress?.phase, .waitingToResume)
+
+        service.setApplicationActive(true)
+        for _ in 0..<2_000 where backend.requestCount == 0 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(backend.requestCount, 1)
+        service.setApplicationActive(false)
+        for _ in 0..<2_000 where backend.cancelCount == 0 {
+            await Task.yield()
+        }
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(service.geocodingProgress?.phase, .waitingToResume)
+
+        service.setApplicationActive(true)
+        for _ in 0..<2_000 where backend.requestCount < 2 {
+            await Task.yield()
+        }
+        XCTAssertEqual(backend.requestCount, 2)
+        for _ in 0..<2_000 where service.geocodingProgress != nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertNil(service.geocodingProgress)
+        XCTAssertEqual(try database.geocodingCounts().remaining, 0)
+        service.stopIndexing()
+    }
+
+    @MainActor
+    func testVideoGeocodingCancellationKeepsWaitingToResumePhase() async throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let video = makeGeocodingPolicyVideo(localIdentifier: "location-video")
+        try database.insertVideo(
+            video,
+            [IndexedVideoFrame(
+                id: UUID().uuidString,
+                videoId: video.id,
+                framePosition: 0.5,
+                embedding: {
+                    var embedding = [Float](repeating: 0, count: EmbeddingConfig.dimensions)
+                    embedding[0] = 1
+                    return embedding.toFloat16Data()
+                }(),
+                indexedAt: Date()
+            )],
+            completingRequiredRebuild: false
+        )
+        let backend = LifecycleLocationGeocoder()
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: SearchEngine(textEncoder: FakeTextEncoder([:]), database: database),
+            database: database,
+            surpriseQueryCacheLoader: {
+                SurpriseQueryCache.State(validatedQueries: [], lastValidatedCount: 0)
+            },
+            geocodingWorker: GeocodingWorker(
+                database: database,
+                reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0)
+            )
+        )
+
+        let loaded = await service.checkAndLoadExistingIndex(
+            scheduleAutoResume: false,
+            scheduleOrphanCleanup: false
+        )
+        XCTAssertTrue(loaded)
+        service.setApplicationActive(true)
+        for _ in 0..<2_000 where backend.requestCount == 0 { await Task.yield() }
+        XCTAssertEqual(backend.requestCount, 1)
+
+        service.setApplicationActive(false)
+        for _ in 0..<2_000 where backend.cancelCount == 0 { await Task.yield() }
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(service.geocodingProgress?.phase, .waitingToResume)
+        service.stopIndexing()
+    }
+
+    @MainActor
+    func testGeocodingPausesAfterBoundedAutomaticRetries() async throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var photo = makeOrphanPolicyPhoto(localIdentifier: "unresolved-photo")
+        photo.latitude = 0
+        photo.longitude = 0
+        try database.insertPhoto(photo)
+        let backend = AlwaysTransientLocationGeocoder()
+        let worker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0)
+        )
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: SearchEngine(
+                textEncoder: FakeTextEncoder([:]),
+                database: database
+            ),
+            database: database,
+            surpriseQueryCacheLoader: {
+                SurpriseQueryCache.State(validatedQueries: [], lastValidatedCount: 0)
+            },
+            geocodingWorker: worker,
+            geocodingRetryDelaySeconds: { _ in 0 }
+        )
+
+        let loaded = await service.checkAndLoadExistingIndex(
+            scheduleAutoResume: false,
+            scheduleOrphanCleanup: false
+        )
+        XCTAssertTrue(loaded)
+        service.setApplicationActive(true)
+        for _ in 0..<20_000 where service.geocodingProgress?.phase != .paused {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(service.geocodingProgress?.phase, .paused)
+        XCTAssertEqual(
+            backend.requestCount,
+            GeocodingRetryPolicy.maximumAutomaticAttempts + 1
+        )
+        service.stopIndexing()
+    }
+
+    @MainActor
+    func testSuccessfulGeocodingRunResetsAutomaticRetryBudget() async throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        var permanentMiss = makeOrphanPolicyPhoto(localIdentifier: "a-permanent")
+        permanentMiss.latitude = 0
+        permanentMiss.longitude = 0
+        var eventuallyResolved = makeOrphanPolicyPhoto(localIdentifier: "b-eventual")
+        eventuallyResolved.latitude = 10
+        eventuallyResolved.longitude = 10
+        try database.insertPhotos(
+            [permanentMiss, eventuallyResolved],
+            completingRequiredRebuild: false
+        )
+        let backend = RetryResetLocationGeocoder()
+        let worker = GeocodingWorker(
+            database: database,
+            reverseGeocoder: ReverseGeocoder(geocoder: backend, throttleNanoseconds: 0)
+        )
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: SearchEngine(textEncoder: FakeTextEncoder([:]), database: database),
+            database: database,
+            surpriseQueryCacheLoader: {
+                SurpriseQueryCache.State(validatedQueries: [], lastValidatedCount: 0)
+            },
+            geocodingWorker: worker,
+            geocodingRetryDelaySeconds: { _ in 0 }
+        )
+
+        let loaded = await service.checkAndLoadExistingIndex(
+            scheduleAutoResume: false,
+            scheduleOrphanCleanup: false
+        )
+        XCTAssertTrue(loaded)
+        service.setApplicationActive(true)
+        for _ in 0..<40_000 where service.geocodingProgress?.phase != .paused {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(service.geocodingProgress?.phase, .paused)
+        XCTAssertEqual(backend.eventualRequestCount, 4)
+        XCTAssertEqual(backend.permanentRequestCount, 9)
+        service.stopIndexing()
+    }
+
+    func testCompletedGeocodingDoesNotProduceVisibleProgress() {
+        XCTAssertNil(GeocodingProgressState(
+            counts: GeocodingCounts(
+                totalWithGPS: 10,
+                remaining: 0,
+                indexedPhotos: 10,
+                indexedVideos: 0
+            ),
+            phase: .queued
+        ))
+    }
+
+    @MainActor
     func testPendingStateCannotMakeUnrelatedIndexingLookInitial() {
         let suiteName = "InitialIndexingServiceIsolationTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -1185,8 +1443,9 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertTrue(FreeTier.canIndexMore(indexedMediaCount: FreeTier.maxIndexedMedia - 1, isPro: false))
     }
 
-    func testAutomaticBackgroundWorkUsesPostLaunchDeferral() {
-        XCTAssertGreaterThan(IndexingConfig.postLaunchAutoResumeDelaySeconds, 0)
+    func testAutomaticResumeStartsImmediatelyWhileBackgroundWorkRemainsDeferred() {
+        XCTAssertEqual(IndexingConfig.postLaunchAutoResumeDelaySeconds, 0)
+        XCTAssertGreaterThan(IndexingConfig.postLaunchMaintenanceDelaySeconds, 0)
         XCTAssertGreaterThan(IndexingConfig.surpriseValidationDelaySeconds, 0)
         XCTAssertGreaterThan(IndexingConfig.userSearchBackgroundWorkDelaySeconds, 0)
         XCTAssertGreaterThan(IndexingConfig.geocodingProgressPublishIntervalSeconds, 0)
@@ -1200,6 +1459,15 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertTrue(GeocodingProgressPublicationPolicy.shouldPublish(
             elapsed: IndexingConfig.geocodingProgressPublishIntervalSeconds
         ))
+    }
+
+    func testGeocodingRetryUsesBoundedExponentialBackoff() {
+        XCTAssertEqual(GeocodingRetryPolicy.delaySeconds(afterAttempt: 0), 30)
+        XCTAssertEqual(GeocodingRetryPolicy.delaySeconds(afterAttempt: 1), 60)
+        XCTAssertEqual(GeocodingRetryPolicy.delaySeconds(afterAttempt: 2), 120)
+        XCTAssertEqual(GeocodingRetryPolicy.delaySeconds(afterAttempt: 20), 900)
+        XCTAssertTrue(GeocodingRetryPolicy.allowsAutomaticRetry(afterAttempt: 4))
+        XCTAssertFalse(GeocodingRetryPolicy.allowsAutomaticRetry(afterAttempt: 5))
     }
 
     @MainActor
@@ -1475,6 +1743,78 @@ private final class UnusedImagePredictionModel: CoreMLModelPredicting {
     }
 }
 
+@MainActor
+private final class LifecycleLocationGeocoder: LocationGeocoding {
+    private(set) var requestCount = 0
+    private(set) var cancelCount = 0
+    private var firstRequestContinuation: CheckedContinuation<LocationStrings?, Error>?
+
+    func resolve(
+        _ location: CLLocation,
+        preferredLocale: Locale
+    ) async throws -> LocationStrings? {
+        requestCount += 1
+        if requestCount == 1 {
+            return try await withCheckedThrowingContinuation { continuation in
+                firstRequestContinuation = continuation
+            }
+        }
+        return LocationStrings(
+            city: "Paris",
+            state: "Île-de-France",
+            country: "France",
+            name: "Paris"
+        )
+    }
+
+    func cancel() {
+        cancelCount += 1
+        firstRequestContinuation?.resume(throwing: CancellationError())
+        firstRequestContinuation = nil
+    }
+}
+
+@MainActor
+private final class AlwaysTransientLocationGeocoder: LocationGeocoding {
+    private(set) var requestCount = 0
+
+    func resolve(
+        _ location: CLLocation,
+        preferredLocale: Locale
+    ) async throws -> LocationStrings? {
+        requestCount += 1
+        throw URLError(.timedOut)
+    }
+
+    func cancel() {}
+}
+
+@MainActor
+private final class RetryResetLocationGeocoder: LocationGeocoding {
+    private(set) var permanentRequestCount = 0
+    private(set) var eventualRequestCount = 0
+
+    func resolve(
+        _ location: CLLocation,
+        preferredLocale: Locale
+    ) async throws -> LocationStrings? {
+        if location.coordinate.latitude == 0 {
+            permanentRequestCount += 1
+            throw URLError(.timedOut)
+        }
+        eventualRequestCount += 1
+        guard eventualRequestCount == 4 else { throw URLError(.timedOut) }
+        return LocationStrings(
+            city: "Test City",
+            state: "Test State",
+            country: "Test Country",
+            name: nil
+        )
+    }
+
+    func cancel() {}
+}
+
 private func makeOrphanPolicyPhoto(
     localIdentifier: String,
     sourceId: String = PhotoSourceType.photokit.rawValue,
@@ -1494,6 +1834,21 @@ private func makeOrphanPolicyPhoto(
         indexedAt: Date(timeIntervalSince1970: 200),
         sourceId: sourceId,
         filePath: filePath
+    )
+}
+
+private func makeGeocodingPolicyVideo(localIdentifier: String) -> IndexedVideo {
+    IndexedVideo(
+        id: UUID().uuidString,
+        localIdentifier: localIdentifier,
+        creationDate: Date(timeIntervalSince1970: 100),
+        latitude: 48.8566,
+        longitude: 2.3522,
+        duration: 10,
+        pixelWidth: 100,
+        pixelHeight: 100,
+        frameCount: 1,
+        indexedAt: Date(timeIntervalSince1970: 200)
     )
 }
 

@@ -173,8 +173,6 @@ final class SearchEvaluationTests: XCTestCase {
             textQuery: text,
             dateRange: dateRange,
             locationHint: locationHint,
-            locationCoordinate: nil,
-            locationRadiusKm: nil,
             locationLocality: nil,
             locationSubAdmin: nil,
             locationAdminArea: nil,

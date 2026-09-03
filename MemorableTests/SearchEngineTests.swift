@@ -144,6 +144,47 @@ final class SearchEngineTests: XCTestCase {
         )
     }
 
+    func testBasicSearchDisclosesIgnoredLocationAndDateIntent() async throws {
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["california 2022": floatVector(first: 1)]),
+            database: SearchFixtureDatabase(photos: [
+                .init(
+                    id: "visual-result",
+                    localIdentifier: "visual-result",
+                    date: nil,
+                    embedding: float16Vector(first: 1)
+                )
+            ])
+        )
+        try engine.loadIndex()
+
+        let response = try await engine.search(
+            query: "California 2022",
+            featurePolicy: .basic,
+            recordsUserTiming: false
+        )
+
+        XCTAssertEqual(response.results.map(\.id), ["visual-result"])
+        XCTAssertEqual(response.restrictionSummary?.features, [.location, .date])
+        XCTAssertEqual(
+            response.restrictionSummary?.message,
+            "Place and date filters are part of Pro. Showing visual matches instead."
+        )
+    }
+
+    func testProSearchDoesNotReportFeatureRestrictions() throws {
+        let queryHints = hints(
+            text: "dog",
+            dateRange: DateRange(
+                start: Date(timeIntervalSince1970: 0),
+                end: Date(timeIntervalSince1970: 10)
+            ),
+            locationHint: "California"
+        )
+
+        XCTAssertNil(SearchFeaturePolicy.pro.restrictionSummary(for: queryHints))
+    }
+
     func testAsyncSearchPassesItsPreparedEmbeddingDirectlyIntoRanking() async throws {
         let encoder = CountingTextEncoder(embedding: floatVector(first: 1))
         let engine = SearchEngine(
@@ -822,7 +863,7 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertTrue(response.results[0].isVideo)
     }
 
-    func testLocationQueryRetainsVideoWithGPSButNoStoredCityWithoutCoordinateHint() throws {
+    func testLocationQueryUsesGPSWhenVideoLocationMetadataIsStillPending() throws {
         let database = SearchFixtureDatabase(
             videos: [
                 .init(
@@ -845,6 +886,631 @@ final class SearchEngineTests: XCTestCase {
         )
 
         XCTAssertEqual(response.results.map(\.id), ["video-awaiting-geocode"])
+        XCTAssertTrue(response.fallbackResults.isEmpty)
+        XCTAssertEqual(response.filtersApplied?.locationDescription, "Paris")
+    }
+
+    func testProminentCityQueryUsesGPSBeforeLocationMetadataExists() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "san-francisco",
+                localIdentifier: "local-san-francisco",
+                date: Date(timeIntervalSince1970: 100),
+                latitude: 37.7749,
+                longitude: -122.4194,
+                embedding: float16Vector(first: 1)
+            ),
+            .init(
+                id: "berlin",
+                localIdentifier: "local-berlin",
+                date: Date(timeIntervalSince1970: 200),
+                latitude: 52.5200,
+                longitude: 13.4050,
+                embedding: float16Vector(first: 1)
+            ),
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["a photo": floatVector(first: 1)]),
+            database: database
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(
+            hints: hints(
+                text: "a photo",
+                locationHint: "San Francisco",
+                hasVisualQuery: false
+            ),
+            featurePolicy: .pro
+        )
+
+        XCTAssertEqual(response.results.map(\.id), ["san-francisco"])
+        XCTAssertTrue(response.fallbackResults.isEmpty)
+    }
+
+    func testExclusionOnlyQueryScoresInsteadOfReturningEntireLibrary() throws {
+        let photos = [
+            FixturePhoto(
+                id: "dog-1",
+                localIdentifier: "dog-1",
+                date: Date(timeIntervalSince1970: 600),
+                embedding: float16Vector(first: 1)
+            ),
+            FixturePhoto(
+                id: "dog-2",
+                localIdentifier: "dog-2",
+                date: Date(timeIntervalSince1970: 500),
+                embedding: float16Vector(first: 1)
+            ),
+            FixturePhoto(
+                id: "dog-3",
+                localIdentifier: "dog-3",
+                date: Date(timeIntervalSince1970: 400),
+                embedding: float16Vector(first: 1)
+            ),
+            FixturePhoto(
+                id: "other-1",
+                localIdentifier: "other-1",
+                date: Date(timeIntervalSince1970: 300),
+                embedding: float16Vector(second: 1)
+            ),
+            FixturePhoto(
+                id: "other-2",
+                localIdentifier: "other-2",
+                date: Date(timeIntervalSince1970: 200),
+                embedding: float16Vector(second: 1)
+            ),
+            FixturePhoto(
+                id: "other-3",
+                localIdentifier: "other-3",
+                date: Date(timeIntervalSince1970: 100),
+                embedding: float16Vector(second: 1)
+            ),
+        ]
+        let query = QueryParserFallback.parse(query: "-dog")
+        XCTAssertFalse(query.hasVisualQuery)
+        XCTAssertEqual(query.negativeTerms, ["dog"])
+
+        for residentLimit in [photos.count, 1] {
+            let engine = SearchEngine(
+                textEncoder: FakeTextEncoder([
+                    "a photo": floatVector(second: 1),
+                    "dog": floatVector(first: 1),
+                ]),
+                database: SearchFixtureDatabase(photos: photos),
+                residentMediaLimit: residentLimit
+            )
+            try engine.loadIndex()
+            let response = try engine.hybridSearch(hints: query, featurePolicy: .pro)
+
+            XCTAssertEqual(
+                Set(response.results.map(\.id)),
+                Set(["other-1", "other-2", "other-3"]),
+                "residentMediaLimit=\(residentLimit)"
+            )
+            XCTAssertLessThan(
+                response.results.count,
+                photos.count,
+                "residentMediaLimit=\(residentLimit)"
+            )
+        }
+    }
+
+    func testEmptyQueryReturnsNoResults() async throws {
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["a photo": floatVector(first: 1)]),
+            database: SearchFixtureDatabase(photos: [
+                FixturePhoto(
+                    id: "photo",
+                    localIdentifier: "photo",
+                    date: nil,
+                    embedding: float16Vector(first: 1)
+                ),
+            ])
+        )
+
+        try engine.loadIndex()
+        let query = QueryParserFallback.parse(query: "")
+        for policy in [SearchFeaturePolicy.pro, .basic] {
+            let response = try engine.hybridSearch(hints: query, featurePolicy: policy)
+            XCTAssertTrue(response.results.isEmpty)
+            XCTAssertTrue(response.fallbackResults.isEmpty)
+        }
+
+        let asyncResponse = try await engine.search(query: "", featurePolicy: .basic)
+        XCTAssertTrue(asyncResponse.results.isEmpty)
+        XCTAssertTrue(asyncResponse.fallbackResults.isEmpty)
+    }
+
+    func testDateOnlyQueryReturnsEveryDateMatchWithoutEncoding() throws {
+        let calendar = Calendar.current
+        let first2022 = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2022,
+            month: 2,
+            day: 1,
+            hour: 12
+        )))
+        let second2022 = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2022,
+            month: 9,
+            day: 1,
+            hour: 12
+        )))
+        let in2023 = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2023,
+            month: 2,
+            day: 1,
+            hour: 12
+        )))
+        let encoder = CountingTextEncoder(embedding: floatVector(first: 1))
+        let engine = SearchEngine(
+            textEncoder: encoder,
+            database: SearchFixtureDatabase(photos: [
+                .init(
+                    id: "early-2022",
+                    localIdentifier: "early-2022",
+                    date: first2022,
+                    embedding: float16Vector(first: 0.01)
+                ),
+                .init(
+                    id: "late-2022",
+                    localIdentifier: "late-2022",
+                    date: second2022,
+                    embedding: float16Vector(first: 0.01)
+                ),
+                .init(
+                    id: "in-2023",
+                    localIdentifier: "in-2023",
+                    date: in2023,
+                    embedding: float16Vector(first: 1)
+                ),
+            ])
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(
+            hints: QueryParserFallback.parse(query: "2022"),
+            featurePolicy: .pro
+        )
+
+        XCTAssertEqual(response.results.map(\.id), ["late-2022", "early-2022"])
+        XCTAssertEqual(encoder.encodeCount, 0)
+    }
+
+    func testBareCaliforniaReturnsEveryLocationMatchWithoutEncoding() throws {
+        let encoder = CountingTextEncoder(embedding: floatVector(first: 1))
+        let engine = SearchEngine(
+            textEncoder: encoder,
+            database: SearchFixtureDatabase(photos: [
+                .init(
+                    id: "san-francisco",
+                    localIdentifier: "san-francisco",
+                    date: Date(timeIntervalSince1970: 100),
+                    city: "San Francisco",
+                    state: "CA",
+                    country: "United States",
+                    embedding: float16Vector(first: 0.01)
+                ),
+                .init(
+                    id: "los-angeles",
+                    localIdentifier: "los-angeles",
+                    date: Date(timeIntervalSince1970: 200),
+                    city: "Los Angeles",
+                    state: "CA",
+                    country: "United States",
+                    embedding: float16Vector(first: 0.01)
+                ),
+                .init(
+                    id: "berlin",
+                    localIdentifier: "berlin",
+                    date: Date(timeIntervalSince1970: 300),
+                    city: "Berlin",
+                    state: "Berlin",
+                    country: "Germany",
+                    embedding: float16Vector(first: 1)
+                ),
+            ])
+        )
+
+        try engine.loadIndex()
+        let query = QueryParserFallback.parse(query: "California")
+        let response = try engine.hybridSearch(hints: query, featurePolicy: .pro)
+
+        XCTAssertEqual(response.results.map(\.id), ["los-angeles", "san-francisco"])
+        XCTAssertEqual(encoder.encodeCount, 0)
+    }
+
+    func testReverseGeocodingOverlayMakesLocationSearchableWithoutIndexReload() throws {
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["a photo": floatVector(first: 1)]),
+            database: SearchFixtureDatabase(photos: [
+                .init(
+                    id: "newly-geocoded",
+                    localIdentifier: "local-newly-geocoded",
+                    date: Date(timeIntervalSince1970: 100),
+                    embedding: float16Vector(first: 1)
+                )
+            ])
+        )
+        try engine.loadIndex()
+        let query = hints(
+            text: "a photo",
+            locationHint: "Atlantis",
+            hasVisualQuery: false
+        )
+
+        XCTAssertTrue(try engine.hybridSearch(hints: query, featurePolicy: .pro).results.isEmpty)
+
+        engine.applyLocationUpdates([
+            LocationBackfillUpdate(
+                localIdentifier: "local-newly-geocoded",
+                location: LocationStrings(
+                    city: "Atlantis",
+                    state: nil,
+                    country: nil,
+                    name: nil
+                )
+            )
+        ])
+
+        XCTAssertEqual(
+            try engine.hybridSearch(hints: query, featurePolicy: .pro).results.map(\.id),
+            ["newly-geocoded"]
+        )
+
+        engine.suspendForMemoryPressure()
+        engine.resumeAfterMemoryPressure()
+        try engine.loadIndex()
+
+        XCTAssertTrue(try engine.hybridSearch(
+            hints: query,
+            featurePolicy: .pro
+        ).results.isEmpty)
+
+        engine.applyLocationUpdates([
+            LocationBackfillUpdate(
+                localIdentifier: "local-newly-geocoded",
+                location: LocationStrings(city: "Atlantis", state: nil, country: nil, name: nil)
+            )
+        ])
+        engine.dropIndex()
+        try engine.loadIndex()
+
+        XCTAssertTrue(try engine.hybridSearch(
+            hints: query,
+            featurePolicy: .pro
+        ).results.isEmpty)
+    }
+
+    func testPureLocationQueryReturnsOnlyVerifiedMetadataMatches() throws {
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "california",
+                    localIdentifier: "local-california",
+                    date: Date(timeIntervalSince1970: 100),
+                    city: "San Francisco",
+                    state: "CA",
+                    country: "United States",
+                    embedding: float16Vector(first: 0.1)
+                ),
+                .init(
+                    id: "berlin-apartment",
+                    localIdentifier: "local-berlin-apartment",
+                    date: Date(timeIntervalSince1970: 300),
+                    city: "Berlin",
+                    state: "Berlin",
+                    country: "Germany",
+                    embedding: float16Vector(first: 1)
+                ),
+                .init(
+                    id: "awaiting-geocode",
+                    localIdentifier: "local-awaiting-geocode",
+                    date: Date(timeIntervalSince1970: 200),
+                    embedding: float16Vector(first: 1)
+                ),
+            ]
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["california": floatVector(first: 1)]),
+            database: database
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(
+            hints: hints(
+                text: "california",
+                locationHint: "California",
+                hasVisualQuery: true
+            ),
+            featurePolicy: .pro
+        )
+
+        XCTAssertEqual(response.results.map(\.id), ["california"])
+        XCTAssertTrue(response.fallbackResults.isEmpty)
+        XCTAssertEqual(response.filtersApplied?.locationDescription, "California")
+    }
+
+    func testBareGeorgiaReturnsUSStateAndCountryMatches() throws {
+        let encoder = CountingTextEncoder(embedding: floatVector(first: 1))
+        let engine = SearchEngine(
+            textEncoder: encoder,
+            database: SearchFixtureDatabase(photos: [
+                .init(
+                    id: "atlanta",
+                    localIdentifier: "atlanta",
+                    date: Date(timeIntervalSince1970: 100),
+                    city: "Atlanta",
+                    state: "GA",
+                    country: "United States",
+                    embedding: float16Vector(first: 0.01)
+                ),
+                .init(
+                    id: "tbilisi",
+                    localIdentifier: "tbilisi",
+                    date: Date(timeIntervalSince1970: 200),
+                    city: "Tbilisi",
+                    country: "Georgia",
+                    embedding: float16Vector(first: 0.01)
+                ),
+                .init(
+                    id: "berlin",
+                    localIdentifier: "berlin",
+                    date: Date(timeIntervalSince1970: 300),
+                    city: "Berlin",
+                    state: "Berlin",
+                    country: "Germany",
+                    embedding: float16Vector(first: 1)
+                ),
+            ])
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(
+            hints: hints(
+                text: "georgia",
+                locationHint: "Georgia",
+                hasVisualQuery: true
+            ),
+            featurePolicy: .pro
+        )
+
+        XCTAssertEqual(response.results.map(\.id), ["tbilisi", "atlanta"])
+        XCTAssertEqual(encoder.encodeCount, 0)
+    }
+
+    func testCaliforniaYearQueryCombinesLocalAliasAndDateFilters() throws {
+        let calendar = Calendar.current
+        let in2022 = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2022,
+            month: 6,
+            day: 15,
+            hour: 12
+        )))
+        let in2023 = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2023,
+            month: 6,
+            day: 15,
+            hour: 12
+        )))
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "california-2022",
+                localIdentifier: "local-california-2022",
+                date: in2022,
+                city: "San Diego",
+                state: "CA",
+                country: "United States",
+                embedding: float16Vector(first: 0.1)
+            ),
+            .init(
+                id: "california-2023",
+                localIdentifier: "local-california-2023",
+                date: in2023,
+                city: "Los Angeles",
+                state: "CA",
+                country: "United States",
+                embedding: float16Vector(first: 1)
+            ),
+            .init(
+                id: "berlin-2022",
+                localIdentifier: "local-berlin-2022",
+                date: in2022,
+                city: "Berlin",
+                state: "Berlin",
+                country: "Germany",
+                embedding: float16Vector(first: 1)
+            ),
+                .init(
+                    id: "unresolved-2022",
+                    localIdentifier: "local-unresolved-2022",
+                    date: in2022,
+                    latitude: 37.7749,
+                    longitude: -122.4194,
+                    embedding: float16Vector(first: 1)
+                ),
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder([:]),
+            database: database
+        )
+        let queryHints = QueryParserFallback.parse(query: "California 2022")
+
+        XCTAssertEqual(queryHints.locationHint?.lowercased(), "california")
+        XCTAssertNotNil(queryHints.dateRange)
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(
+            hints: queryHints,
+            featurePolicy: .pro
+        )
+
+        XCTAssertEqual(
+            Set(response.results.map(\.id)),
+            Set(["california-2022", "unresolved-2022"])
+        )
+        XCTAssertTrue(response.fallbackResults.isEmpty)
+    }
+
+    func testUppercaseStateCodeKeepsPendingAndGeocodedResultsInSameRegion() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(
+                id: "pending-california",
+                localIdentifier: "pending-california",
+                date: nil,
+                latitude: 37.7749,
+                longitude: -122.4194,
+                embedding: float16Vector(first: 1)
+            ),
+            .init(
+                id: "geocoded-california",
+                localIdentifier: "geocoded-california",
+                date: nil,
+                latitude: 34.0522,
+                longitude: -118.2437,
+                city: "Los Angeles",
+                state: "CA",
+                country: "United States",
+                embedding: float16Vector(first: 1)
+            ),
+            .init(
+                id: "pending-canada",
+                localIdentifier: "pending-canada",
+                date: nil,
+                latitude: 43.6532,
+                longitude: -79.3832,
+                embedding: float16Vector(first: 1)
+            ),
+        ])
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder([
+                "ca": floatVector(second: 1),
+                "photos": floatVector(first: 1),
+            ]),
+            database: database
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(
+            hints: QueryParserFallback.parse(query: "CA"),
+            featurePolicy: .pro
+        )
+
+        XCTAssertEqual(
+            Set(response.results.map(\.id)),
+            Set(["pending-california", "geocoded-california"])
+        )
+
+        let compoundResponse = try engine.hybridSearch(
+            hints: QueryParserFallback.parse(query: "photos in CA"),
+            featurePolicy: .pro
+        )
+        XCTAssertEqual(
+            Set(compoundResponse.results.map(\.id)),
+            Set(["pending-california", "geocoded-california"])
+        )
+    }
+
+    func testUnknownLocationReturnsNoUnverifiedOrSemanticFallbackResults() throws {
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "berlin-apartment",
+                    localIdentifier: "local-berlin-apartment",
+                    date: Date(timeIntervalSince1970: 300),
+                    city: "Berlin",
+                    state: "Berlin",
+                    country: "Germany",
+                    embedding: float16Vector(first: 1)
+                ),
+                .init(
+                    id: "awaiting-geocode",
+                    localIdentifier: "local-awaiting-geocode",
+                    date: Date(timeIntervalSince1970: 200),
+                    embedding: float16Vector(first: 1)
+                ),
+            ]
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["antarctica": floatVector(first: 1)]),
+            database: database
+        )
+
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(
+            hints: hints(
+                text: "antarctica",
+                locationHint: "Antarctica",
+                hasVisualQuery: true
+            ),
+            featurePolicy: .pro
+        )
+
+        XCTAssertTrue(response.results.isEmpty)
+        XCTAssertTrue(response.fallbackResults.isEmpty)
+        XCTAssertEqual(response.filtersApplied?.locationDescription, "Antarctica")
+    }
+
+    func testPagedLocationSearchNeverReturnsUnverifiedOrUnfilteredResults() throws {
+        let database = SearchFixtureDatabase(
+            photos: [
+                .init(
+                    id: "california",
+                    localIdentifier: "local-california",
+                    date: Date(timeIntervalSince1970: 100),
+                    city: "Los Angeles",
+                    state: "CA",
+                    country: "United States",
+                    embedding: float16Vector(first: 0.2)
+                ),
+                .init(
+                    id: "berlin",
+                    localIdentifier: "local-berlin",
+                    date: Date(timeIntervalSince1970: 300),
+                    city: "Berlin",
+                    state: "Berlin",
+                    country: "Germany",
+                    embedding: float16Vector(first: 1)
+                ),
+                .init(
+                    id: "awaiting-geocode",
+                    localIdentifier: "local-awaiting-geocode",
+                    date: Date(timeIntervalSince1970: 200),
+                    embedding: float16Vector(first: 1)
+                ),
+            ]
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder([
+                "california": floatVector(first: 1),
+                "dog": floatVector(first: 1),
+            ]),
+            database: database,
+            residentMediaLimit: 1
+        )
+        try engine.loadIndex()
+
+        let california = try engine.hybridSearch(
+            hints: hints(
+                text: "california",
+                locationHint: "California",
+                hasVisualQuery: true
+            ),
+            featurePolicy: .pro
+        )
+        let antarctica = try engine.hybridSearch(
+            hints: hints(
+                text: "dog",
+                locationHint: "Antarctica",
+                hasVisualQuery: true
+            ),
+            featurePolicy: .pro
+        )
+
+        XCTAssertEqual(california.results.map(\.id), ["california"])
+        XCTAssertTrue(california.fallbackResults.isEmpty)
+        XCTAssertTrue(antarctica.results.isEmpty)
+        XCTAssertTrue(antarctica.fallbackResults.isEmpty)
+        XCTAssertEqual(antarctica.filtersApplied?.locationDescription, "Antarctica")
     }
 
     func testDateFilterExcludesVideoOnlyResult() throws {
@@ -1079,7 +1745,7 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(videoScorer.queries.map { $0[0] }, [0.8, 0.4])
     }
 
-    func testFilteredOutPhotosStillProduceCpuFallbackResults() throws {
+    func testFilteredOutPhotosDoNotProduceUnfilteredFallbackResults() throws {
         let database = SearchFixtureDatabase(
             photos: [
                 .init(
@@ -1103,7 +1769,7 @@ final class SearchEngineTests: XCTestCase {
         )
 
         XCTAssertTrue(response.results.isEmpty)
-        XCTAssertEqual(response.fallbackResults.map(\.id), ["photo-1"])
+        XCTAssertTrue(response.fallbackResults.isEmpty)
     }
 
     func testCorruptedVideoMatrixThrows() throws {
@@ -1473,8 +2139,6 @@ final class SearchEngineTests: XCTestCase {
             textQuery: text,
             dateRange: dateRange,
             locationHint: locationHint,
-            locationCoordinate: nil,
-            locationRadiusKm: nil,
             locationLocality: nil,
             locationSubAdmin: nil,
             locationAdminArea: nil,
@@ -1627,7 +2291,12 @@ struct FixturePhoto: Sendable {
     let date: Date?
     var sourceId: String = PhotoSourceType.photokit.rawValue
     var filePath: String? = nil
+    var latitude: Double? = nil
+    var longitude: Double? = nil
     var city: String? = nil
+    var state: String? = nil
+    var country: String? = nil
+    var locationName: String? = nil
     var sceneLabels: String? = nil
     let embedding: [Float16]
 }
@@ -1656,6 +2325,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     private let gatedPhotoLoadNumber: Int
     private let persistedPhotoCount: Int?
     private let persistedVideoCount: Int?
+    private let suppliedGeocodingCounts: GeocodingCounts?
 
     var photos: [FixturePhoto] {
         get { state.withLock { $0.photos } }
@@ -1681,7 +2351,8 @@ final class SearchFixtureDatabase: DatabaseProtocol {
         photoLoadGate: ManualResetLoadGate? = nil,
         gatedPhotoLoadNumber: Int = 1,
         persistedPhotoCount: Int? = nil,
-        persistedVideoCount: Int? = nil
+        persistedVideoCount: Int? = nil,
+        geocodingCounts: GeocodingCounts? = nil
     ) {
         self.state = OSAllocatedUnfairLock(
             initialState: State(photos: photos, videos: videos)
@@ -1690,6 +2361,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
         self.gatedPhotoLoadNumber = gatedPhotoLoadNumber
         self.persistedPhotoCount = persistedPhotoCount
         self.persistedVideoCount = persistedVideoCount
+        self.suppliedGeocodingCounts = geocodingCounts
     }
 
     func indexedCount() throws -> Int { photos.count }
@@ -1819,12 +2491,12 @@ final class SearchFixtureDatabase: DatabaseProtocol {
                     sourceId: photo.sourceId,
                     filePath: photo.filePath,
                     date: photo.date,
-                    latitude: nil,
-                    longitude: nil,
+                    latitude: photo.latitude,
+                    longitude: photo.longitude,
                     city: photo.city,
-                    state: nil,
-                    country: nil,
-                    locationName: nil,
+                    state: photo.state,
+                    country: photo.country,
+                    locationName: photo.locationName,
                     details: .photo(ocrText: nil, sceneLabels: photo.sceneLabels)
                 ),
                 embedding: photo.embedding
@@ -1851,12 +2523,12 @@ final class SearchFixtureDatabase: DatabaseProtocol {
                     sourceId: photo.sourceId,
                     filePath: photo.filePath,
                     date: photo.date,
-                    latitude: nil,
-                    longitude: nil,
+                    latitude: photo.latitude,
+                    longitude: photo.longitude,
                     city: photo.city,
-                    state: nil,
-                    country: nil,
-                    locationName: nil,
+                    state: photo.state,
+                    country: photo.country,
+                    locationName: photo.locationName,
                     details: .photo(ocrText: nil, sceneLabels: photo.sceneLabels)
                 ),
                 embedding: photo.embedding
@@ -1927,9 +2599,12 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     func reconcileFreeTier(_ limit: Int) throws -> FreeTierReconciliationResult {
         FreeTierReconciliationResult(retainedMediaCount: 0, didTrimMedia: false)
     }
-    func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
-    func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
+    func photosNeedingLocationBackfill(after localIdentifier: String?, limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
+    func videosNeedingLocationBackfill(after localIdentifier: String?, limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func geocodingCounts() throws -> GeocodingCounts {
+        if let suppliedGeocodingCounts {
+            return suppliedGeocodingCounts
+        }
         let snapshot = state.withLock { $0 }
         return GeocodingCounts(
             totalWithGPS: 0,
@@ -1938,6 +2613,10 @@ final class SearchFixtureDatabase: DatabaseProtocol {
             indexedVideos: snapshot.videos.count
         )
     }
+    func reverseGeocodeLocations(bucketKeys: [String]) throws -> [String: LocationStrings] { [:] }
+    func saveReverseGeocodeLocation(_ location: LocationStrings, bucketKey: String) throws {}
+    func deferPhotoLocationBackfill(localIdentifiers: [String], until: Date) throws {}
+    func deferVideoLocationBackfill(localIdentifiers: [String], until: Date) throws {}
     func updatePhotoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws {}
     func updateVideoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws {}
     func insertSource(_ source: PhotoSource) throws {}

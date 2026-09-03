@@ -22,13 +22,13 @@ On-device processing
 
 Memorable uses bundled Core ML models to analyze media and encode search text on your device. It stores generated embeddings, OCR text, scene labels, dates, dimensions, searchable place names, search history, and app settings locally.
 
-During indexing and search, photo and video contents and search query text are not sent to the developer, Apple CLGeocoder, or an AI service. The app disables network access on PhotoKit media requests. As a result, it does not fetch iCloud-only media for indexing. User-initiated sharing, described below, provides one selected photo to the destination you choose.
+During indexing and search, photo and video contents and search query text are not sent to the developer, Apple's reverse-geocoding service, or an AI service. The app disables network access on PhotoKit media requests. As a result, it does not fetch iCloud-only media for indexing. User-initiated sharing, described below, provides one selected photo to the destination you choose.
 
 Apple service traffic
 
 During indexing and commerce, Memorable uses two Apple-managed services that may use network access:
 
-1. Apple CLGeocoder: If indexed media contains GPS metadata, Memorable sends its latitude and longitude coordinates to Apple's CLGeocoder service. Apple returns place names such as city, state, and country. Memorable stores those place names locally. It does not send the photo or video contents or your search query text with the request.
+1. Apple reverse geocoding: If indexed media contains GPS metadata, Memorable may send its latitude and longitude coordinates to Apple's MapKit or Core Location reverse-geocoding service. Apple returns place names such as city, state, and country. Memorable stores those place names locally. It does not send the photo or video contents or your search query text with the request.
 
 2. Apple StoreKit: Memorable uses StoreKit for Pro product information, entitlement verification, purchases, restores, refunds, and transaction updates. StoreKit exchanges the account, product, transaction, and device information that Apple requires to provide those services. The developer does not receive photo contents, video contents, search query text, or the local search index through StoreKit.
 

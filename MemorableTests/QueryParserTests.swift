@@ -404,6 +404,13 @@ final class QueryParserTests: XCTestCase {
         XCTAssertTrue(hints.hasVisualQuery)
     }
 
+    func testParisHiltonIsPersonNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Paris Hilton")
+
+        XCTAssertNil(hints.locationHint, "A multi-word proper name must not become an unverified hard location")
+        XCTAssertEqual(hints.textQuery, "paris hilton")
+    }
+
     func testChristmasIsDateNotLocation() {
         let hints = QueryParserFallback.parse(query: "Christmas")
         XCTAssertNil(hints.locationHint, "Christmas should trigger dateRange, not locationHint")
@@ -426,6 +433,41 @@ final class QueryParserTests: XCTestCase {
         let hints = QueryParserFallback.parse(query: "California")
         XCTAssertNotNil(hints.locationHint, "California is a US state and should be a location")
         XCTAssertEqual(hints.locationHint?.lowercased(), "california")
+    }
+
+    func testUppercaseAdministrativeCodeIsLocation() {
+        let hints = QueryParserFallback.parse(query: "CA")
+
+        XCTAssertEqual(hints.locationHint, "CA")
+        XCTAssertEqual(hints.textQuery, "ca")
+        XCTAssertEqual(hints.locationAdminArea, "CA")
+        XCTAssertEqual(hints.locationCountryName, "united states")
+    }
+
+    func testUppercaseAdministrativeCodeKeepsScopeInsideVisualQuery() {
+        let hints = QueryParserFallback.parse(query: "photos in CA")
+
+        XCTAssertEqual(hints.locationHint?.lowercased(), "ca")
+        XCTAssertEqual(hints.locationAdminArea, "CA")
+        XCTAssertEqual(hints.locationCountryName, "united states")
+        XCTAssertEqual(hints.textQuery, "photos")
+    }
+
+    func testUppercaseAdministrativeCodeKeepsScopeWithYear() {
+        let hints = QueryParserFallback.parse(query: "CA 2022")
+
+        XCTAssertEqual(hints.locationHint?.lowercased(), "ca")
+        XCTAssertEqual(hints.locationAdminArea, "CA")
+        XCTAssertEqual(hints.locationCountryName, "united states")
+        XCTAssertEqual(hints.textQuery, "ca")
+        XCTAssertNotNil(hints.dateRange)
+    }
+
+    func testLowercaseAdministrativeCodeRemainsVisualQuery() {
+        let hints = QueryParserFallback.parse(query: "ca")
+
+        XCTAssertNil(hints.locationHint)
+        XCTAssertEqual(hints.textQuery, "ca")
     }
 
     func testTexasIsLocation() {

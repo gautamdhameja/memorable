@@ -19,7 +19,7 @@ struct OnThisDayView: View {
                             .tint(Celestial.Colors.primaryDim)
                             .padding(.top, 60)
                     } else if yearGroups.isEmpty {
-                        VStack(spacing: 16) {
+                        VStack(spacing: Celestial.Spacing.contentGap) {
                             CelestialGlassIcon(
                                 systemName: indexedCount == 0 ? "photo.on.rectangle.angled" : "calendar",
                                 tint: Celestial.Colors.onSurfaceVariant,
@@ -41,7 +41,7 @@ struct OnThisDayView: View {
                             }
                         }
                         .padding(.top, 60)
-                        .padding(.horizontal)
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                     } else {
                         ZStack(alignment: .bottomLeading) {
                             MemoryHeroImage(photo: yearGroups.first?.photos.first)
@@ -76,11 +76,11 @@ struct OnThisDayView: View {
                                 )
                                 .padding(.top, 22)
                             }
-                            .padding(.horizontal, 26)
+                            .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                             .padding(.bottom, 24)
                         }
 
-                        LazyVStack(spacing: 28) {
+                        LazyVStack(spacing: Celestial.Spacing.sectionGap) {
                             ForEach(yearGroups, id: \.year) { group in
                                 VStack(spacing: 12) {
                                     HStack(alignment: .firstTextBaseline) {
@@ -92,7 +92,7 @@ struct OnThisDayView: View {
                                             .font(Celestial.Typography.caption)
                                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                     }
-                                    .padding(.horizontal, 26)
+                                    .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
 
                                     MasonryGrid(
                                         Array(group.photos.prefix(20)),
@@ -104,7 +104,7 @@ struct OnThisDayView: View {
                                 }
                             }
                         }
-                        .padding(.top, 28)
+                        .padding(.top, Celestial.Spacing.sectionGap)
                     }
                 }
                 .padding(.bottom, 40)

@@ -3,7 +3,171 @@ import XCTest
 
 final class LocationMatcherTests: XCTestCase {
 
+    func testOfflineCaliforniaGeometryIncludesCaliforniaAndExcludesNevada() throws {
+        let matcher = try XCTUnwrap(OfflineLocationGazetteer.shared.makeMatcher(
+            query: "California",
+            locality: nil,
+            adminArea: "California",
+            country: "United States"
+        ))
+
+        XCTAssertTrue(matcher(37.7749, -122.4194))
+        XCTAssertTrue(matcher(34.0522, -118.2437))
+        XCTAssertFalse(matcher(39.5296, -119.8138))
+        XCTAssertFalse(matcher(52.5200, 13.4050))
+    }
+
+    func testOfflineCountryGeometryMatchesBeforeReverseGeocodingCompletes() throws {
+        let matcher = try XCTUnwrap(OfflineLocationGazetteer.shared.makeMatcher(
+            query: "France",
+            locality: nil,
+            adminArea: nil,
+            country: "France"
+        ))
+
+        XCTAssertTrue(matcher(48.8566, 2.3522))
+        XCTAssertFalse(matcher(52.5200, 13.4050))
+    }
+
+    func testOfflineCityResolutionPrefersUniqueNationalCapital() throws {
+        let matcher = try XCTUnwrap(OfflineLocationGazetteer.shared.makeMatcher(
+            query: "Paris",
+            locality: nil,
+            adminArea: nil,
+            country: nil
+        ))
+
+        XCTAssertTrue(matcher(48.8566, 2.3522))
+        XCTAssertFalse(matcher(33.6609, -95.5555))
+    }
+
+    func testOfflineCityResolutionPrefersProminentNonCapitalCity() throws {
+        let sanFrancisco = try XCTUnwrap(OfflineLocationGazetteer.shared.makeMatcher(
+            query: "San Francisco",
+            locality: nil,
+            adminArea: nil,
+            country: nil
+        ))
+        let sydney = try XCTUnwrap(OfflineLocationGazetteer.shared.makeMatcher(
+            query: "Sydney",
+            locality: nil,
+            adminArea: nil,
+            country: nil
+        ))
+
+        XCTAssertTrue(sanFrancisco(37.7749, -122.4194))
+        XCTAssertFalse(sanFrancisco(-26.6237, -58.6304))
+        XCTAssertTrue(sydney(-33.8688, 151.2093))
+        XCTAssertFalse(sydney(46.1351, -60.1831))
+    }
+
+    func testOfflineCountryAliasDoesNotResolveSameNamedCity() throws {
+        let matcher = try XCTUnwrap(OfflineLocationGazetteer.shared.makeMatcher(
+            query: "USA",
+            locality: nil,
+            adminArea: nil,
+            country: nil
+        ))
+
+        XCTAssertTrue(matcher(37.7749, -122.4194))
+        XCTAssertFalse(matcher(33.5325, 131.3494))
+    }
+
+    func testOfflineBareGeorgiaMatchesBothCountryAndUSState() throws {
+        let matcher = try XCTUnwrap(OfflineLocationGazetteer.shared.makeMatcher(
+            query: "Georgia",
+            locality: nil,
+            adminArea: nil,
+            country: nil
+        ))
+        XCTAssertTrue(matcher(41.7151, 44.8271))
+        XCTAssertTrue(matcher(33.7490, -84.3880))
+        XCTAssertFalse(matcher(52.5200, 13.4050))
+
+        let countryMatcher = try XCTUnwrap(OfflineLocationGazetteer.shared.makeMatcher(
+            query: "Georgia",
+            locality: nil,
+            adminArea: nil,
+            country: "Georgia"
+        ))
+        XCTAssertTrue(countryMatcher(41.7151, 44.8271))
+        XCTAssertFalse(countryMatcher(33.7490, -84.3880))
+    }
+
+    func testOfflineWashingtonPrefersStateOverSameNamedCities() throws {
+        let matcher = try XCTUnwrap(OfflineLocationGazetteer.shared.makeMatcher(
+            query: "Washington",
+            locality: nil,
+            adminArea: nil,
+            country: nil
+        ))
+
+        XCTAssertTrue(matcher(47.6062, -122.3321))
+        XCTAssertFalse(matcher(38.9072, -77.0369))
+    }
+
+    func testOfflineVictoriaPrefersAustralianStateOverSeychellesCity() throws {
+        let matcher = try XCTUnwrap(OfflineLocationGazetteer.shared.makeMatcher(
+            query: "Victoria",
+            locality: nil,
+            adminArea: nil,
+            country: nil
+        ))
+
+        XCTAssertTrue(matcher(-37.8136, 144.9631))
+        XCTAssertFalse(matcher(-4.6191, 55.4513))
+    }
+
     // MARK: - State-Level Queries (US abbreviation canonicalization)
+
+    func testAdministrativeRegionTablesAreComplete() throws {
+        let expectedUnitedStates = [
+            "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar",
+            "california": "ca", "colorado": "co", "connecticut": "ct", "delaware": "de",
+            "district of columbia": "dc", "florida": "fl", "georgia": "ga", "hawaii": "hi",
+            "idaho": "id", "illinois": "il", "indiana": "in", "iowa": "ia",
+            "kansas": "ks", "kentucky": "ky", "louisiana": "la", "maine": "me",
+            "maryland": "md", "massachusetts": "ma", "michigan": "mi", "minnesota": "mn",
+            "mississippi": "ms", "missouri": "mo", "montana": "mt", "nebraska": "ne",
+            "nevada": "nv", "new hampshire": "nh", "new jersey": "nj", "new mexico": "nm",
+            "new york": "ny", "north carolina": "nc", "north dakota": "nd", "ohio": "oh",
+            "oklahoma": "ok", "oregon": "or", "pennsylvania": "pa", "rhode island": "ri",
+            "south carolina": "sc", "south dakota": "sd", "tennessee": "tn", "texas": "tx",
+            "utah": "ut", "vermont": "vt", "virginia": "va", "washington": "wa",
+            "west virginia": "wv", "wisconsin": "wi", "wyoming": "wy",
+        ]
+        let expectedCanada = [
+            "alberta": "ab", "british columbia": "bc", "manitoba": "mb",
+            "new brunswick": "nb", "newfoundland and labrador": "nl",
+            "northwest territories": "nt", "nova scotia": "ns", "nunavut": "nu",
+            "ontario": "on", "prince edward island": "pe", "quebec": "qc",
+            "saskatchewan": "sk", "yukon": "yt",
+        ]
+        let expectedAustralia = [
+            "australian capital territory": "act", "new south wales": "nsw",
+            "northern territory": "nt", "queensland": "qld", "south australia": "sa",
+            "tasmania": "tas", "victoria": "vic", "western australia": "wa",
+        ]
+
+        for (regions, country) in [
+            (expectedUnitedStates, "united states"),
+            (expectedCanada, "canada"),
+            (expectedAustralia, "australia"),
+        ] {
+            for (name, code) in regions {
+                let alias = try XCTUnwrap(
+                    AdministrativeRegionAliases.alias(for: name),
+                    "Missing administrative-region alias for \(name)"
+                )
+                XCTAssertEqual(alias.code, code, name)
+                XCTAssertEqual(alias.canonicalCountry, country, name)
+            }
+        }
+
+        XCTAssertEqual(expectedUnitedStates.count, 51)
+        XCTAssertEqual(expectedCanada.count, 13)
+        XCTAssertEqual(expectedAustralia.count, 8)
+    }
 
     func testCaliforniaMatchesStateAbbreviation() {
         let matcher = LocationMatcher.makeMatcher(
@@ -16,6 +180,26 @@ final class LocationMatcherTests: XCTestCase {
         XCTAssertFalse(matcher("Berlin", "Berlin", "Germany", nil))
     }
 
+    func testCaliforniaInfersStateAbbreviationWithoutNetworkCanonicalization() {
+        let matcher = LocationMatcher.makeMatcher(
+            queryLower: "california", locality: nil,
+            adminArea: nil, country: nil
+        )
+
+        XCTAssertTrue(matcher("San Francisco", "CA", "United States", nil))
+        XCTAssertFalse(matcher("Berlin", "Berlin", "Germany", nil))
+    }
+
+    func testInferredRegionCodeIsScopedToItsCountry() {
+        let matcher = LocationMatcher.makeMatcher(
+            queryLower: "western australia", locality: nil,
+            adminArea: nil, country: nil
+        )
+
+        XCTAssertTrue(matcher("Perth", "WA", "Australia", nil))
+        XCTAssertFalse(matcher("Seattle", "WA", "United States", nil))
+    }
+
     func testBareAbbreviationMatchesState() {
         let matcher = LocationMatcher.makeMatcher(
             queryLower: "ca", locality: nil,
@@ -23,6 +207,19 @@ final class LocationMatcherTests: XCTestCase {
         )
         XCTAssertTrue(matcher("San Diego", "CA", "United States", nil))
         XCTAssertFalse(matcher("Las Vegas", "NV", "United States", nil))
+    }
+
+    func testBareAbbreviationWithoutCanonicalHintsMatchesOnlyScopedAdminField() {
+        let matcher = LocationMatcher.makeMatcher(
+            queryLower: "ca", locality: nil,
+            adminArea: nil, country: nil
+        )
+
+        XCTAssertTrue(matcher("San Diego", "CA", "United States", nil))
+        XCTAssertFalse(matcher("Toronto", "ON", "Canada", nil))
+        XCTAssertFalse(matcher("Calgary", "AB", "Canada", nil))
+        XCTAssertFalse(matcher("Cairo", nil, "Egypt", nil))
+        XCTAssertFalse(matcher("Catanzaro", "Calabria", "Italy", nil))
     }
 
     func testNevadaMatchesStateAbbreviation() {
@@ -116,6 +313,17 @@ final class LocationMatcherTests: XCTestCase {
             adminArea: nil, country: "Germany"
         )
         XCTAssertFalse(matcher("Unknown", nil, nil, nil))
+    }
+
+    func testBareGeorgiaMatchesCountryAndUSState() {
+        let matcher = LocationMatcher.makeMatcher(
+            queryLower: "georgia", locality: nil,
+            adminArea: nil, country: nil
+        )
+
+        XCTAssertTrue(matcher("Tbilisi", nil, "Georgia", nil))
+        XCTAssertTrue(matcher("Atlanta", "GA", "United States", nil))
+        XCTAssertFalse(matcher("Berlin", "Berlin", "Germany", nil))
     }
 
     // MARK: - Non-US Full-Name States
@@ -223,8 +431,8 @@ final class LocationMatcherTests: XCTestCase {
     // MARK: - City-State Queries (admin region that is also a city)
 
     func testPragueAsAdminMatchesCityColumn() {
-        // Apple forward-geocodes "Prague" with locality=nil, admin="Prague"
-        // but reverse-geocoded photos store city="Prague", state="Praha"
+        // A local canonicalizer can classify Prague as an admin area while
+        // reverse-geocoded photos store city="Prague", state="Praha".
         let matcher = LocationMatcher.makeMatcher(
             queryLower: "prague", locality: nil,
             adminArea: "Prague", country: "Czechia"
@@ -269,8 +477,7 @@ final class LocationMatcherTests: XCTestCase {
             queryLower: "", locality: nil,
             adminArea: nil, country: nil
         )
-        // Empty query substring matches everything via contains(""), but
-        // the real behavior depends on whether the fields are non-nil
+        XCTAssertFalse(matcher("Berlin", "Berlin", "Germany", nil))
         XCTAssertFalse(matcher(nil, nil, nil, nil))
     }
 

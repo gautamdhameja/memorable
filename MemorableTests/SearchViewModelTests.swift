@@ -56,6 +56,53 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSearchPublishesAndClearingQueryRemovesRestrictionDisclosure() async {
+        let restriction = SearchRestrictionSummary(features: [.location, .date])
+        let model = makeModel(search: { _ in
+            SearchResponse(
+                results: [Self.result(id: "visual-result")],
+                fallbackResults: [],
+                filtersApplied: nil,
+                restrictionSummary: restriction
+            )
+        })
+
+        model.setQueryText("California 2022")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.restrictionSummary, restriction)
+
+        model.setQueryText("")
+        XCTAssertNil(model.restrictionSummary)
+    }
+
+    func testLocationEmptyStateExplainsIncompleteGeocoding() {
+        let summary = FilterSummary(
+            dateDescription: "2022",
+            locationDescription: "California",
+            visualQuery: ""
+        )
+        let progress = GeocodingProgressState(
+            completed: 250,
+            total: 1_000,
+            phase: .running
+        )
+
+        XCTAssertEqual(
+            SearchResultsPresentation.noResultsTitle(
+                summary: summary,
+                geocodingProgress: progress
+            ),
+            "Still resolving photo locations"
+        )
+        XCTAssertTrue(SearchResultsPresentation.noResultsExplanation(
+            summary: summary,
+            geocodingProgress: progress
+        ).contains("250 of 1000 complete"))
+    }
+
+    @MainActor
     func testOnlyNewerSubmittedSearchSupersedesOlderSearch() async throws {
         let searcher = ControlledSearcher()
         let model = makeModel(search: searcher.search)

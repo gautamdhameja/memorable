@@ -500,17 +500,46 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(searchView.contains(
             ".font(Celestial.Typography.compactMemoryCaption)"
         ))
-        XCTAssertTrue(searchView.contains(
-            "InitialIndexingProgressView(indexingService: indexingService)"
-        ))
+        XCTAssertEqual(
+            searchView.components(
+                separatedBy: "IndexingBannerView(indexingService: indexingService)"
+            ).count - 1,
+            2,
+            "Initial and incremental indexing must use the same home-screen progress card"
+        )
         XCTAssertTrue(searchView.contains("presentation: .initialIndexing"))
         let indexingBanner = try contents(of: "Memorable/Views/IndexingBannerView.swift")
-        let initialProgress = try sourceSection(
+        let indexingProgress = try sourceSection(
             in: indexingBanner,
-            from: "struct InitialIndexingProgressView",
+            from: "struct IndexingBannerView",
             to: ".accessibilityElement(children: .contain)"
         )
-        XCTAssertTrue(initialProgress.contains(".frame(minWidth: 44, minHeight: 44)"))
+        XCTAssertTrue(indexingProgress.contains("ProgressView("))
+        XCTAssertTrue(indexingProgress.contains(".frame(minWidth: 44, minHeight: 44)"))
+        XCTAssertFalse(indexingBanner.contains("Circle()"), "The legacy dial must not remain")
+        XCTAssertFalse(searchView.contains(
+            "else if indexingService.progress.isRunning,\n                                          viewModel.queryText.isEmpty"
+        ), "Incremental indexing must keep the normal home content visible")
+
+        let service = try contents(of: "Memorable/Core/IndexingService.swift")
+        let searchPrioritySection = try sourceSection(
+            in: service,
+            from: "func prioritizeUserSearch()",
+            to: "func cancelAllWorkForMemoryPressure()"
+        )
+        XCTAssertFalse(searchPrioritySection.contains("geocodingProgress = nil"))
+        XCTAssertTrue(searchPrioritySection.contains("enqueueGeocoding("))
+
+        let sourceManager = try contents(of: "Memorable/Views/SourceManagerView.swift")
+        let applePhotosStatus = try sourceSection(
+            in: sourceManager,
+            from: "if indexingService.progress.isRunning",
+            to: "else if !indexingService.isReady"
+        )
+        XCTAssertFalse(
+            applePhotosStatus.contains("ProgressView()"),
+            "Secondary screens must not duplicate the retired indexing dial"
+        )
     }
 
     func testSearchResultsToolbarUsesConciseHierarchy() throws {
@@ -578,6 +607,7 @@ final class ProjectConfigurationTests: XCTestCase {
 
     func testStartupChecksExistingIndexInsideHomeScreen() throws {
         let appState = try contents(of: "Memorable/MemorableApp.swift")
+        let contentView = try contents(of: "Memorable/Views/ContentView.swift")
         let searchView = try contents(of: "Memorable/Views/SearchView.swift")
         let mainTabView = try contents(of: "Memorable/Views/MainTabView.swift")
         let warmup = try sourceSection(
@@ -592,6 +622,13 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(searchView.contains("semanticRuntime.isCheckingIndexAvailability"))
         XCTAssertTrue(searchView.contains("Loading your library…"))
         XCTAssertFalse(mainTabView.contains("Ready to index your photos"))
+        XCTAssertTrue(contentView.contains("private var launchShell"))
+        XCTAssertFalse(contentView.contains("private var loadingView"))
+        XCTAssertFalse(contentView.contains("Circle()"), "The retired indexing dial must not appear during launch")
+        XCTAssertFalse(contentView.contains("ProgressView()"), "Launch checks must not look like indexing")
+        XCTAssertTrue(mainTabView.contains("private struct SearchPreparationShell"))
+        XCTAssertFalse(mainTabView.contains("private struct SemanticWarmupView"))
+        XCTAssertFalse(mainTabView.contains("ProgressView()"), "Search warmup must stay inside the static home shell")
 
         let markChecking = try XCTUnwrap(warmup.range(of: "semanticRuntime.markIndexWarming"))
         let verifyEntitlement = try XCTUnwrap(warmup.range(of: "await ProManager.shared.verifyEntitlement()"))
@@ -611,6 +648,27 @@ final class ProjectConfigurationTests: XCTestCase {
         for font in forbiddenFonts {
             XCTAssertFalse(sources.contains(font), "Use a Celestial typography role instead of \(font)")
         }
+    }
+
+    func testScreensUseSharedLayoutRhythm() throws {
+        let sources = try allSourceText(in: "Memorable/Views")
+
+        XCTAssertEqual(Celestial.Spacing.pageHorizontalInset, 24)
+        XCTAssertEqual(Celestial.Spacing.surfaceHorizontalInset, 16)
+        XCTAssertEqual(Celestial.Spacing.surfaceContentInset, 16)
+        XCTAssertEqual(Celestial.Spacing.stackedContainerGap, 12)
+        XCTAssertEqual(Celestial.Spacing.contentGap, 16)
+        XCTAssertEqual(Celestial.Spacing.sectionGap, 28)
+        XCTAssertLessThan(
+            Celestial.Spacing.surfaceHorizontalInset,
+            Celestial.Spacing.pageHorizontalInset
+        )
+        XCTAssertLessThan(
+            Celestial.Spacing.stackedContainerGap,
+            Celestial.Spacing.sectionGap
+        )
+        XCTAssertFalse(sources.contains(".padding(.horizontal, 22)"))
+        XCTAssertFalse(sources.contains(".padding(.horizontal, 26)"))
     }
 
     func testPhotoControlsUseButtonsAndTextControlsCanGrow() throws {

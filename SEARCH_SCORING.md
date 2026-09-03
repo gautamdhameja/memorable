@@ -10,12 +10,12 @@ The app caps every query parser path at 500 characters. It processes the bounded
 Query: "sunset in San Diego last summer"
   -> Bound input to 500 characters
   -> Extract visual text, date range, location name, and negative terms
-  -> Match location text against local reverse-geocoded metadata
+  -> Match location text against local metadata and bundled GPS geometry
   -> Encode raw visual text with the bundled SigLIP2 model
   -> Snapshot the resident photo and video fast window under a lock
   -> Build date and location candidate sets
   -> Score the resident window, then any remaining 512-media database pages
-  -> Apply local location, time, OCR, scene-label, and video adjustments
+  -> Apply local time, OCR, scene-label, and video adjustments
   -> Penalize negative-term similarity
   -> Remove results below the minimum score
   -> Keep the best frame for each video
@@ -30,7 +30,7 @@ SigLIP2 uses sigmoid loss over raw web captions. Prompt fusion such as averaging
 
 Date filters remove media outside the requested range. If the query requires a date, the app also removes media without a creation date because it cannot prove that the media satisfies the constraint.
 
-Location filters match the parsed location against locally stored city, state, country, and location-name fields. The app does not forward-geocode query text. During indexing, a separate enrichment path sends media GPS coordinates to Apple CLGeocoder and stores the returned place names locally.
+Location filters first match locally stored city, state, country, or location-name fields. When those labels are not ready yet, the bundled gazetteer resolves unambiguous city names to a conservative radius and state/country names to local Natural Earth polygons, then tests the media's existing GPS coordinate on device. Common full administrative-region names are also mapped locally to the abbreviated values Apple may store (for example, `California` to `CA`). The app never forward-geocodes query text. A separate deferred enrichment path sends only media GPS coordinates to Apple's reverse-geocoding service, caches nearby results persistently, and stores the returned place names locally.
 
 Pure location queries, such as `Paris`, skip visual scoring and return matching metadata sorted by date. The engine caps this path at 500 results.
 
@@ -47,8 +47,6 @@ The app applies these additive values:
 | Parameter | Value | Purpose |
 |---|---:|---|
 | `minimumScoreThreshold` | `0.12` | Include a result in the main response |
-| `locationCloseBoost` | `0.025` | Boost media within 10% of the requested radius |
-| `locationNearBoost` | `0.015` | Boost media within 30% of the requested radius |
 | `timeOfDayMatchBoost` | `0.03` | Boost media whose creation hour matches the query |
 | `negativeTermWeight` | `0.3` | Subtract weighted negative similarity |
 | `ocrBoostPerWord` | `0.08` | Boost matching OCR text |

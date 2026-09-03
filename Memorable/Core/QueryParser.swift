@@ -79,8 +79,6 @@ struct SearchFeaturePolicy: Equatable, Sendable {
                 textQuery: hints.textQuery,
                 dateRange: nil,
                 locationHint: nil,
-                locationCoordinate: nil,
-                locationRadiusKm: nil,
                 locationLocality: nil,
                 locationSubAdmin: nil,
                 locationAdminArea: nil,
@@ -106,6 +104,17 @@ struct SearchFeaturePolicy: Equatable, Sendable {
         return bounded
     }
 
+    func restrictionSummary(for hints: QueryHints) -> SearchRestrictionSummary? {
+        guard !allowsAdvancedQueryFeatures else { return nil }
+        var features = Set<RestrictedSearchFeature>()
+        if hints.locationHint != nil { features.insert(.location) }
+        if hints.dateRange != nil || hints.seasonHint != nil { features.insert(.date) }
+        if !hints.negativeTerms.isEmpty { features.insert(.exclusions) }
+        if hints.timeOfDayHours != nil { features.insert(.timeOfDay) }
+        guard !features.isEmpty else { return nil }
+        return SearchRestrictionSummary(features: features)
+    }
+
     func enforcing(_ response: SearchResponse) -> SearchResponse {
         guard !allowsFolderResults else { return response }
         let isPhotoLibraryResult: (SearchResult) -> Bool = {
@@ -114,7 +123,8 @@ struct SearchFeaturePolicy: Equatable, Sendable {
         return SearchResponse(
             results: response.results.filter(isPhotoLibraryResult),
             fallbackResults: response.fallbackResults.filter(isPhotoLibraryResult),
-            filtersApplied: response.filtersApplied
+            filtersApplied: response.filtersApplied,
+            restrictionSummary: response.restrictionSummary
         )
     }
 }
@@ -123,8 +133,6 @@ struct QueryHints {
     var textQuery: String
     var dateRange: DateRange?
     var locationHint: String?
-    var locationCoordinate: (lat: Double, lon: Double)?
-    var locationRadiusKm: Double?
     // Optional canonical location fields. Search does not forward-geocode
     // query text; these remain nil unless a local parser can supply them.
     var locationLocality: String?
@@ -185,6 +193,29 @@ enum QueryParserFallback {
 
         // 4. Location extraction via NLTagger
         extractLocation(from: trimmed, text: &text, locationHint: &locationHint)
+        var locationAdminArea: String?
+        var locationCountryName: String?
+        let originalLocationCode: String? = locationHint.flatMap { hint -> String? in
+            guard hint.split(whereSeparator: \Character.isWhitespace).count == 1 else {
+                return nil
+            }
+            return trimmed
+                .split(whereSeparator: \Character.isWhitespace)
+                .map { String($0).trimmingCharacters(in: .punctuationCharacters) }
+                .first(where: {
+                    $0.caseInsensitiveCompare(hint) == .orderedSame
+                        && AdministrativeRegionAliases.isKnownUppercaseCode($0)
+                })
+        }
+        if let locationHint,
+           locationHint.split(whereSeparator: \Character.isWhitespace).count == 1,
+           let originalCode = originalLocationCode,
+           let alias = AdministrativeRegionAliases.alias(
+               forCode: originalCode.lowercased()
+           ) {
+                locationAdminArea = originalCode
+                locationCountryName = alias.canonicalCountry
+        }
 
         // 5. Clean up — loop to strip chained prepositions (e.g., "car service in" → "car service")
         text = text.replacingOccurrences(of: "  ", with: " ").trimmingCharacters(in: .whitespaces)
@@ -207,10 +238,10 @@ enum QueryParserFallback {
 
         var cleanedText = text.trimmingCharacters(in: .whitespaces)
 
-        // If location extraction consumed the entire query, the place name itself
-        // is a visual concept (e.g. "Hoover Dam", "Eiffel Tower", "Berlin").
-        // Use it as both location filter AND visual query so CLIP can match by
-        // appearance, not just GPS coordinates.
+        // Preserve a bare place name in textQuery as an explicit marker for
+        // SearchEngine's pure-filter classification. The engine recognizes
+        // textQuery == locationHint and returns every verified location match
+        // by date without applying a meaningless place-name embedding rank.
         if cleanedText.isEmpty && locationHint != nil {
             cleanedText = locationHint!.lowercased()
         }
@@ -225,6 +256,8 @@ enum QueryParserFallback {
             textQuery: hasVisual ? cleanedText : "a photo",
             dateRange: dateRange,
             locationHint: locationHint,
+            locationAdminArea: locationAdminArea,
+            locationCountryName: locationCountryName,
             negativeTerms: negTerms,
             timeOfDayHours: timeOfDayHours,
             hasVisualQuery: hasVisual
@@ -264,6 +297,20 @@ enum QueryParserFallback {
     private static func extractLocation(from original: String, text: inout String, locationHint: inout String?) {
         var landmarkGuardTriggered = false
         let textBeforeExtraction = text
+
+        // Exact uppercase administrative codes carry useful intent while their
+        // lowercase forms are often ordinary words (IN, OR, ME). Preserve that
+        // casing signal before the rest of the parser operates on lowercase text.
+        let remainingWords = text.split(separator: " ")
+        if remainingWords.count == 1,
+           let originalCode = original.split(separator: " ")
+            .map(String.init)
+            .first(where: { $0.lowercased() == remainingWords[0].lowercased() }),
+           AdministrativeRegionAliases.isKnownUppercaseCode(originalCode) {
+            locationHint = originalCode
+            text = ""
+            return
+        }
 
         // Strategy 1: NLTagger on original text (works when user types proper case)
         if let place = extractPlaceViaTagger(original),
@@ -348,9 +395,9 @@ enum QueryParserFallback {
         // If Strategy 1 already found a location, use it.
         if locationHint != nil { return }
 
-        // Strategy 3: Bare multi-word proper noun fallback
-        // If the entire remaining text is 1-4 capitalized words with no obvious
-        // visual content words, treat it as a potential location.
+        // Strategy 3: Bare location fallback. Every candidate must be present
+        // in a bundled gazetteer; capitalization alone cannot distinguish a
+        // place from a person's name.
         // Local metadata matching validates the hint. If nothing matches, the
         // search proceeds as normal visual search.
         // Skip if Strategy 1's landmark guard triggered — the query is a landmark
@@ -392,21 +439,8 @@ enum QueryParserFallback {
                             text = ""
                         }
                     } else {
-                        let isLikelyVisual = candidates.allSatisfy {
-                            visualWords.contains($0.lowercased())
-                        }
-
-                        let landmarkWords: Set<String> = ["dam", "tower", "bridge", "falls",
-                            "monument", "palace", "castle", "gate", "wall", "square",
-                            "plaza", "temple", "cathedral", "pyramid", "statue",
-                            "lighthouse", "canyon", "reef", "volcano", "glacier",
-                            "arch", "museum", "fountain", "church", "dome",
-                            "fort", "ruins", "peak", "bay", "harbor"]
-                        let hasLandmarkWord = candidates.contains {
-                            landmarkWords.contains($0.lowercased())
-                        }
-
-                        if !isLikelyVisual && !hasLandmarkWord {
+                        let phrase = candidates.joined(separator: " ").lowercased()
+                        if KnownMultiwordLocations.names.contains(phrase) {
                             locationHint = candidates.joined(separator: " ")
                             text = ""
                         }

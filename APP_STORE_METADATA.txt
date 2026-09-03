@@ -35,7 +35,7 @@ Privacy
 
 Memorable has no developer backend, account system, analytics, tracking, ads, telemetry, or crash-report uploads. Technical logs stay on the device because the app has no log-upload path.
 
-For location search, the app sends GPS coordinates contained in indexed media metadata to Apple's CLGeocoder service to resolve place names. It does not send media contents or search query text with those requests.
+For location search, the app may send GPS coordinates contained in indexed media metadata to Apple's MapKit or Core Location reverse-geocoding service to resolve place names. It does not send media contents or search query text with those requests.
 
 The app uses Apple StoreKit to load Pro product information and to process entitlement checks, purchases, restores, refunds, and transaction updates. StoreKit exchanges the commerce data Apple requires for those services.
 
@@ -96,7 +96,7 @@ App review notes
 - The app bundles its Core ML models and does not download model files at runtime.
 - The app has no developer backend.
 - The app presents the iOS share sheet only after the user taps Share for a photo. It copies the locally available image resource without changing its bytes. The file can include source GPS, camera, date, and other embedded metadata. The selected destination handles any resulting transmission.
-- Media GPS coordinates may be sent to Apple CLGeocoder for place-name resolution. During indexing, search, and geocoding, media contents and search query text remain on the device. A photo is provided to a share destination only after the user requests it.
+- Media GPS coordinates may be sent to Apple's MapKit or Core Location reverse-geocoding service for place-name resolution. During indexing, search, and geocoding, media contents and search query text remain on the device. A photo is provided to a share destination only after the user requests it.
 - StoreKit handles Pro product, entitlement, purchase, restore, refund, and transaction traffic with Apple.
 - Pro indexes all locally available media. Search keeps 8,000 media items in a resident fast window and searches remaining media in bounded 512-media database pages.
 - Rebuilding the index and confirmed Pro downgrades preserve saved folder registrations and bookmarks. A confirmed downgrade removes derived folder index rows. Saved folders are scheduled for indexing after a rebuild or confirmed Pro restoration.

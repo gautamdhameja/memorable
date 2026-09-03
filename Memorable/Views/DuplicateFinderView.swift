@@ -20,7 +20,7 @@ struct DuplicateFinderView: View {
 
                 Group {
                     if isScanning {
-                        VStack(spacing: 16) {
+                        VStack(spacing: Celestial.Spacing.contentGap) {
                             ProgressView()
                                 .tint(Celestial.Colors.primaryDim)
                             Text("Scanning for duplicates...")
@@ -28,7 +28,7 @@ struct DuplicateFinderView: View {
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
                     } else if duplicates.isEmpty && scanComplete {
-                        VStack(spacing: 16) {
+                        VStack(spacing: Celestial.Spacing.contentGap) {
                             CelestialGlassIcon(
                                 systemName: "checkmark",
                                 tint: Celestial.Colors.emerald,
@@ -53,7 +53,7 @@ struct DuplicateFinderView: View {
                                     }
                                     .listRowBackground(Color.clear)
                                     .listRowSeparator(.hidden)
-                                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                                    .listRowInsets(containerRowInsets)
                                 }
                             } header: {
                                 HStack {
@@ -67,7 +67,7 @@ struct DuplicateFinderView: View {
                         .listStyle(.plain)
                         .scrollContentBackground(.hidden)
                     } else {
-                        VStack(spacing: 16) {
+                        VStack(spacing: Celestial.Spacing.contentGap) {
                             CelestialGlassIcon(
                                 systemName: "square.on.square",
                                 tint: Celestial.Colors.onSurfaceVariant,
@@ -122,6 +122,16 @@ struct DuplicateFinderView: View {
         } message: {
             Text(deletionAlertMessage ?? "Try again.")
         }
+    }
+
+    private var containerRowInsets: EdgeInsets {
+        let halfGap = Celestial.Spacing.stackedContainerGap / 2
+        return EdgeInsets(
+            top: halfGap,
+            leading: Celestial.Spacing.surfaceHorizontalInset,
+            bottom: halfGap,
+            trailing: Celestial.Spacing.surfaceHorizontalInset
+        )
     }
 
     private func startScan() {
@@ -269,7 +279,7 @@ struct DuplicatePairRow: View {
                 )
             }
         }
-        .padding(14)
+        .padding(Celestial.Spacing.surfaceContentInset)
         .modifier(GlassPanelModifier(cornerRadius: 18))
         .task {
             imageLoadTask?.cancel()

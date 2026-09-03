@@ -28,12 +28,13 @@ struct ContentView: View {
             } else if let error = appState.errorMessage {
                 errorView(message: error)
             } else {
-                loadingView
+                launchShell
             }
         }
         .preferredColorScheme(.dark)
         .task(id: onboardingComplete) {
             if onboardingComplete {
+                appState.setApplicationActive(scenePhase == .active)
                 await initializeIfNeeded()
             } else {
                 // Let the first onboarding frame paint before Core ML begins
@@ -48,7 +49,8 @@ struct ContentView: View {
                 updateOnboardingModelPrewarm(for: newPhase)
                 return
             }
-            guard newPhase == .active, onboardingComplete else { return }
+            appState.setApplicationActive(newPhase == .active)
+            guard newPhase == .active else { return }
             Task { await appState.refreshPhotoAuthorization() }
         }
     }
@@ -56,7 +58,7 @@ struct ContentView: View {
     // MARK: - Subviews
 
     private var photoAccessDeniedView: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: Celestial.Spacing.contentGap) {
             Spacer()
             CelestialGlassIcon(
                 systemName: "photo.badge.exclamationmark",
@@ -76,11 +78,11 @@ struct ContentView: View {
             .celestialPrimaryButtonStyle()
             Spacer()
         }
-        .padding(.horizontal, 26)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
     }
 
     private func errorView(message: String) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: Celestial.Spacing.contentGap) {
             Spacer()
             CelestialGlassIcon(
                 systemName: "exclamationmark.triangle",
@@ -100,53 +102,25 @@ struct ContentView: View {
             .celestialPrimaryButtonStyle()
             Spacer()
         }
-        .padding(.horizontal, 26)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
     }
 
-    private var loadingView: some View {
-        VStack(spacing: 18) {
-            Spacer()
-
-            ZStack {
-                Circle()
-                    .stroke(Celestial.Colors.primaryDim.opacity(0.18), lineWidth: 1)
-                    .frame(width: 142, height: 142)
-                Circle()
-                    .stroke(Celestial.Colors.primaryDim, lineWidth: 2)
-                    .frame(width: 48, height: 48)
-                Capsule()
-                    .fill(Celestial.Colors.primaryDim)
-                    .frame(width: 32, height: 3)
-                    .rotationEffect(.degrees(45))
-                    .offset(x: 28, y: 28)
-                Circle()
-                    .fill(Celestial.Colors.amber)
-                    .frame(width: 6, height: 6)
-                    .offset(x: 71)
+    /// A static first frame aligned with the home header. Startup authorization
+    /// and dependency checks must not resemble photo indexing.
+    private var launchShell: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Memorable")
+                    .font(Celestial.Typography.brand)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Spacer()
             }
-            .modifier(
-                GlassCircleModifier(
-                    tint: Celestial.Colors.primaryDim.opacity(0.08)
-                )
-            )
-
-            Text("Memorable")
-                .font(Celestial.Typography.display)
-                .foregroundStyle(Celestial.Colors.onSurface)
+            .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+            .padding(.top, 8)
 
             Spacer()
-
-            ProgressView()
-                .tint(Celestial.Colors.primaryDim)
-                .controlSize(.regular)
-
-            Text(appState.loadingStatus)
-                .font(Celestial.Typography.footnote)
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .animation(.easeInOut(duration: 0.2), value: appState.loadingStatus)
-
-            Spacer().frame(height: 40)
         }
+        .accessibilityHidden(true)
     }
 
     private func initializeIfNeeded() async {

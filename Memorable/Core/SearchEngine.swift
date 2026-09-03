@@ -1,18 +1,54 @@
 import Foundation
 import Accelerate
-import CoreLocation
 import os
 
 struct SearchResponse {
     let results: [SearchResult]
     let fallbackResults: [SearchResult]
     let filtersApplied: FilterSummary?
+    let restrictionSummary: SearchRestrictionSummary?
+
+    init(
+        results: [SearchResult],
+        fallbackResults: [SearchResult],
+        filtersApplied: FilterSummary?,
+        restrictionSummary: SearchRestrictionSummary? = nil
+    ) {
+        self.results = results
+        self.fallbackResults = fallbackResults
+        self.filtersApplied = filtersApplied
+        self.restrictionSummary = restrictionSummary
+    }
 }
 
 struct FilterSummary {
     let dateDescription: String?
     let locationDescription: String?
     let visualQuery: String
+}
+
+enum RestrictedSearchFeature: Hashable, Sendable {
+    case location
+    case date
+    case exclusions
+    case timeOfDay
+}
+
+struct SearchRestrictionSummary: Equatable, Sendable {
+    let features: Set<RestrictedSearchFeature>
+
+    var message: String {
+        if features == [.location] {
+            return "Place filters are part of Pro. Showing visual matches instead."
+        }
+        if features == [.date] {
+            return "Date filters are part of Pro. Showing visual matches instead."
+        }
+        if features == [.location, .date] {
+            return "Place and date filters are part of Pro. Showing visual matches instead."
+        }
+        return "Advanced search filters are part of Pro. Showing visual matches instead."
+    }
 }
 
 /// Ensures that overlapping callers share one complete replacement attempt,
@@ -225,6 +261,9 @@ final class SearchEngine: Sendable {
         initialState: SearchIndexReloadPhase.idle
     )
     private let hasRecordedFirstQuery = OSAllocatedUnfairLock(initialState: false)
+    private let locationMetadataOverlay = OSAllocatedUnfairLock(
+        initialState: [String: LocationStrings]()
+    )
 
     private let embeddingDim = EmbeddingConfig.dimensions
     private let minimumScoreThreshold = SearchConfig.minimumScoreThreshold
@@ -241,15 +280,18 @@ final class SearchEngine: Sendable {
 
     private let textEncoder: TextEmbeddingEncoding
     private let database: DatabaseProtocol
+    private let locationGazetteer: OfflineLocationGazetteer
     init(
         textEncoder: TextEmbeddingEncoding,
         database: DatabaseProtocol = AppDatabase.shared,
         photoSimilaritySearch: SimilaritySearching? = nil,
         videoSimilaritySearch: SimilaritySearching? = nil,
-        residentMediaLimit: Int = SearchIndexLimits.residentMediaItems
+        residentMediaLimit: Int = SearchIndexLimits.residentMediaItems,
+        locationGazetteer: OfflineLocationGazetteer = .shared
     ) {
         self.textEncoder = textEncoder
         self.database = database
+        self.locationGazetteer = locationGazetteer
         self.injectedPhotoSimilaritySearch = photoSimilaritySearch
         self.injectedVideoSimilaritySearch = videoSimilaritySearch
         self.residentMediaLimit = max(
@@ -413,12 +455,25 @@ final class SearchEngine: Sendable {
         indexSnapshot.withLock { $0.isMemoryPressureSuspended }
     }
 
+    /// Makes newly reverse-geocoded labels searchable immediately without
+    /// rebuilding embeddings or GPU accelerators. The database remains the
+    /// source of truth; this overlay only bridges the current process lifetime.
+    func applyLocationUpdates(_ updates: [LocationBackfillUpdate]) {
+        guard !updates.isEmpty else { return }
+        locationMetadataOverlay.withLock { overlay in
+            for update in updates {
+                overlay[update.localIdentifier] = update.location
+            }
+        }
+    }
+
     func dropIndex() {
         indexSnapshot.withLock {
             let suspended = $0.isMemoryPressureSuspended
             $0 = SearchIndexSnapshot(isMemoryPressureSuspended: suspended)
         }
         tailPageCache.removeAll()
+        locationMetadataOverlay.withLock { $0.removeAll(keepingCapacity: false) }
         #if DEBUG
         logger.info("[SearchEngine] Index dropped due to memory pressure")
         #endif
@@ -432,6 +487,7 @@ final class SearchEngine: Sendable {
             )
         }
         tailPageCache.removeAll()
+        locationMetadataOverlay.withLock { $0.removeAll(keepingCapacity: false) }
         #if DEBUG
         logger.info("[SearchEngine] Index suspended due to memory pressure")
         #endif
@@ -485,6 +541,10 @@ final class SearchEngine: Sendable {
 
         let parsingStartedAt = CFAbsoluteTimeGetCurrent()
         let hints = await QueryParser.parse(query: query, featurePolicy: featurePolicy)
+        let restrictionHints = featurePolicy.allowsAdvancedQueryFeatures
+            ? hints
+            : QueryParserFallback.parse(query: query)
+        let restrictionSummary = featurePolicy.restrictionSummary(for: restrictionHints)
         if recordsUserTiming {
             PerformanceMetrics.shared.record(
                 PerformancePhase.queryParsing,
@@ -494,7 +554,9 @@ final class SearchEngine: Sendable {
         try checkSearchGeneration(memoryPressureGeneration)
         let effectiveHints = featurePolicy.enforcing(hints)
         var precomputedEmbeddings: [String: [Float]] = [:]
-        if effectiveHints.hasVisualQuery && !isPureLocationQuery(effectiveHints) {
+        if hasSearchIntent(hints)
+            && hasSearchIntent(effectiveHints)
+            && !isPureLocationQuery(effectiveHints) {
             let encodingStartedAt = CFAbsoluteTimeGetCurrent()
             defer {
                 if recordsUserTiming {
@@ -518,11 +580,12 @@ final class SearchEngine: Sendable {
         }
 
         let response = try hybridSearch(
-            hints: effectiveHints,
+            hints: hints,
             featurePolicy: featurePolicy,
             memoryPressureGeneration: memoryPressureGeneration,
             precomputedEmbeddings: precomputedEmbeddings,
-            recordsPerformanceMetrics: recordsUserTiming
+            recordsPerformanceMetrics: recordsUserTiming,
+            restrictionSummary: restrictionSummary
         )
         try checkSearchGeneration(memoryPressureGeneration)
 
@@ -533,18 +596,27 @@ final class SearchEngine: Sendable {
         return response
     }
 
-    /// A "pure location" query is one whose entire meaning is the place name:
-    /// either the parser explicitly flagged it non-visual, or the parser's
-    /// fallback auto-filled the visual query from the location name (so
-    /// `textQuery == locationHint.lowercased()`). In either case we skip CLIP
-    /// ranking entirely and return every matching photo sorted by date, which
-    /// is what the user actually wants for "San Diego", "California", etc.
+    /// A pure-filter query has a real date/location constraint but no visual
+    /// subject, or is a bare place name backfilled by the fallback parser.
+    /// Exclusion-only and empty queries are not filters and must never enter
+    /// the unscored path that returns every candidate.
     private func isPureLocationQuery(_ hints: QueryHints) -> Bool {
-        if !hints.hasVisualQuery { return true }
+        if !hints.hasVisualQuery {
+            return hints.locationHint != nil || hints.dateRange != nil
+        }
         if let loc = hints.locationHint?.lowercased(), hints.textQuery == loc {
             return true
         }
         return false
+    }
+
+    private func hasSearchIntent(_ hints: QueryHints) -> Bool {
+        hints.hasVisualQuery
+            || hints.dateRange != nil
+            || hints.locationHint != nil
+            || hints.seasonHint != nil
+            || !hints.negativeTerms.isEmpty
+            || hints.timeOfDayHours != nil
     }
 
     func hybridSearch(
@@ -557,7 +629,8 @@ final class SearchEngine: Sendable {
             featurePolicy: featurePolicy,
             memoryPressureGeneration: memoryPressureGeneration,
             precomputedEmbeddings: [:],
-            recordsPerformanceMetrics: false
+            recordsPerformanceMetrics: false,
+            restrictionSummary: featurePolicy.restrictionSummary(for: hints)
         )
     }
 
@@ -566,9 +639,18 @@ final class SearchEngine: Sendable {
         featurePolicy: SearchFeaturePolicy,
         memoryPressureGeneration: UInt,
         precomputedEmbeddings: [String: [Float]],
-        recordsPerformanceMetrics: Bool
+        recordsPerformanceMetrics: Bool,
+        restrictionSummary: SearchRestrictionSummary?
     ) throws -> SearchResponse {
-        try indexAccessCoordinator.withSearch {
+        guard hasSearchIntent(hints) else {
+            return SearchResponse(
+                results: [],
+                fallbackResults: [],
+                filtersApplied: nil,
+                restrictionSummary: restrictionSummary
+            )
+        }
+        return try indexAccessCoordinator.withSearch {
             try checkSearchGeneration(memoryPressureGeneration)
             let response = try performHybridSearch(
                 hints: featurePolicy.enforcing(hints),
@@ -576,7 +658,13 @@ final class SearchEngine: Sendable {
                 recordsPerformanceMetrics: recordsPerformanceMetrics
             )
             try checkSearchGeneration(memoryPressureGeneration)
-            return featurePolicy.enforcing(response)
+            let allowedResponse = featurePolicy.enforcing(response)
+            return SearchResponse(
+                results: allowedResponse.results,
+                fallbackResults: allowedResponse.fallbackResults,
+                filtersApplied: allowedResponse.filtersApplied,
+                restrictionSummary: restrictionSummary
+            )
         }
     }
 
@@ -599,6 +687,9 @@ final class SearchEngine: Sendable {
         recordsPerformanceMetrics: Bool
     ) throws -> SearchResponse {
         try SearchCancellation.checkNow()
+        guard hasSearchIntent(hints) else {
+            return SearchResponse(results: [], fallbackResults: [], filtersApplied: nil)
+        }
         let snapshot = indexSnapshot.withLock { $0 }
         if snapshot.nextPageCursor != nil {
             return try performWholeLibrarySearch(
@@ -631,47 +722,22 @@ final class SearchEngine: Sendable {
         // PHASE 1: HARD FILTERS — build candidate mask before any CLIP scoring
         // =====================================================================
 
-        // Location filter: local-only matching. Query-derived location text is
-        // never sent to CLGeocoder; it matches stored reverse-geocoded strings,
-        // with GPS fallback only when trusted coordinates already exist in hints.
-        var targetLoc: CLLocation?
-        let locationMatcher: LocationMatcher.Matcher? = hints.locationHint.map { locationQuery in
-            LocationMatcher.makeMatcher(
-                queryLower: locationQuery.lowercased(),
-                locality: hints.locationLocality,
-                adminArea: hints.locationAdminArea,
-                country: hints.locationCountryName
-            )
-        }
-        if let coord = hints.locationCoordinate,
-           hints.locationHint != nil,
-           hints.locationRadiusKm != nil {
-            targetLoc = CLLocation(latitude: coord.lat, longitude: coord.lon)
-        }
-
+        let locationFilter = makeLocationFilter(hints: hints)
         let photoCandidateMask = try candidateMask(
             for: photos,
             hints: hints,
-            locationMatcher: locationMatcher,
-            targetLoc: targetLoc
+            locationFilter: locationFilter
         )
         let videoCandidateMask = try candidateMask(
             for: videos,
             hints: hints,
-            locationMatcher: locationMatcher,
-            targetLoc: targetLoc
+            locationFilter: locationFilter
         )
         let candidateCount = try trueCount(in: photoCandidateMask)
         let videoCandidateCount = try trueCount(in: videoCandidateMask)
 
         #if DEBUG
         logger.info("[SearchEngine] Filter: \(candidateCount)/\(photos.count) photos and \(videoCandidateCount)/\(videos.count) video frames passed hard filters")
-        if hints.locationCoordinate != nil {
-            let withGPS = (0..<photos.count).filter {
-                photos.latitudes[$0] != nil && photos.longitudes[$0] != nil
-            }.count
-            logger.info("[SearchEngine] GPS stats: \(withGPS)/\(photos.count) photos have GPS, \(candidateCount) passed all filters")
-        }
         #endif
 
         // =====================================================================
@@ -680,32 +746,35 @@ final class SearchEngine: Sendable {
 
         let filtersActive = hints.dateRange != nil || hints.locationHint != nil
 
-        // Empty candidate set with active filters → provide fallback
-        if candidateCount == 0 && videoCandidateCount == 0 && filtersActive {
-            let fallbackResults = hints.hasVisualQuery
-                ? try computeFallbackResults(
-                    text: hints.textQuery,
-                    index: photos,
-                    gpuSearch: photoGPU,
-                    precomputedEmbeddings: precomputedEmbeddings
+        // Pure date/location constraint (including an auto-filled bare place
+        // name): skip CLIP ranking and return every matching media item sorted
+        // by date, instead of ranking against a meaningless filter embedding.
+        if isPureLocationQuery(hints) {
+            let locationResponse = try SearchResultRanking.locationOnlyResults(media: [
+                (index: photos, candidateMask: photoCandidateMask),
+                (index: videos, candidateMask: videoCandidateMask),
+            ])
+            return SearchResponse(
+                results: locationResponse.results,
+                fallbackResults: [],
+                filtersApplied: FilterSummary(
+                    dateDescription: hints.dateRange.map { formatDateRange($0) },
+                    locationDescription: hints.locationHint,
+                    visualQuery: ""
                 )
-                : []
+            )
+        }
+
+        // Empty candidate set with active filters. A near-miss outside a hard
+        // place or date constraint is not a valid fallback; the relaxation
+        // controls let the user explicitly broaden the search instead.
+        if candidateCount == 0 && videoCandidateCount == 0 && filtersActive {
             let summary = FilterSummary(
                 dateDescription: hints.dateRange.map { formatDateRange($0) },
                 locationDescription: hints.locationHint,
                 visualQuery: hints.textQuery
             )
-            return SearchResponse(results: [], fallbackResults: fallbackResults, filtersApplied: summary)
-        }
-
-        // Pure-location query (explicit or auto-filled): skip CLIP ranking and
-        // return every matching media item sorted by date — the user wants all
-        // of them, not a CLIP-ranked top-K against a meaningless city embedding.
-        if isPureLocationQuery(hints) {
-            return try SearchResultRanking.locationOnlyResults(media: [
-                (index: photos, candidateMask: photoCandidateMask),
-                (index: videos, candidateMask: videoCandidateMask),
-            ])
+            return SearchResponse(results: [], fallbackResults: [], filtersApplied: summary)
         }
 
         // =====================================================================
@@ -733,7 +802,6 @@ final class SearchEngine: Sendable {
             queryEmbedding: queryEmbedding,
             negativeEmbeddings: negativeEmbeddings,
             hints: hints,
-            targetLoc: targetLoc,
             gpuSearch: photoGPU
         )
         let videoScoring = try scoreMedia(
@@ -742,7 +810,6 @@ final class SearchEngine: Sendable {
             queryEmbedding: queryEmbedding,
             negativeEmbeddings: negativeEmbeddings,
             hints: hints,
-            targetLoc: targetLoc,
             gpuSearch: videoGPU
         )
         let scores = photoScoring.scores
@@ -1023,10 +1090,33 @@ final class SearchEngine: Sendable {
 
     private struct WholeLibrarySearchPlan {
         let hints: QueryHints
-        let locationMatcher: LocationMatcher.Matcher?
-        let targetLocation: CLLocation?
+        let locationFilter: LocationSearchFilter?
         let queryEmbedding: [Float]?
         let negativeEmbeddings: [[Float]]
+    }
+
+    private struct LocationSearchFilter {
+        let metadataMatcher: LocationMatcher.Matcher
+        let coordinateMatcher: OfflineLocationGazetteer.Matcher?
+        let metadataOverlay: [String: LocationStrings]
+
+        func matches(
+            localIdentifier: String,
+            latitude: Double?,
+            longitude: Double?,
+            city: String?,
+            state: String?,
+            country: String?,
+            name: String?
+        ) -> Bool {
+            let overlay = metadataOverlay[localIdentifier]
+            return metadataMatcher(
+                overlay?.city ?? city,
+                overlay?.state ?? state,
+                overlay?.country ?? country,
+                overlay?.name ?? name
+            ) || coordinateMatcher?(latitude, longitude) == true
+        }
     }
 
     private struct WholeLibrarySearchPage {
@@ -1040,7 +1130,6 @@ final class SearchEngine: Sendable {
         var photoCandidates: [SearchResult] = []
         var videoCandidates: [SearchResult] = []
         var locationCandidates: [SearchResult] = []
-        var unfilteredPhotoFallback: [SearchResult] = []
         var photoCandidateCount = 0
         var videoCandidateFrameCount = 0
 
@@ -1071,14 +1160,6 @@ final class SearchEngine: Sendable {
             )
         }
 
-        mutating func retainUnfilteredFallback(_ result: SearchResult) {
-            BoundedTopK.insert(
-                result,
-                into: &unfilteredPhotoFallback,
-                limit: 5,
-                isPreferred: SearchResultRanking.isPreferred
-            )
-        }
     }
 
     /// Searches the persisted library a bounded page at a time. Threshold and
@@ -1091,23 +1172,7 @@ final class SearchEngine: Sendable {
         recordsPerformanceMetrics: Bool
     ) throws -> SearchResponse {
         var accumulator = WholeLibrarySearchAccumulator()
-        let locationMatcher: LocationMatcher.Matcher? = hints.locationHint.map {
-            LocationMatcher.makeMatcher(
-                queryLower: $0.lowercased(),
-                locality: hints.locationLocality,
-                adminArea: hints.locationAdminArea,
-                country: hints.locationCountryName
-            )
-        }
-        let targetLoc: CLLocation?
-        if let coordinate = hints.locationCoordinate,
-           hints.locationHint != nil,
-           hints.locationRadiusKm != nil {
-            targetLoc = CLLocation(latitude: coordinate.lat, longitude: coordinate.lon)
-        } else {
-            targetLoc = nil
-        }
-
+        let locationFilter = makeLocationFilter(hints: hints)
         let queryEmbedding = isPureLocationQuery(hints)
             ? nil
             : try encodeQuery(
@@ -1126,8 +1191,7 @@ final class SearchEngine: Sendable {
         }
         let plan = WholeLibrarySearchPlan(
             hints: hints,
-            locationMatcher: locationMatcher,
-            targetLocation: targetLoc,
+            locationFilter: locationFilter,
             queryEmbedding: queryEmbedding,
             negativeEmbeddings: negativeEmbeddings
         )
@@ -1213,14 +1277,12 @@ final class SearchEngine: Sendable {
         let photoMask = try candidateMask(
             for: page.photos,
             hints: hints,
-            locationMatcher: plan.locationMatcher,
-            targetLoc: plan.targetLocation
+            locationFilter: plan.locationFilter
         )
         let videoMask = try candidateMask(
             for: page.videos,
             hints: hints,
-            locationMatcher: plan.locationMatcher,
-            targetLoc: plan.targetLocation
+            locationFilter: plan.locationFilter
         )
         accumulator.photoCandidateCount += try trueCount(in: photoMask)
         accumulator.videoCandidateFrameCount += try trueCount(in: videoMask)
@@ -1241,7 +1303,6 @@ final class SearchEngine: Sendable {
             queryEmbedding: queryEmbedding,
             negativeEmbeddings: plan.negativeEmbeddings,
             hints: hints,
-            targetLoc: plan.targetLocation,
             gpuSearch: page.photoGPU
         )
         let videoScoring = try scoreMedia(
@@ -1250,7 +1311,6 @@ final class SearchEngine: Sendable {
             queryEmbedding: queryEmbedding,
             negativeEmbeddings: plan.negativeEmbeddings,
             hints: hints,
-            targetLoc: plan.targetLocation,
             gpuSearch: page.videoGPU
         )
 
@@ -1261,14 +1321,6 @@ final class SearchEngine: Sendable {
                     for: page.photos,
                     row: row,
                     score: photoScoring.scores[row]
-                ))
-            }
-            if (hints.dateRange != nil || hints.locationHint != nil),
-               photoScoring.rawScores[row] >= minimumScoreThreshold {
-                accumulator.retainUnfilteredFallback(try SearchResultRanking.result(
-                    for: page.photos,
-                    row: row,
-                    score: photoScoring.rawScores[row]
                 ))
             }
         }
@@ -1297,7 +1349,11 @@ final class SearchEngine: Sendable {
                     isPreferred: SearchResultRanking.isPreferredLocation
                 ),
                 fallbackResults: [],
-                filtersApplied: nil
+                filtersApplied: FilterSummary(
+                    dateDescription: hints.dateRange.map { formatDateRange($0) },
+                    locationDescription: hints.locationHint,
+                    visualQuery: ""
+                )
             )
         }
 
@@ -1311,10 +1367,7 @@ final class SearchEngine: Sendable {
            accumulator.photoCandidateCount + accumulator.videoCandidateFrameCount == 0 {
             return SearchResponse(
                 results: [],
-                fallbackResults: BoundedTopK.sorted(
-                    accumulator.unfilteredPhotoFallback,
-                    isPreferred: SearchResultRanking.isPreferred
-                ),
+                fallbackResults: [],
                 filtersApplied: summary
             )
         }
@@ -1383,50 +1436,6 @@ final class SearchEngine: Sendable {
     }
 
     // MARK: - Helper Methods
-
-    private func computeFallbackResults(
-        text: String,
-        index mediaIndex: MediaIndex,
-        gpuSearch: SimilaritySearching?,
-        precomputedEmbeddings: [String: [Float]]
-    ) throws -> [SearchResult] {
-        let queryEmbedding: [Float]
-        do {
-            queryEmbedding = try encodeQuery(
-                text: text,
-                precomputedEmbeddings: precomputedEmbeddings
-            )
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            return []
-        }
-        let scores = try scoreEmbeddings(
-            queryEmbedding: queryEmbedding,
-            matrix: mediaIndex.embeddings,
-            count: mediaIndex.count,
-            gpuSearch: gpuSearch
-        )
-
-        let rows = try BoundedTopK.rows(
-            count: scores.count,
-            limit: 5,
-            includes: { scores[$0] >= minimumScoreThreshold },
-            isPreferred: { lhs, rhs in
-                if scores[lhs] != scores[rhs] { return scores[lhs] > scores[rhs] }
-                return lhs < rhs
-            },
-            cancellationCheck: SearchCancellation.check
-        )
-        return rows.map { row in
-            SearchResult(id: mediaIndex.ids[row], score: scores[row],
-                         localIdentifier: mediaIndex.localIdentifiers[row],
-                         creationDate: mediaIndex.dates[row], isVideo: false,
-                         bestFramePosition: nil,
-                         sourceId: mediaIndex.sourceIds[row],
-                         filePath: mediaIndex.filePaths[row])
-        }
-    }
 
     // MARK: - Similar Photos
 
@@ -1600,8 +1609,7 @@ final class SearchEngine: Sendable {
     private func candidateMask(
         for index: MediaIndex,
         hints: QueryHints,
-        locationMatcher: LocationMatcher.Matcher?,
-        targetLoc: CLLocation?
+        locationFilter: LocationSearchFilter?
     ) throws -> [Bool] {
         var mask = [Bool](repeating: true, count: index.count)
         for row in 0..<index.count {
@@ -1615,17 +1623,17 @@ final class SearchEngine: Sendable {
                 }
             }
 
-            mask[row] = mediaPassesLocationFilter(
-                hints: hints,
-                locationMatcher: locationMatcher,
-                targetLoc: targetLoc,
-                latitude: index.latitudes[row],
-                longitude: index.longitudes[row],
-                city: index.locationCities[row],
-                state: index.locationStates[row],
-                country: index.locationCountries[row],
-                name: index.locationNames[row]
-            )
+            if let locationFilter {
+                mask[row] = locationFilter.matches(
+                    localIdentifier: index.localIdentifiers[row],
+                    latitude: index.latitudes[row],
+                    longitude: index.longitudes[row],
+                    city: index.locationCities[row],
+                    state: index.locationStates[row],
+                    country: index.locationCountries[row],
+                    name: index.locationNames[row]
+                )
+            }
         }
         return mask
     }
@@ -1636,7 +1644,6 @@ final class SearchEngine: Sendable {
         queryEmbedding: [Float],
         negativeEmbeddings: [[Float]],
         hints: QueryHints,
-        targetLoc: CLLocation?,
         gpuSearch: SimilaritySearching?
     ) throws -> ScoredMedia {
         let rawScores = try scoreEmbeddings(
@@ -1679,13 +1686,6 @@ final class SearchEngine: Sendable {
                 for negativeScores in negativeScoreSets {
                     score -= negativeScores[row] * SearchConfig.negativeTermWeight
                 }
-            } else {
-                score += photoLocationBoost(
-                    index: index,
-                    row: row,
-                    hints: hints,
-                    targetLoc: targetLoc
-                )
             }
 
             if let timeRange = hints.timeOfDayHours,
@@ -1723,32 +1723,6 @@ final class SearchEngine: Sendable {
             if value { count += 1 }
         }
         return count
-    }
-
-    private func photoLocationBoost(
-        index: MediaIndex,
-        row: Int,
-        hints: QueryHints,
-        targetLoc: CLLocation?
-    ) -> Float {
-        guard let targetLoc, let radiusKm = hints.locationRadiusKm else { return 0 }
-        guard index.locationCities[row] == nil || index.locationCities[row]?.isEmpty == true else {
-            return 0
-        }
-        guard let latitude = index.latitudes[row], let longitude = index.longitudes[row] else {
-            return 0
-        }
-
-        let distanceKm = targetLoc.distance(
-            from: CLLocation(latitude: latitude, longitude: longitude)
-        ) / 1000
-        if distanceKm < radiusKm * 0.1 {
-            return SearchConfig.locationCloseBoost
-        }
-        if distanceKm < radiusKm * 0.3 {
-            return SearchConfig.locationNearBoost
-        }
-        return 0
     }
 
     private func photoOCRBoost(
@@ -1795,46 +1769,23 @@ final class SearchEngine: Sendable {
         return hour >= range.start || hour < range.end
     }
 
-    private func mediaPassesLocationFilter(
-        hints: QueryHints,
-        locationMatcher: LocationMatcher.Matcher?,
-        targetLoc: CLLocation?,
-        latitude: Double?,
-        longitude: Double?,
-        city: String?,
-        state: String?,
-        country: String?,
-        name: String?
-    ) -> Bool {
-        guard hints.locationHint != nil else { return true }
-
-        if let city, !city.isEmpty {
-            if locationMatcher?(city, state, country, name) == true {
-                return true
-            }
-
-            // Rescue cross-language city-name mismatches with the same tight
-            // coordinate cap for photos and videos.
-            guard let target = targetLoc, let latitude, let longitude else {
-                return false
-            }
-            let distanceKm = target.distance(
-                from: CLLocation(latitude: latitude, longitude: longitude)
-            ) / 1000.0
-            return distanceKm <= 50.0
-        }
-
-        if let target = targetLoc, let radiusKm = hints.locationRadiusKm {
-            guard let latitude, let longitude else { return false }
-            let distanceKm = target.distance(
-                from: CLLocation(latitude: latitude, longitude: longitude)
-            ) / 1000.0
-            return distanceKm <= radiusKm
-        }
-
-        // Without trusted query coordinates, locally unverifiable media stays
-        // in the candidate pool so reverse-geocoding lag does not exclude it.
-        return true
+    private func makeLocationFilter(hints: QueryHints) -> LocationSearchFilter? {
+        guard let locationQuery = hints.locationHint else { return nil }
+        return LocationSearchFilter(
+            metadataMatcher: LocationMatcher.makeMatcher(
+                queryLower: locationQuery.lowercased(),
+                locality: hints.locationLocality,
+                adminArea: hints.locationAdminArea,
+                country: hints.locationCountryName
+            ),
+            coordinateMatcher: locationGazetteer.makeMatcher(
+                query: locationQuery,
+                locality: hints.locationLocality,
+                adminArea: hints.locationAdminArea,
+                country: hints.locationCountryName
+            ),
+            metadataOverlay: locationMetadataOverlay.withLock { $0 }
+        )
     }
 
     private func formatDateRange(_ range: DateRange) -> String {

@@ -51,16 +51,16 @@ struct UpgradeView: View {
                         )
                         CelestialHairline()
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                     .modifier(
                         GlassPanelModifier(
                             cornerRadius: 20,
                             tint: Celestial.Colors.amber.opacity(0.08)
                         )
                     )
-                    .padding(.top, 22)
+                    .padding(.top, Celestial.Spacing.contentGap)
                 }
-                .padding(.horizontal, 26)
+                .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                 .padding(.bottom, 20)
             }
             .scrollBounceBehavior(.basedOnSize)
@@ -79,7 +79,7 @@ struct UpgradeView: View {
                 foreground: Celestial.Colors.onSurfaceVariant
             )
             .accessibilityLabel("Close")
-            .padding(16)
+            .padding(Celestial.Spacing.surfaceHorizontalInset)
         }
         .onChange(of: proManager.isPro) {
             if proManager.isPro { dismiss() }
@@ -181,7 +181,7 @@ struct UpgradeView: View {
         }
         .font(Celestial.Typography.caption)
         .multilineTextAlignment(.center)
-        .padding(.horizontal, 26)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background(.ultraThinMaterial)

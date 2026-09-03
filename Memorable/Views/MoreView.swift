@@ -35,10 +35,12 @@ struct MoreView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("More")
                             .font(Celestial.Typography.screenTitle)
+                            .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                             .padding(.top, 14)
 
                         indexStatus
-                            .padding(.top, 30)
+                            .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                            .padding(.top, Celestial.Spacing.sectionGap)
 
                         VStack(spacing: 0) {
                             NavigationLink {
@@ -76,12 +78,14 @@ struct MoreView: View {
                                 toolRow(icon: "photo.stack", title: "Photo sources", subtitle: "Library and custom folders")
                             }
                         }
-                        .padding(.horizontal, 14)
+                        .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                         .modifier(GlassPanelModifier(cornerRadius: 20))
-                        .padding(.top, 12)
+                        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                        .padding(.top, Celestial.Spacing.stackedContainerGap)
 
                         proStatus
-                            .padding(.top, 30)
+                            .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                            .padding(.top, Celestial.Spacing.stackedContainerGap)
 
                         VStack(alignment: .leading, spacing: 0) {
                             if MoreNavigationPolicy.showsReindexShortcut(
@@ -105,15 +109,16 @@ struct MoreView: View {
                         }
                         .font(Celestial.Typography.caption)
                         .foregroundStyle(Celestial.Colors.outline)
-                        .padding(.top, 34)
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                        .padding(.top, Celestial.Spacing.sectionGap)
 
                         Text(AppCopy.aiDisclaimer)
                             .font(Celestial.Typography.micro)
                             .foregroundStyle(Celestial.Colors.outlineVariant)
-                            .padding(.top, 18)
+                            .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                            .padding(.top, Celestial.Spacing.contentGap)
                             .padding(.bottom, 32)
                     }
-                    .padding(.horizontal, 26)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -202,7 +207,7 @@ struct MoreView: View {
                 .padding(.top, 14)
             }
         }
-        .padding(18)
+        .padding(Celestial.Spacing.surfaceContentInset)
         .modifier(GlassPanelModifier(cornerRadius: 20))
     }
 
@@ -293,7 +298,7 @@ struct MoreView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(18)
+        .padding(Celestial.Spacing.surfaceContentInset)
         .modifier(
             GlassPanelModifier(
                 cornerRadius: 20,
@@ -329,7 +334,7 @@ struct PrivacyPolicyView: View {
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(24)
+                    .padding(Celestial.Spacing.pageHorizontalInset)
             }
         }
         .celestialNavigationTitle("Privacy")
@@ -399,6 +404,33 @@ struct LicensesView: View {
             icon: "chevron.left.forwardslash.chevron.right",
             text: apacheLicenseText("Apple Inc.")
         ),
+        LicenseEntry(
+            name: "Countries, States & Cities",
+            url: "github.com/dr5hn/countries-states-cities-database",
+            license: "Open Database License 1.0",
+            icon: "mappin.and.ellipse",
+            text: """
+            Data by Countries States Cities Database
+            https://github.com/dr5hn/countries-states-cities-database
+
+            Licensed under the Open Database License 1.0. Commercial use, modification, and redistribution are permitted with attribution. Derivative databases remain subject to the ODbL share-alike terms.
+
+            Full license: https://opendatacommons.org/licenses/odbl/1-0/
+            """
+        ),
+        LicenseEntry(
+            name: "Natural Earth",
+            url: "naturalearthdata.com",
+            license: "Public Domain",
+            icon: "globe.americas",
+            text: """
+            Made with Natural Earth.
+
+            Natural Earth vector and raster map data is in the public domain and may be used, modified, and redistributed without permission.
+
+            Terms: https://www.naturalearthdata.com/about/terms-of-use/
+            """
+        ),
     ]
 
     var body: some View {
@@ -406,7 +438,7 @@ struct LicensesView: View {
             CelestialBackdrop()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: Celestial.Spacing.contentGap) {
                     VStack(alignment: .leading, spacing: 7) {
                         Text("OPEN-SOURCE SOFTWARE")
                             .font(Celestial.Typography.eyebrow)
@@ -418,6 +450,7 @@ struct LicensesView: View {
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             .lineSpacing(3)
                     }
+                    .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
 
                     VStack(spacing: 0) {
                         ForEach(entries.indices, id: \.self) { index in
@@ -434,12 +467,12 @@ struct LicensesView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                     .modifier(GlassPanelModifier(cornerRadius: 20))
+                    .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
                 }
-                .padding(.horizontal, 24)
                 .padding(.top, 18)
-                .padding(.bottom, 28)
+                .padding(.bottom, Celestial.Spacing.sectionGap)
             }
             .scrollBounceBehavior(.basedOnSize)
         }
@@ -483,7 +516,7 @@ private struct LicenseDetailView: View {
             CelestialBackdrop()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: Celestial.Spacing.contentGap) {
                     Text(entry.url)
                         .font(Celestial.Typography.footnote)
                         .foregroundStyle(Celestial.Colors.primaryFixedDim)

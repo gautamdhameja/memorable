@@ -46,7 +46,7 @@ The app uses these Apple-managed service boundaries:
 
 | Boundary | Data sent | Purpose |
 |---|---|---|
-| Apple CLGeocoder | GPS coordinates stored in indexed media metadata | Resolve coordinates to place names such as city and country |
+| Apple MapKit / Core Location reverse geocoding | GPS coordinates stored in indexed media metadata | Resolve coordinates to place names such as city and country |
 | Apple StoreKit | Product, entitlement, purchase, restore, and transaction data required by StoreKit | Offer and verify the Pro purchase |
 
 Memorable does not send photo or video contents or search query text through either boundary. The app sets `isNetworkAccessAllowed = false` for PhotoKit requests, so it does not download iCloud-only media while indexing.

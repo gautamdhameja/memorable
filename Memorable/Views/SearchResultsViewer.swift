@@ -286,7 +286,7 @@ struct SearchResultsViewer: View {
                             Spacer().frame(width: 44)
                         }
                     }
-                    .padding(.horizontal, 22)
+                    .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                     .padding(.top, 6)
 
                     Spacer()
@@ -325,7 +325,7 @@ struct SearchResultsViewer: View {
                                 }
                             }
                             .frame(minHeight: 44)
-                            .padding(.horizontal, 14)
+                            .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                             .padding(.vertical, 6)
                             .modifier(
                                 GlassPanelModifier(
@@ -333,8 +333,8 @@ struct SearchResultsViewer: View {
                                     tint: Color.black.opacity(0.16)
                                 )
                             )
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 16)
+                            .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                            .padding(.bottom, Celestial.Spacing.contentGap)
                         }
                     }
                 }

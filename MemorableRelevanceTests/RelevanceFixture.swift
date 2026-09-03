@@ -276,11 +276,15 @@ final class RelevanceFixtureDatabase: DatabaseProtocol {
             didTrimMedia: manifest.entries.count > max(0, limit)
         )
     }
-    func photosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
-    func videosNeedingLocationBackfill(limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
+    func photosNeedingLocationBackfill(after localIdentifier: String?, limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
+    func videosNeedingLocationBackfill(after localIdentifier: String?, limit: Int) throws -> [(localIdentifier: String, lat: Double, lon: Double)] { [] }
     func geocodingCounts() throws -> GeocodingCounts {
         GeocodingCounts(totalWithGPS: 0, remaining: 0, indexedPhotos: manifest.entries.count, indexedVideos: 0)
     }
+    func reverseGeocodeLocations(bucketKeys: [String]) throws -> [String: LocationStrings] { [:] }
+    func saveReverseGeocodeLocation(_ location: LocationStrings, bucketKey: String) throws {}
+    func deferPhotoLocationBackfill(localIdentifiers: [String], until: Date) throws {}
+    func deferVideoLocationBackfill(localIdentifiers: [String], until: Date) throws {}
     func updatePhotoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws {}
     func updateVideoLocationStrings(localIdentifier: String, city: String?, state: String?, country: String?, name: String?) throws {}
     func insertSource(_ source: PhotoSource) throws {}

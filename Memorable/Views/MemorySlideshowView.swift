@@ -53,7 +53,7 @@ struct MemorySlideshowView: View {
                                 tint: Color.black.opacity(0.14)
                             )
                         )
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                         .padding(.bottom, 40)
                         .frame(maxWidth: .infinity)
                         .background(

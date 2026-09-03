@@ -35,7 +35,6 @@ struct SearchView: View {
         "Search your photos...",
         "Describe what you remember...",
     ]
-
     init(
         indexingService: IndexingService,
         searchEngine: SearchEngine,
@@ -153,9 +152,9 @@ struct SearchView: View {
                         // Search stays out of the first indexing experience so
                         // the unfinished index never looks ready for use.
                         searchBar
-                            .padding(.horizontal, 22)
+                            .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
                             .padding(.top, 20)
-                            .padding(.bottom, 18)
+                            .padding(.bottom, Celestial.Spacing.stackedContainerGap)
                     }
 
                     // Database warning
@@ -180,10 +179,10 @@ struct SearchView: View {
                             .foregroundStyle(Celestial.Colors.primaryDim)
                             .disabled(storageResetScheduled)
                         }
-                        .padding(16)
+                        .padding(Celestial.Spacing.surfaceContentInset)
                         .modifier(GlassPanelModifier(cornerRadius: 16))
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
+                        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
                     }
 
                     // Sticky controls panel (above scroll)
@@ -200,10 +199,11 @@ struct SearchView: View {
                         } else {
                             VStack(spacing: 0) {
                                 // Indexing banners
-                                if indexingService.progress.isRunning {
+                                if indexingService.progress.isRunning
+                                    || indexingService.isThermallyPaused {
                                     IndexingBannerView(indexingService: indexingService)
-                                        .padding(.horizontal, 16)
-                                        .padding(.bottom, 12)
+                                        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                                        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
                                 }
 
                                 // Memory warning
@@ -216,14 +216,19 @@ struct SearchView: View {
                                             .font(Celestial.Typography.footnote)
                                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                     }
-                                    .padding(.horizontal, 16)
+                                    .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
                                     .padding(.bottom, 8)
                                 }
 
-                                // Background reverse-geocoding progress
+                                // Deferred reverse-geocoding progress
                                 if let geo = indexingService.geocodingProgress,
                                    !indexingService.progress.isRunning {
-                                    geocodingProgressStrip(completed: geo.completed, total: geo.total)
+                                    geocodingProgressStrip(geo)
+                                }
+
+                                if let restriction = viewModel.restrictionSummary,
+                                   !viewModel.isSearching {
+                                    searchRestrictionStrip(restriction)
                                 }
 
                                 // Content
@@ -242,11 +247,6 @@ struct SearchView: View {
                                     )
                                 } else if !viewModel.lastResults.isEmpty {
                                     lastResultsView
-                                } else if indexingService.progress.isRunning,
-                                          viewModel.queryText.isEmpty {
-                                    // Keep suggestions hidden through later indexing runs too.
-                                    IndexingSlideshowView(captionService: captionService)
-                                        .padding(.top, 8)
                                 } else if viewModel.results.isEmpty,
                                           viewModel.queryText.isEmpty {
                                     if hasHomeContent {
@@ -413,7 +413,7 @@ struct SearchView: View {
                 .layoutPriority(1)
             Spacer()
         }
-        .padding(.horizontal, 26)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
         .padding(.top, 8)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -444,7 +444,7 @@ struct SearchView: View {
                 .accessibilityLabel("Clear search")
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
         .frame(minHeight: 52)
         .modifier(GlassSearchBarModifier(cornerRadius: 13))
         .opacity(searchEngine.isIndexLoaded || !viewModel.queryText.isEmpty ? 1.0 : 0.85)
@@ -469,10 +469,10 @@ struct SearchView: View {
             )
             .padding(.top, 20)
 
-            InitialIndexingProgressView(indexingService: indexingService)
+            IndexingBannerView(indexingService: indexingService)
                 .padding(.top, 16)
         }
-        .padding(.horizontal, 22)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
         .padding(.top, 18)
         .padding(.bottom, 40)
     }
@@ -519,7 +519,7 @@ struct SearchView: View {
             }
             .accessibilityLabel("Dismiss upgrade banner")
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
         .padding(.vertical, 10)
         .modifier(
             GlassPanelModifier(
@@ -527,7 +527,7 @@ struct SearchView: View {
                 tint: Celestial.Colors.amber.opacity(0.09)
             )
         )
-        .padding(.horizontal, 16)
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
     }
 
     // MARK: - Home (Albums + History)
@@ -578,7 +578,7 @@ struct SearchView: View {
                 .font(Celestial.Typography.eyebrow)
                 .tracking(0.6)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                 .padding(.bottom, 8)
 
             VStack(spacing: 0) {
@@ -602,10 +602,10 @@ struct SearchView: View {
                     CelestialHairline()
                 }
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
             .modifier(GlassPanelModifier(cornerRadius: 18))
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
     }
 
     private func performSurpriseSearch() {
@@ -616,32 +616,89 @@ struct SearchView: View {
         performSearch()
     }
 
-    // Slim one-line progress strip shown while reverse-geocoding photos in the
-    // background. Location-filtered searches depend on city/state/country
-    // strings that this task populates, so surfacing progress explains why a
-    // location query may initially return incomplete results.
-    private func geocodingProgressStrip(completed: Int, total: Int) -> some View {
-        let progress = total > 0 ? Double(completed) / Double(total) : 0
-        return VStack(spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "location.circle")
-                    .font(Celestial.Typography.micro)
-                    .foregroundStyle(Celestial.Colors.outline)
-                Text("Finding photo locations  \(completed) / \(total)")
-                    .font(Celestial.Typography.micro)
-                    .foregroundStyle(Celestial.Colors.outline)
+    // Persistent progress card shown while reverse geocoding is queued,
+    // running, or waiting to resume. Location-filtered searches depend on the
+    // metadata this task populates, so incomplete work must remain visible.
+    private func geocodingProgressStrip(_ state: GeocodingProgressState) -> some View {
+        let remaining = max(0, state.total - state.completed)
+        let detail: String
+        switch state.phase {
+        case .queued:
+            detail = state.total > 0
+                ? "\(remaining.formatted()) items waiting for a quiet moment"
+                : "Preparing location details"
+        case .running:
+            detail = "\(state.completed.formatted()) of \(state.total.formatted()) complete"
+        case .waitingToResume:
+            detail = "\(remaining.formatted()) items will continue when Memorable is active"
+        case .paused:
+            detail = "\(remaining.formatted()) items will retry the next time Memorable becomes active"
+        }
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "location.fill")
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.primaryFixedDim)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Finishing photo locations")
+                        .font(Celestial.Typography.captionStrong)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                    Text(detail)
+                        .font(Celestial.Typography.micro)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                }
                 Spacer()
             }
-            ProgressView(value: progress)
-                .tint(Celestial.Colors.primaryFixedDim)
-                .scaleEffect(y: 0.5)
-                .accessibilityLabel("Finding photo locations: \(completed) of \(total) complete")
+            if state.total > 0 {
+                ProgressView(value: Double(state.completed), total: Double(state.total))
+                    .accessibilityLabel(
+                        "Finishing photo locations: \(state.completed) of \(state.total) complete"
+                    )
+            } else {
+                ProgressView()
+                    .accessibilityLabel("Preparing photo location processing")
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .modifier(GlassPanelModifier(cornerRadius: 12))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
+        .tint(Celestial.Colors.primaryFixedDim)
+        .padding(Celestial.Spacing.surfaceContentInset)
+        .modifier(GlassPanelModifier(cornerRadius: 14))
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
+    }
+
+    private func searchRestrictionStrip(_ summary: SearchRestrictionSummary) -> some View {
+        Button {
+            showUpgrade = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "lock.fill")
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.amber)
+                    .accessibilityHidden(true)
+                Text(summary.message)
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 8)
+                Text("Upgrade")
+                    .font(Celestial.Typography.captionStrong)
+                    .foregroundStyle(Celestial.Colors.primaryDim)
+            }
+            .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .modifier(
+            GlassPanelModifier(
+                cornerRadius: 16,
+                tint: Celestial.Colors.surfaceContainerLow.opacity(0.30)
+            )
+        )
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
+        .accessibilityLabel("\(summary.message) Upgrade to Pro")
     }
 
     // Shown after the "Search your N of M photos & videos" hint once the user upgrades,
@@ -679,8 +736,8 @@ struct SearchView: View {
                     .font(Celestial.Typography.caption)
                     .foregroundStyle(Celestial.Colors.primaryDim)
             }
-            .padding(.horizontal, 26)
-            .padding(.top, 30)
+            .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+            .padding(.top, Celestial.Spacing.sectionGap)
             .padding(.bottom, 12)
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -728,7 +785,7 @@ struct SearchView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 26)
+                .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
             }
         }
     }
@@ -749,8 +806,8 @@ struct SearchView: View {
                 .font(Celestial.Typography.captionStrong)
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
             }
-            .padding(.horizontal, 26)
-            .padding(.top, 30)
+            .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
+            .padding(.top, Celestial.Spacing.surfaceContentInset)
             .padding(.bottom, 12)
 
             ForEach(Array(viewModel.searchHistory.enumerated()), id: \.offset) { index, query in
@@ -770,7 +827,7 @@ struct SearchView: View {
                             .font(Celestial.Typography.footnote)
                             .foregroundStyle(Celestial.Colors.outlineVariant)
                     }
-                    .padding(.horizontal, 26)
+                    .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                     .padding(.vertical, 12)
                 }
                 .contextMenu {
@@ -783,13 +840,12 @@ struct SearchView: View {
 
                 if index < viewModel.searchHistory.count - 1 {
                     CelestialHairline()
-                        .padding(.horizontal, 26)
+                        .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                 }
             }
         }
-        .padding(.bottom, 8)
         .modifier(GlassPanelModifier(cornerRadius: 18))
-        .padding(.horizontal, 16)
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
     }
 
     // MARK: - Last Results (when search cleared)
@@ -810,7 +866,7 @@ struct SearchView: View {
                 .font(Celestial.Typography.captionStrong)
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
             .padding(.bottom, 8)
 
             resultsGrid(results: viewModel.lastResults)
@@ -856,11 +912,17 @@ struct SearchView: View {
     private var noResultsState: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let summary = viewModel.filterSummary {
-                Text("Nothing matches all of that")
+                Text(SearchResultsPresentation.noResultsTitle(
+                    summary: summary,
+                    geocodingProgress: indexingService.geocodingProgress
+                ))
                     .font(Celestial.Typography.interfaceTitle)
                     .foregroundStyle(Celestial.Colors.onSurface)
 
-                Text(noResultsExplanation(summary))
+                Text(SearchResultsPresentation.noResultsExplanation(
+                    summary: summary,
+                    geocodingProgress: indexingService.geocodingProgress
+                ))
                     .font(Celestial.Typography.body)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                     .lineSpacing(5)
@@ -885,7 +947,7 @@ struct SearchView: View {
                     }
                     CelestialHairline()
                 }
-                .padding(.top, 28)
+                .padding(.top, Celestial.Spacing.sectionGap)
 
                 if !viewModel.fallbackResults.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
@@ -893,7 +955,7 @@ struct SearchView: View {
                             .font(Celestial.Typography.eyebrow)
                             .tracking(0.6)
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                            .padding(.top, 32)
+                            .padding(.top, Celestial.Spacing.sectionGap)
 
                         let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
                         LazyVGrid(columns: columns, spacing: 8) {
@@ -928,8 +990,8 @@ struct SearchView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 26)
-        .padding(.top, 34)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+        .padding(.top, Celestial.Spacing.sectionGap)
     }
 
     private func relaxationButton(_ title: String, action: @escaping () -> Void) -> some View {
@@ -947,13 +1009,6 @@ struct SearchView: View {
             .contentShape(Rectangle())
         }
         .overlay(alignment: .top) { CelestialHairline() }
-    }
-
-    private func noResultsExplanation(_ summary: FilterSummary) -> String {
-        var details = [summary.visualQuery.isEmpty ? "matching photos" : "\(summary.visualQuery) photos"]
-        if let location = summary.locationDescription { details.append("near \(location)") }
-        if let date = summary.dateDescription { details.append("from \(date)") }
-        return "Looked for \(details.joined(separator: " ")). Try relaxing one detail."
     }
 
     private func runRelaxedSearch(
@@ -1105,7 +1160,7 @@ struct SearchView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 26)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
         .padding(.top, 46)
     }
 
@@ -1208,15 +1263,15 @@ struct SearchView: View {
                 interpretedQueryFacets(summary)
             }
         }
-        .padding(14)
+        .padding(Celestial.Spacing.surfaceContentInset)
         .modifier(
             GlassPanelModifier(
                 cornerRadius: 16,
                 tint: Celestial.Colors.surfaceContainerLow.opacity(0.30)
             )
         )
-        .padding(.horizontal, 14)
-        .padding(.bottom, 8)
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
     }
 
     private func interpretedQueryFacets(_ summary: FilterSummary) -> some View {
@@ -1292,7 +1347,7 @@ struct SearchView: View {
                             .font(Celestial.Typography.footnote)
                             .foregroundStyle(Celestial.Colors.outline)
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
                     .padding(.top, 20)
                     .padding(.bottom, 10)
 
@@ -1460,5 +1515,44 @@ enum SearchResultForegroundValidator {
             }
             return isFolderResultAccessible(result) ? result.id : nil
         })
+    }
+}
+
+enum SearchResultsPresentation {
+    static func noResultsTitle(
+        summary: FilterSummary,
+        geocodingProgress: GeocodingProgressState?
+    ) -> String {
+        if summary.locationDescription != nil, geocodingProgress != nil {
+            return "Still resolving photo locations"
+        }
+        return "Nothing matches all of that"
+    }
+
+    static func noResultsExplanation(
+        summary: FilterSummary,
+        geocodingProgress: GeocodingProgressState?
+    ) -> String {
+        var details = [summary.visualQuery.isEmpty ? "matching photos" : "\(summary.visualQuery) photos"]
+        if let location = summary.locationDescription { details.append("near \(location)") }
+        if let date = summary.dateDescription { details.append("from \(date)") }
+        let searchDescription = details.joined(separator: " ")
+
+        guard summary.locationDescription != nil, let progress = geocodingProgress else {
+            return "Looked for \(searchDescription). Try relaxing one detail."
+        }
+
+        let progressDescription: String
+        switch progress.phase {
+        case .queued:
+            progressDescription = "Location processing is queued"
+        case .running:
+            progressDescription = "Location processing is \(progress.completed) of \(progress.total) complete"
+        case .waitingToResume:
+            progressDescription = "Location processing will continue when Memorable is active"
+        case .paused:
+            progressDescription = "Location processing is paused and will retry the next time Memorable becomes active"
+        }
+        return "No verified matches for \(searchDescription) yet. \(progressDescription), so more results may appear as it finishes."
     }
 }

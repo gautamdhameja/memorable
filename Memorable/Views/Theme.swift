@@ -103,6 +103,26 @@ enum Celestial {
 
     static let sharedCornerRadius: CGFloat = 12
 
+    enum Spacing {
+        /// The alignment rail for titles, prose, and editorial content.
+        static let pageHorizontalInset: CGFloat = 24
+
+        /// The edge inset for primary cards, lists, and search surfaces.
+        static let surfaceHorizontalInset: CGFloat = 16
+
+        /// Standard interior padding for glass panels and card content.
+        static let surfaceContentInset: CGFloat = 16
+
+        /// The vertical rhythm between adjacent cards and glass surfaces.
+        static let stackedContainerGap: CGFloat = 12
+
+        /// The gap between related text, controls, and supporting content.
+        static let contentGap: CGFloat = 16
+
+        /// The vertical break between distinct content sections.
+        static let sectionGap: CGFloat = 28
+    }
+
     // MARK: - Gradients
 
     static let celestialBackground = LinearGradient(

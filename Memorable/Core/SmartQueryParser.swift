@@ -8,6 +8,10 @@ enum SmartQueryOutputPolicy {
     static let maximumDateCharacters = 64
     static let maximumNegativeTerms = QueryInputPolicy.maximumNegativeTerms
     static let maximumNegativeTermCharacters = QueryInputPolicy.maximumNegativeTermScalars
+    private static let genericMediaNouns: Set<String> = [
+        "image", "images", "photo", "photos", "photograph", "photographs",
+        "picture", "pictures",
+    ]
 
     static func bounded(_ value: String, maximumCharacters: Int) -> String {
         QueryInputPolicy.bounded(
@@ -16,6 +20,22 @@ enum SmartQueryOutputPolicy {
             maximumUTF8Bytes: maximumCharacters * 4
         )
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func boundedOptional(_ value: String?, maximumCharacters: Int) -> String? {
+        guard let value else { return nil }
+        let boundedValue = bounded(value, maximumCharacters: maximumCharacters)
+        guard !boundedValue.isEmpty, boundedValue.lowercased() != "null" else { return nil }
+        return boundedValue
+    }
+
+    static func removingGenericMediaNouns(from value: String) -> String {
+        value.split(whereSeparator: \Character.isWhitespace)
+            .filter { token in
+                let normalized = token.trimmingCharacters(in: .punctuationCharacters).lowercased()
+                return !genericMediaNouns.contains(normalized)
+            }
+            .joined(separator: " ")
     }
 }
 
@@ -264,27 +284,12 @@ struct SmartQueryParser: Sendable {
 
         do {
             let parsed = try await boundedResponse(to: prompt)
+            let fallbackHints = QueryParserFallback.parse(query: query)
 
-            var dateRange: DateRange?
-            let isoFormatter = ISO8601DateFormatter()
-            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let fallbackFormatter = ISO8601DateFormatter()
-
-            if let rawStart = parsed.startDate, let rawEnd = parsed.endDate {
-                let startStr = SmartQueryOutputPolicy.bounded(
-                    rawStart,
-                    maximumCharacters: SmartQueryOutputPolicy.maximumDateCharacters
-                )
-                let endStr = SmartQueryOutputPolicy.bounded(
-                    rawEnd,
-                    maximumCharacters: SmartQueryOutputPolicy.maximumDateCharacters
-                )
-                let start = isoFormatter.date(from: startStr) ?? fallbackFormatter.date(from: startStr)
-                let end = isoFormatter.date(from: endStr) ?? fallbackFormatter.date(from: endStr)
-                if let start, let end {
-                    dateRange = DateRange(start: start, end: end)
-                }
-            }
+            // Date filters are hard constraints, so use the deterministic local
+            // parser instead of trusting model-generated dates that may invent a
+            // date or collapse a requested year into a single day.
+            let dateRange = fallbackHints.dateRange
 
             // Sanity check: if the original query is short and FM split it
             // across visual + location, it likely misunderstood a compound
@@ -293,12 +298,11 @@ struct SmartQueryParser: Sendable {
                 parsed.visualDescription,
                 maximumCharacters: SmartQueryOutputPolicy.maximumVisualCharacters
             )
-            var locName = parsed.locationName.map {
-                SmartQueryOutputPolicy.bounded(
-                    $0,
-                    maximumCharacters: SmartQueryOutputPolicy.maximumLocationCharacters
-                )
-            }
+            visualDesc = SmartQueryOutputPolicy.removingGenericMediaNouns(from: visualDesc)
+            var locName = SmartQueryOutputPolicy.boundedOptional(
+                parsed.locationName,
+                maximumCharacters: SmartQueryOutputPolicy.maximumLocationCharacters
+            )
             var landmarkRecombined = false
             let originalWordCount = query.trimmingCharacters(in: .whitespaces)
                 .split(separator: " ").count
@@ -326,6 +330,14 @@ struct SmartQueryParser: Sendable {
                 }
             }
 
+            let fallbackHasStructuredIntent = fallbackHints.dateRange != nil
+                || fallbackHints.locationHint != nil
+            if fallbackHasStructuredIntent {
+                visualDesc = fallbackHints.hasVisualQuery
+                    ? SmartQueryOutputPolicy.removingGenericMediaNouns(from: fallbackHints.textQuery)
+                    : ""
+            }
+
             var visual = visualDesc.isEmpty ? "" : visualDesc.lowercased()
 
             // If FM returned empty visual but detected a location, use location as visual query too
@@ -339,18 +351,15 @@ struct SmartQueryParser: Sendable {
             // Time-of-day detection (Foundation Models doesn't extract this)
             let timeOfDayHours = TimeOfDayConfig.detect(in: query.lowercased())
 
-            // Use Foundation Models result, fill gaps with fallback only if needed
-            var locationHint = locName
-            if !landmarkRecombined && (locationHint == nil || locationHint?.isEmpty == true) {
-                let fallbackHints = QueryParserFallback.parse(query: query)
-                locationHint = fallbackHints.locationHint
-            }
-            locationHint = locationHint.map {
-                SmartQueryOutputPolicy.bounded(
-                    $0,
-                    maximumCharacters: SmartQueryOutputPolicy.maximumLocationCharacters
-                )
-            }
+            // Locations are hard constraints, so only the deterministic local
+            // parser may create one. Model-only locations can be hallucinated
+            // from visual concepts or names (for example, "party" or
+            // "Paris Hilton") and must remain ordinary visual search text.
+            var locationHint = landmarkRecombined ? nil : fallbackHints.locationHint
+            locationHint = SmartQueryOutputPolicy.boundedOptional(
+                locationHint,
+                maximumCharacters: SmartQueryOutputPolicy.maximumLocationCharacters
+            )
 
             #if DEBUG
             logger.info("[SmartParser] Parsed query; visual=\(hasVisual), location=\(locationHint != nil), date=\(dateRange != nil)")
@@ -370,6 +379,10 @@ struct SmartQueryParser: Sendable {
                 textQuery: hasVisual ? visual : "a photo",
                 dateRange: dateRange,
                 locationHint: locationHint,
+                locationLocality: locationHint == nil ? nil : fallbackHints.locationLocality,
+                locationSubAdmin: locationHint == nil ? nil : fallbackHints.locationSubAdmin,
+                locationAdminArea: locationHint == nil ? nil : fallbackHints.locationAdminArea,
+                locationCountryName: locationHint == nil ? nil : fallbackHints.locationCountryName,
                 negativeTerms: negativeTerms,
                 timeOfDayHours: timeOfDayHours,
                 hasVisualQuery: hasVisual

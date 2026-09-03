@@ -108,12 +108,6 @@ enum SearchConfig {
     /// photos in California).
     static let sparseClipMinScore: Float = 0.07
 
-    // Location proximity boost (additive, applied within the filtered radius)
-    // These are mild -- the hard filter already removed irrelevant locations.
-    // Scaled for SigLIP2's lower score range.
-    static let locationCloseBoost: Float = 0.025   // Within 10% of radius
-    static let locationNearBoost: Float = 0.015    // Within 30% of radius
-
     // Time-of-day boost (boost only, no penalty for wrong time)
     static let timeOfDayMatchBoost: Float = 0.03
 
@@ -138,10 +132,8 @@ enum SearchConfig {
 
 /// Used by QueryParser Strategy 3 and SmartQueryParser to distinguish
 /// genuine city names from pet names, people names, and other proper nouns
-/// when the input is a single capitalized word. Multi-word place names
-/// ("San Diego", "New York") don't need this list because they're far
-/// less ambiguous. NLTagger (Strategy 1) catches most well-known cities,
-/// so this is the fallback for cases it misses.
+/// when the input is a single capitalized word. NLTagger (Strategy 1)
+/// catches most well-known cities, so this is the fallback for cases it misses.
 ///
 /// Loaded from Resources/known_cities.json (9,695 single-word cities with
 /// population >= 50,000, sourced from dr5hn/countries-states-cities-database).
@@ -169,6 +161,25 @@ enum KnownRegions {
               let data = try? Data(contentsOf: url),
               let names = try? JSONDecoder().decode([String].self, from: data) else {
             logger.error("Failed to load known_regions.json")
+            return []
+        }
+        return Set(names)
+    }()
+}
+
+/// Multi-word city, country, and state/province names used to validate bare
+/// proper-noun location queries. Exact gazetteer membership prevents arbitrary
+/// capitalized phrases such as a person's name from becoming hard filters.
+///
+/// Loaded from Resources/known_multiword_locations.json, derived from the
+/// dr5hn/countries-states-cities-database v3.1-export.2 country/city and
+/// country/state exports.
+enum KnownMultiwordLocations {
+    static let names: Set<String> = {
+        guard let url = Bundle.main.url(forResource: "known_multiword_locations", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let names = try? JSONDecoder().decode([String].self, from: data) else {
+            logger.error("Failed to load known_multiword_locations.json")
             return []
         }
         return Set(names)
@@ -290,9 +301,13 @@ enum IndexingConfig {
     /// Library size above which a "large library" warning is shown
     static let largeLibraryThreshold = 100_000
 
-    /// Automatic resume waits until the shell and core search warmup have had
-    /// a chance to settle. User-initiated indexing still starts immediately.
-    static let postLaunchAutoResumeDelaySeconds: TimeInterval = 8
+    /// The searchable index and model warmup already complete before automatic
+    /// resume is enqueued, so unfinished user-visible work can start immediately.
+    static let postLaunchAutoResumeDelaySeconds: TimeInterval = 0
+
+    /// Nonessential cleanup and suggestion validation stay out of the launch
+    /// critical path even though indexing and location work resume immediately.
+    static let postLaunchMaintenanceDelaySeconds: TimeInterval = 8
 
     /// Surprise validation performs many searches, so it runs only after base
     /// search is usable and other indexing work is no longer in the critical path.
@@ -313,6 +328,34 @@ enum GeocodingProgressPublicationPolicy {
     }
 }
 
+enum GeocodingRetryPolicy {
+    static let maximumAutomaticAttempts = 5
+    private static let initialDelaySeconds: TimeInterval = 30
+    private static let maximumDelaySeconds: TimeInterval = 15 * 60
+
+    static func delaySeconds(afterAttempt attempt: Int) -> TimeInterval {
+        let exponent = min(max(0, attempt), 5)
+        return min(
+            maximumDelaySeconds,
+            initialDelaySeconds * TimeInterval(1 << exponent)
+        )
+    }
+
+    static func allowsAutomaticRetry(afterAttempt attempt: Int) -> Bool {
+        attempt < maximumAutomaticAttempts
+    }
+}
+
+enum ReverseGeocodeCachePolicy {
+    /// Refresh old labels occasionally so renamed or reclassified places do not
+    /// remain stale forever, while normal relaunches remain fully cached.
+    static let maximumAgeSeconds: TimeInterval = 365 * 24 * 60 * 60
+
+    /// Apple's explicit no-result response is terminal for the current data,
+    /// but retry occasionally in case its placemark coverage later improves.
+    static let noResultRetryDelaySeconds: TimeInterval = 30 * 24 * 60 * 60
+}
+
 // MARK: - Timeouts
 
 enum TimeoutConfig {
@@ -321,6 +364,10 @@ enum TimeoutConfig {
 
     /// Video asset and Quick Look file loading
     static let videoLoad: Double = 15
+
+    /// One Apple reverse-geocoding request. A timeout cancels the underlying
+    /// request so a service outage cannot stall the background worker.
+    static let reverseGeocoding: Double = 15
 }
 
 // MARK: - Video Frame Extraction

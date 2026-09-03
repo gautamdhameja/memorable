@@ -74,8 +74,6 @@ final class RelevanceEvaluationTests: XCTestCase {
                 textQuery: entry.query,
                 dateRange: nil,
                 locationHint: nil,
-                locationCoordinate: nil,
-                locationRadiusKm: nil,
                 locationLocality: nil,
                 locationSubAdmin: nil,
                 locationAdminArea: nil,

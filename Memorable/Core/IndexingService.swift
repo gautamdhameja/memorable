@@ -49,12 +49,13 @@ class IndexingService: ObservableObject {
     }
     @Published private(set) var isThermallyPaused = false
     @Published private(set) var folderIndexingError: String?
-    // Background reverse-geocoding progress. Nil when idle or finished.
-    @Published var geocodingProgress: (completed: Int, total: Int)? {
+    // Deferred reverse-geocoding state. Nil only when all eligible media is
+    // complete or location work was intentionally cancelled.
+    @Published private(set) var geocodingProgress: GeocodingProgressState? {
         didSet {
             #if DEBUG
-            let oldText = oldValue.map { "\($0.completed)/\($0.total)" } ?? "nil"
-            let newText = geocodingProgress.map { "\($0.completed)/\($0.total)" } ?? "nil"
+            let oldText = oldValue.map { "\($0.completed)/\($0.total):\($0.phase)" } ?? "nil"
+            let newText = geocodingProgress.map { "\($0.completed)/\($0.total):\($0.phase)" } ?? "nil"
             if oldText != newText {
                 logger.info("[IndexingService] geocodingProgress changed \(oldText) -> \(newText)")
             }
@@ -68,6 +69,7 @@ class IndexingService: ObservableObject {
     private let initialIndexingDefaults: UserDefaults
     private let surpriseQueryCacheLoader: @Sendable () -> SurpriseQueryCache.State
     private let searchIndexContentRevisionLoader: @Sendable () throws -> SearchIndexContentRevision
+    private let geocodingRetryDelaySeconds: @Sendable (Int) -> TimeInterval
     private let changeObserver = PhotoChangeObserver()
     private let batchSize = IndexingConfig.batchInsertSize
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
@@ -84,6 +86,11 @@ class IndexingService: ObservableObject {
     private var activeStorageMutationID: UUID?
     private var duplicateDeletionTail: Task<Void, Never>?
     private var duplicateDeletionTailID: UUID?
+    private var geocodingProgressRefreshTask: Task<Void, Never>?
+    private var geocodingProgressGeneration = 0
+    private var geocodingRetryTask: Task<Void, Never>?
+    private var geocodingRetryAttempt = 0
+    private var isApplicationActive = false
     private var proEntitlementObservation: AnyCancellable?
     private var scheduledSavedFolderSourceIDs: Set<String> = []
     private var thermalSafetyState = ThermalIndexingState()
@@ -150,7 +157,11 @@ class IndexingService: ObservableObject {
             SurpriseQueryCache.load()
         },
         searchIndexContentRevisionLoader: (@Sendable () throws -> SearchIndexContentRevision)? = nil,
-        initialIndexingDefaults: UserDefaults = .standard
+        initialIndexingDefaults: UserDefaults = .standard,
+        geocodingWorker: GeocodingWorker? = nil,
+        geocodingRetryDelaySeconds: @escaping @Sendable (Int) -> TimeInterval = {
+            GeocodingRetryPolicy.delaySeconds(afterAttempt: $0)
+        }
     ) {
         self.imageEncoder = imageEncoder
         self.searchEngine = searchEngine
@@ -166,7 +177,8 @@ class IndexingService: ObservableObject {
         self.searchIndexContentRevisionLoader = searchIndexContentRevisionLoader ?? {
             try database.searchIndexContentRevision()
         }
-        self.geocodingWorker = GeocodingWorker(
+        self.geocodingRetryDelaySeconds = geocodingRetryDelaySeconds
+        self.geocodingWorker = geocodingWorker ?? GeocodingWorker(
             database: database,
             reverseGeocoder: ReverseGeocoder()
         )
@@ -203,6 +215,11 @@ class IndexingService: ObservableObject {
         let loaded = await loadExistingIndexIfAvailable(loadPriority: loadPriority)
         guard !Task.isCancelled else { return false }
         startObservingPhotoChanges()
+        if loaded {
+            await refreshGeocodingProgress(
+                phase: scheduleAutoResume ? .queued : .waitingToResume
+            )
+        }
         if InitialIndexingExperiencePolicy.shouldResumePendingRun(
             scheduleAutoResume: scheduleAutoResume,
             didLoadIndex: loaded,
@@ -219,13 +236,13 @@ class IndexingService: ObservableObject {
         }
         if scheduleOrphanCleanup && loaded {
             enqueueOrphanCleanup(
-                delayAfterDependencies: IndexingConfig.postLaunchAutoResumeDelaySeconds
+                delayAfterDependencies: IndexingConfig.postLaunchMaintenanceDelaySeconds
             )
         }
         if loaded && (scheduleAutoResume || scheduleOrphanCleanup) {
             enqueueSurpriseQueryValidation(
                 workflowID: UUID(),
-                delayAfterDependencies: IndexingConfig.postLaunchAutoResumeDelaySeconds
+                delayAfterDependencies: IndexingConfig.postLaunchMaintenanceDelaySeconds
             )
         }
         #if DEBUG
@@ -410,9 +427,14 @@ class IndexingService: ObservableObject {
 
     private func stopIndexing(preserveThermalResume: Bool) {
         jobQueue.cancelAll()
+        cancelGeocodingRetry()
         scheduledSavedFolderSourceIDs.removeAll()
         librarySession = nil
-        geocodingProgress = nil
+        if preserveThermalResume {
+            markGeocodingWaitingToResume()
+        } else {
+            clearGeocodingProgress()
+        }
         progress.isRunning = false
         endBackgroundTask()
         if !preserveThermalResume {
@@ -443,7 +465,6 @@ class IndexingService: ObservableObject {
 
         if jobQueue.contains(.geocodeMedia) {
             jobQueue.cancel(.geocodeMedia)
-            geocodingProgress = nil
             enqueueGeocoding(
                 workflowID: UUID(),
                 delayAfterDependencies: IndexingConfig.userSearchBackgroundWorkDelaySeconds,
@@ -460,8 +481,28 @@ class IndexingService: ObservableObject {
         }
     }
 
+    /// Apple location services must not begin new reverse-geocoding requests
+    /// while the app is inactive. Pending work remains visible and resumes as
+    /// soon as the foreground is active again.
+    func setApplicationActive(_ isActive: Bool) {
+        guard isApplicationActive != isActive else { return }
+        isApplicationActive = isActive
+
+        if !isActive {
+            cancelGeocodingRetry()
+            if jobQueue.contains(.geocodeMedia) {
+                jobQueue.cancel(.geocodeMedia)
+            }
+            markGeocodingWaitingToResume()
+            return
+        }
+
+        scheduleGeocodingResumeCheck()
+    }
+
     func cancelAllWorkForMemoryPressure() {
         jobQueue.cancelAll()
+        cancelGeocodingRetry()
         hideValidatedSearchSuggestions()
         scheduledSavedFolderSourceIDs.removeAll()
         storageMutationTask?.cancel()
@@ -473,7 +514,7 @@ class IndexingService: ObservableObject {
         photoChangeScanState.cancel()
         pendingPhotoLibraryChange = PhotoLibraryChangeEvent()
         librarySession = nil
-        geocodingProgress = nil
+        clearGeocodingProgress()
         progress.isRunning = false
         isInitialLibraryIndexingActive = false
         thermalResumeIntent = nil
@@ -867,6 +908,7 @@ class IndexingService: ObservableObject {
         let task = Task { [weak self] in
             guard let self else { return }
             jobQueue.cancelAll()
+            markGeocodingWaitingToResume()
             self.isInitialLibraryIndexingActive = false
             scheduledSavedFolderSourceIDs.removeAll()
             hideValidatedSearchSuggestions()
@@ -1496,7 +1538,13 @@ class IndexingService: ObservableObject {
         delayAfterDependencies: TimeInterval = 0,
         replacingCancelledJob: Bool = false
     ) {
+        guard isApplicationActive else {
+            markGeocodingWaitingToResume()
+            return
+        }
         guard replacingCancelledJob || !jobQueue.contains(.geocodeMedia) else { return }
+        cancelGeocodingRetry()
+        markGeocodingQueued()
         jobQueue.enqueue(IndexingJob(
             workflowID: workflowID,
             kind: .geocodeMedia,
@@ -1504,7 +1552,7 @@ class IndexingService: ObservableObject {
             dependencies: dependencies,
             delayAfterDependencies: delayAfterDependencies
         ) { [weak self] in
-            guard let self else { return .cancelled }
+            guard let self, self.isApplicationActive else { return .cancelled }
             await self.geocodeIndexedMedia()
             return Task.isCancelled ? .cancelled : .completed
         })
@@ -1986,10 +2034,172 @@ class IndexingService: ObservableObject {
         }
     }
 
-    // MARK: - Background Location Geocoding
+    // MARK: - Deferred Location Geocoding
+
+    private func markGeocodingQueued() {
+        let current = geocodingProgress
+        if let current {
+            if current.phase != .queued {
+                geocodingProgress = GeocodingProgressState(
+                    completed: current.completed,
+                    total: current.total,
+                    phase: .queued
+                )
+            }
+            return
+        }
+        geocodingProgress = GeocodingProgressState(
+            completed: 0,
+            total: 0,
+            phase: .queued
+        )
+        scheduleGeocodingProgressRefresh(phase: .queued)
+    }
+
+    private func scheduleGeocodingProgressRefresh(phase: GeocodingProgressPhase) {
+        geocodingProgressRefreshTask?.cancel()
+        geocodingProgressGeneration += 1
+        let generation = geocodingProgressGeneration
+        geocodingProgressRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.loadAndPublishGeocodingProgress(
+                phase: phase,
+                generation: generation
+            )
+            if self.geocodingProgressGeneration == generation {
+                self.geocodingProgressRefreshTask = nil
+            }
+        }
+    }
+
+    private func refreshGeocodingProgress(phase: GeocodingProgressPhase) async {
+        geocodingProgressRefreshTask?.cancel()
+        geocodingProgressRefreshTask = nil
+        geocodingProgressGeneration += 1
+        let generation = geocodingProgressGeneration
+        await loadAndPublishGeocodingProgress(phase: phase, generation: generation)
+    }
+
+    private func loadAndPublishGeocodingProgress(
+        phase: GeocodingProgressPhase,
+        generation: Int
+    ) async {
+        let db = database
+        do {
+            // This count drives visible completion state. Keep the query off the
+            // main actor, but do not let utility work starve it while indexing
+            // and model tasks are saturating the device.
+            let counts = try await CancellableDetachedOperation.run(priority: .userInitiated) {
+                try db.geocodingCounts()
+            }
+            guard !Task.isCancelled,
+                  geocodingProgressGeneration == generation else { return }
+            if phase == .queued, geocodingProgress?.phase == .running {
+                return
+            }
+            geocodingProgress = GeocodingProgressState(counts: counts, phase: phase)
+        } catch is CancellationError {
+            return
+        } catch {
+            logger.error("[IndexingService] Failed to load geocoding progress: \(error.safeDiagnosticCode)")
+        }
+    }
+
+    private func publishRunningGeocodingProgress(_ progress: GeocodingProgressSnapshot) {
+        geocodingProgressRefreshTask?.cancel()
+        geocodingProgressRefreshTask = nil
+        geocodingProgressGeneration += 1
+        if progress.total > 0, progress.completed >= progress.total {
+            clearGeocodingProgress()
+            return
+        }
+        geocodingProgress = GeocodingProgressState(
+            completed: progress.completed,
+            total: progress.total,
+            phase: .running
+        )
+    }
+
+    private func markGeocodingWaitingToResume() {
+        guard let current = geocodingProgress else { return }
+        geocodingProgressRefreshTask?.cancel()
+        geocodingProgressRefreshTask = nil
+        geocodingProgressGeneration += 1
+        geocodingProgress = GeocodingProgressState(
+            completed: current.completed,
+            total: current.total,
+            phase: .waitingToResume
+        )
+    }
+
+    private func clearGeocodingProgress() {
+        geocodingProgressRefreshTask?.cancel()
+        geocodingProgressRefreshTask = nil
+        geocodingProgressGeneration += 1
+        cancelGeocodingRetry()
+        geocodingRetryAttempt = 0
+        geocodingProgress = nil
+    }
+
+    private func scheduleGeocodingResumeCheck() {
+        cancelGeocodingRetry()
+        geocodingRetryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.refreshGeocodingProgress(phase: .queued)
+            guard !Task.isCancelled,
+                  self.isApplicationActive,
+                  self.geocodingProgress != nil else { return }
+            self.geocodingRetryTask = nil
+            self.enqueueGeocoding(
+                workflowID: UUID(),
+                replacingCancelledJob: true
+            )
+        }
+    }
+
+    private func scheduleGeocodingRetry() {
+        guard isApplicationActive,
+              geocodingProgress != nil,
+              geocodingRetryTask == nil else { return }
+        guard GeocodingRetryPolicy.allowsAutomaticRetry(
+            afterAttempt: geocodingRetryAttempt
+        ) else {
+            if let current = geocodingProgress {
+                geocodingProgress = GeocodingProgressState(
+                    completed: current.completed,
+                    total: current.total,
+                    phase: .paused
+                )
+            }
+            return
+        }
+        let delay = geocodingRetryDelaySeconds(geocodingRetryAttempt)
+        geocodingRetryAttempt += 1
+        geocodingRetryTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch is CancellationError {
+                return
+            } catch {
+                logger.error("[Geocoder] Retry delay failed: \(error.safeDiagnosticCode)")
+                return
+            }
+            guard let self, self.isApplicationActive else { return }
+            self.geocodingRetryTask = nil
+            self.enqueueGeocoding(
+                workflowID: UUID(),
+                replacingCancelledJob: true
+            )
+        }
+    }
+
+    private func cancelGeocodingRetry() {
+        geocodingRetryTask?.cancel()
+        geocodingRetryTask = nil
+    }
 
     /// Reverse-geocodes indexed photos and videos that have GPS but no location strings yet.
-    /// Runs in the background after indexing completes without blocking search.
+    /// Runs at background priority while the app is active, without blocking search.
     private func geocodeIndexedMedia() async {
         let startedAt = CFAbsoluteTimeGetCurrent()
         defer {
@@ -1998,19 +2208,27 @@ class IndexingService: ObservableObject {
                 durationSeconds: CFAbsoluteTimeGetCurrent() - startedAt
             )
         }
-        let result = await geocodingWorker.run { [weak self] progress in
-            self?.geocodingProgress = progress.map {
-                (completed: $0.completed, total: $0.total)
+        let engine = searchEngine
+        let result = await geocodingWorker.run(
+            progress: { [weak self] progress in
+                self?.publishRunningGeocodingProgress(progress)
+            },
+            locationsUpdated: { updates in
+                engine.applyLocationUpdates(updates)
             }
-        }
+        )
         if result.wasCancelled {
-            geocodingProgress = nil
             return
         }
         if result.changedLocations {
-            _ = await reloadSearchIndex()
+            geocodingRetryAttempt = 0
         }
-        geocodingProgress = nil
+        await refreshGeocodingProgress(
+            phase: isApplicationActive ? .queued : .waitingToResume
+        )
+        if isApplicationActive, geocodingProgress != nil {
+            scheduleGeocodingRetry()
+        }
     }
 
 }

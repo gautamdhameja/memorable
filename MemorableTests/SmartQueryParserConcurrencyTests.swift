@@ -38,6 +38,44 @@ final class SmartQueryParserConcurrencyTests: XCTestCase {
         }
     }
 
+    private struct NullSentinelLocationResponder: SmartQueryResponding {
+        func respond(to prompt: String) async throws -> ParsedQuery {
+            ParsedQuery(
+                visualDescription: "bavaria",
+                startDate: nil,
+                endDate: nil,
+                locationName: "null",
+                negativeTerms: []
+            )
+        }
+    }
+
+    private struct FixedParsedQueryResponder: SmartQueryResponding {
+        let parsedQuery: ParsedQuery
+
+        func respond(to prompt: String) async throws -> ParsedQuery {
+            parsedQuery
+        }
+    }
+
+    func testSuccessfulModelParsePreservesDeterministicAdministrativeIntent() async {
+        let parser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "CA",
+                startDate: nil,
+                endDate: nil,
+                locationName: "CA",
+                negativeTerms: []
+            ))
+        }
+
+        let hints = await parser.parse(query: "CA")
+
+        XCTAssertEqual(hints.locationHint, "CA")
+        XCTAssertEqual(hints.locationAdminArea, "CA")
+        XCTAssertEqual(hints.locationCountryName, "united states")
+    }
+
     private actor ConcurrencyProbe {
         private var activeByResponder: [UUID: Int] = [:]
         private var responderIDs: Set<UUID> = []
@@ -332,6 +370,120 @@ final class SmartQueryParserConcurrencyTests: XCTestCase {
         XCTAssertTrue(hints.negativeTerms.allSatisfy {
             $0.count <= SmartQueryOutputPolicy.maximumNegativeTermCharacters
         })
+    }
+
+    func testLiteralNullLocationFallsBackToLocalLocationParsing() async {
+        let parser = SmartQueryParser(isAvailable: true) {
+            NullSentinelLocationResponder()
+        }
+
+        let hints = await parser.parse(query: "Bavaria")
+
+        XCTAssertEqual(hints.locationHint?.lowercased(), "bavaria")
+        XCTAssertNotEqual(hints.locationHint?.lowercased(), "null")
+    }
+
+    func testModelCannotAddDateFilterWhenQueryHasNoTemporalIntent() async {
+        let parser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "new york",
+                startDate: "2026-09-02T00:00:00Z",
+                endDate: "2026-09-02T23:59:59Z",
+                locationName: "New York",
+                negativeTerms: []
+            ))
+        }
+
+        let hints = await parser.parse(query: "New York")
+
+        XCTAssertNil(hints.dateRange)
+    }
+
+    func testModelCannotInventHardLocationForVisualOrPersonQuery() async {
+        let partyParser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "party",
+                startDate: nil,
+                endDate: nil,
+                locationName: "party",
+                negativeTerms: []
+            ))
+        }
+        let personParser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "Paris Hilton",
+                startDate: nil,
+                endDate: nil,
+                locationName: "Paris Hilton",
+                negativeTerms: []
+            ))
+        }
+
+        let party = await partyParser.parse(query: "party")
+        let person = await personParser.parse(query: "Paris Hilton")
+
+        XCTAssertNil(party.locationHint)
+        XCTAssertEqual(party.textQuery, "party")
+        XCTAssertNil(person.locationHint)
+        XCTAssertEqual(person.textQuery, "paris hilton")
+    }
+
+    func testDeterministicYearRangeOverridesModelSingleDayGuess() async throws {
+        let parser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "",
+                startDate: "2022-09-02T00:00:00Z",
+                endDate: "2022-09-02T23:59:59Z",
+                locationName: "California",
+                negativeTerms: []
+            ))
+        }
+
+        let hints = await parser.parse(query: "California 2022")
+        let range = try XCTUnwrap(hints.dateRange)
+        let calendar = Calendar.current
+
+        XCTAssertEqual(calendar.component(.year, from: range.start), 2022)
+        XCTAssertEqual(calendar.component(.month, from: range.start), 1)
+        XCTAssertEqual(calendar.component(.day, from: range.start), 1)
+        XCTAssertEqual(calendar.component(.year, from: range.end), 2022)
+        XCTAssertEqual(calendar.component(.month, from: range.end), 12)
+        XCTAssertEqual(calendar.component(.day, from: range.end), 31)
+    }
+
+    func testGenericPhotosDoNotBecomeSmartVisualContent() async {
+        let parser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "photos",
+                startDate: "2022-01-01T00:00:00Z",
+                endDate: "2022-12-31T23:59:59Z",
+                locationName: "Berlin",
+                negativeTerms: []
+            ))
+        }
+
+        let hints = await parser.parse(query: "photos from Berlin in 2022")
+
+        XCTAssertEqual(hints.textQuery, "berlin")
+        XCTAssertEqual(hints.locationHint?.lowercased(), "berlin")
+    }
+
+    func testDeterministicFiltersRemoveModelRetainedFilterTokensFromVisualQuery() async {
+        let parser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "ca 2022",
+                startDate: "2022-01-01T00:00:00Z",
+                endDate: "2022-12-31T23:59:59Z",
+                locationName: "CA",
+                negativeTerms: []
+            ))
+        }
+
+        let hints = await parser.parse(query: "CA 2022")
+
+        XCTAssertEqual(hints.textQuery, "ca")
+        XCTAssertEqual(hints.locationHint, "CA")
+        XCTAssertNotNil(hints.dateRange)
     }
 
     func testQueryInputPolicyBoundsCombiningMarkPayloadByScalarsAndBytes() {

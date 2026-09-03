@@ -36,7 +36,7 @@ struct OnboardingView: View {
                             .foregroundStyle(Celestial.Colors.onSurface)
                             .lineLimit(1)
                     }
-                    .padding(.horizontal, 15)
+                    .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                     .frame(minHeight: 50)
                     .modifier(GlassSearchBarModifier(cornerRadius: 13))
                     .accessibilityElement(children: .combine)
@@ -73,7 +73,7 @@ struct OnboardingView: View {
                     }
                 }
                 .frame(minHeight: max(0, proxy.size.height - 10), alignment: .top)
-                .padding(.horizontal, 26)
+                .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                 .padding(.bottom, 10)
             }
             .scrollIndicators(.hidden)
@@ -107,7 +107,7 @@ struct OnboardingView: View {
                         privacyRow(number: "03", text: "Delete the index any time")
                         CelestialHairline()
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                     .modifier(GlassPanelModifier(cornerRadius: 18))
                     .padding(.top, 54)
 
@@ -124,7 +124,7 @@ struct OnboardingView: View {
                     }
                 }
                 .frame(minHeight: max(0, proxy.size.height - 10), alignment: .top)
-                .padding(.horizontal, 26)
+                .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                 .padding(.bottom, 10)
             }
             .scrollIndicators(.hidden)
@@ -180,9 +180,9 @@ struct OnboardingView: View {
                         setupRow(label: "Free tier indexes", value: "First 500 items", accent: true)
                         CelestialHairline()
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                     .modifier(GlassPanelModifier(cornerRadius: 18))
-                    .padding(.top, 32)
+                    .padding(.top, Celestial.Spacing.sectionGap)
 
                     Spacer(minLength: 28)
 
@@ -214,7 +214,7 @@ struct OnboardingView: View {
                     .frame(minHeight: 46)
                 }
                 .frame(minHeight: max(0, proxy.size.height - 10), alignment: .top)
-                .padding(.horizontal, 26)
+                .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                 .padding(.bottom, 10)
             }
             .scrollIndicators(.hidden)

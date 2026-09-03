@@ -36,9 +36,10 @@ struct SourceManagerView: View {
                         }
                         Spacer()
                         if indexingService.progress.isRunning {
-                            ProgressView()
-                                .tint(Celestial.Colors.primaryDim)
-                                .controlSize(.small)
+                            Text("Updating")
+                                .font(Celestial.Typography.captionStrong)
+                                .foregroundStyle(Celestial.Colors.primaryDim)
+                                .accessibilityLabel("Search index updating on the home screen")
                         } else if !indexingService.isReady {
                             Button("Index") {
                                 indexingService.startIndexing()
@@ -50,10 +51,10 @@ struct SourceManagerView: View {
                                 .foregroundStyle(Celestial.Colors.primaryDim)
                         }
                     }
-                    .padding(12)
+                    .padding(Celestial.Spacing.surfaceContentInset)
                     .modifier(GlassPanelModifier(cornerRadius: 16))
                     .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .listRowInsets(containerRowInsets)
                     .disabled(!database.allowsIndexingWrites)
                 } header: {
                     Text("Photo Library")
@@ -69,7 +70,7 @@ struct SourceManagerView: View {
                         emptyFoldersPanel
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            .listRowInsets(containerRowInsets)
                     } else {
                         ForEach(folderSources) { source in
                             HStack(spacing: 14) {
@@ -114,11 +115,11 @@ struct SourceManagerView: View {
                                         : "Refresh \(source.name), Pro feature"
                                 )
                             }
-                            .padding(12)
+                            .padding(Celestial.Spacing.surfaceContentInset)
                             .modifier(GlassPanelModifier(cornerRadius: 16))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            .listRowInsets(containerRowInsets)
                         }
                         .onDelete { offsets in
                             let selectedSources = offsets.map { folderSources[$0] }
@@ -241,8 +242,18 @@ struct SourceManagerView: View {
             .buttonStyle(.plain)
             .disabled(!database.allowsIndexingWrites)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
         .modifier(GlassPanelModifier(cornerRadius: 16))
+    }
+
+    private var containerRowInsets: EdgeInsets {
+        let halfGap = Celestial.Spacing.stackedContainerGap / 2
+        return EdgeInsets(
+            top: halfGap,
+            leading: Celestial.Spacing.surfaceHorizontalInset,
+            bottom: halfGap,
+            trailing: Celestial.Spacing.surfaceHorizontalInset
+        )
     }
 
     private func requestFolderPicker() {
