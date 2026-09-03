@@ -236,6 +236,152 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(infoPlist.contains("<false/>"))
     }
 
+    func testInitialIndexingRegistersPermittedProcessingModes() throws {
+        let infoPlist = try contents(of: "Memorable/Info.plist")
+        let app = try contents(of: "Memorable/MemorableApp.swift")
+        let controller = try contents(of: "Memorable/Core/BackgroundIndexingController.swift")
+        let appDelegate = try sourceSection(
+            in: controller,
+            from: "final class MemorableAppDelegate",
+            to: "    }\n}"
+        )
+
+        XCTAssertTrue(infoPlist.contains("<key>BGTaskSchedulerPermittedIdentifiers</key>"))
+        XCTAssertTrue(infoPlist.contains("$(PRODUCT_BUNDLE_IDENTIFIER).indexing.processing"))
+        XCTAssertTrue(infoPlist.contains("$(PRODUCT_BUNDLE_IDENTIFIER).indexing.continued.*"))
+        XCTAssertTrue(infoPlist.contains("<key>UIBackgroundModes</key>"))
+        XCTAssertTrue(infoPlist.contains("<string>processing</string>"))
+        XCTAssertTrue(app.contains("@UIApplicationDelegateAdaptor(MemorableAppDelegate.self)"))
+        XCTAssertTrue(appDelegate.contains("didFinishLaunchingWithOptions"))
+        XCTAssertTrue(appDelegate.contains(
+            "BackgroundIndexingController.shared.registerLaunchHandlers()"
+        ))
+        XCTAssertTrue(controller.contains("BGProcessingTaskRequest"))
+        XCTAssertTrue(controller.contains("BGContinuedProcessingTaskRequest"))
+    }
+
+    func testReleaseChecklistRequiresPhysicalDeviceBackgroundTaskVerification() throws {
+        let checklist = try contents(of: "RELEASE_MANUAL_CHECKLIST.md")
+
+        XCTAssertTrue(checklist.contains("physical device"))
+        XCTAssertTrue(checklist.contains("iOS 17"))
+        XCTAssertTrue(checklist.contains("iOS 26"))
+        XCTAssertTrue(checklist.contains("_simulateLaunchForTaskWithIdentifier"))
+        XCTAssertTrue(checklist.contains("_simulateExpirationForTaskWithIdentifier"))
+        XCTAssertTrue(checklist.contains("com.blockdeep.memorable.indexing.processing"))
+    }
+
+    func testScheduledIndexingLaunchDoesNotHydrateInteractiveSearchStack() throws {
+        let app = try contents(of: "Memorable/MemorableApp.swift")
+        let indexingService = try contents(of: "Memorable/Core/IndexingService.swift")
+        let resume = try sourceSection(
+            in: app,
+            from: "private func resumeInitialIndexingForSystemTask()",
+            to: "private func initialize("
+        )
+        let preparation = try sourceSection(
+            in: app,
+            from: "private func prepareIndexingStackForBackground()",
+            to: "static func resumeExistingSearchForWarmup"
+        )
+
+        XCTAssertTrue(resume.contains("startsSemanticWarmup: false"))
+        XCTAssertTrue(resume.contains("prepareIndexingStackForBackground()"))
+        XCTAssertTrue(resume.contains("BackgroundIndexingLaunchEligibility.terminalResult"))
+        XCTAssertTrue(resume.contains("return .retryableFailure"))
+        XCTAssertTrue(preparation.contains("ImageEncoder()"))
+        XCTAssertTrue(preparation.contains("SearchEngine(database: database)"))
+        XCTAssertFalse(preparation.contains("TextEncoder()"))
+        XCTAssertFalse(preparation.contains("checkAndLoadExistingIndex"))
+        XCTAssertFalse(preparation.contains("startCaptionPreparation"))
+        let workerReload = try sourceSection(
+            in: indexingService,
+            from: "private func reloadSearchIndexFromLibraryWorker()",
+            to: "private func scheduleForegroundInitialIndexingResumeIfNeeded()"
+        )
+        XCTAssertTrue(workerReload.contains("guard isApplicationActive else"))
+        XCTAssertTrue(workerReload.contains("hasDeferredSearchIndexReload = true"))
+    }
+
+    func testForegroundingColdBackgroundLaunchStartsSemanticWarmup() throws {
+        let app = try contents(of: "Memorable/MemorableApp.swift")
+        let lifecycle = try sourceSection(
+            in: app,
+            from: "func setApplicationActive(_ isActive: Bool)",
+            to: "private func resumeInitialIndexingForSystemTask()"
+        )
+
+        XCTAssertTrue(lifecycle.contains("ForegroundSemanticWarmupPolicy.shouldStart"))
+        XCTAssertTrue(lifecycle.contains("semanticRuntime.startPostPaintWarmup()"))
+    }
+
+    func testForegroundWarmupWaitsForSuccessfulBackgroundPreparation() throws {
+        let app = try contents(of: "Memorable/MemorableApp.swift")
+        let warmup = try sourceSection(
+            in: app,
+            from: "private func warmCoreSearch(priority:",
+            to: "private func prepareIndexingStackForBackground()"
+        )
+        let preparation = try sourceSection(
+            in: app,
+            from: "private func prepareIndexingStackForBackground()",
+            to: "private func performBackgroundIndexingPreparation()"
+        )
+
+        XCTAssertTrue(warmup.contains("waitForBackgroundIndexingPreparationCleanup()"))
+        XCTAssertTrue(warmup.contains("while isCoreWarmupRunning"))
+        XCTAssertTrue(warmup.contains("try Task.checkCancellation()"))
+        XCTAssertTrue(warmup.contains("await Task.yield()"))
+        XCTAssertTrue(preparation.contains(
+            "restartForegroundWarmupAfterBackgroundPreparationIfNeeded()"
+        ))
+        XCTAssertTrue(preparation.contains("catch {"))
+        XCTAssertFalse(
+            preparation.components(separatedBy: "catch {").last?.contains(
+                "restartForegroundWarmupAfterBackgroundPreparationIfNeeded()"
+            ) ?? true,
+            "Failed background preparation must not enter a warmup retry loop"
+        )
+    }
+
+    func testMemoryWarningCancelsBackgroundIndexingPreparation() throws {
+        let app = try contents(of: "Memorable/MemorableApp.swift")
+        let memoryWarning = try sourceSection(
+            in: app,
+            from: "func handleMemoryWarning()",
+            to: "func retrySemanticWarmup()"
+        )
+
+        XCTAssertTrue(memoryWarning.contains("backgroundIndexingPreparationTask?.cancel()"))
+        XCTAssertFalse(memoryWarning.contains("backgroundIndexingPreparationTask = nil"))
+        let cleanup = try sourceSection(
+            in: app,
+            from: "private func waitForBackgroundIndexingPreparationCleanup()",
+            to: "private func performBackgroundIndexingPreparation()"
+        )
+        XCTAssertTrue(cleanup.contains("while let preparationTask"))
+        XCTAssertTrue(cleanup.contains("catch is CancellationError"))
+        XCTAssertTrue(cleanup.contains("try await preparationTask.value"))
+        XCTAssertTrue(cleanup.contains("try Task.checkCancellation()"))
+        XCTAssertTrue(cleanup.contains("await Task.yield()"))
+    }
+
+    func testOnboardingStartPreservesOnlyTheLiveForegroundGesture() throws {
+        let app = try contents(of: "Memorable/MemorableApp.swift")
+        let content = try contents(of: "Memorable/Views/ContentView.swift")
+        let indexing = try contents(of: "Memorable/Core/IndexingService.swift")
+
+        XCTAssertTrue(content.contains("startIndexAfterCompletion: onboardingIndexRequestBinding"))
+        XCTAssertTrue(content.contains("isForeground: scenePhase == .active"))
+        XCTAssertTrue(app.contains("foregroundOnboardingIndexIntent.consume()"))
+        XCTAssertTrue(app.contains(
+            "startInitialIndexingFromOnboarding(isUserInitiated: isUserInitiated)"
+        ))
+        XCTAssertTrue(indexing.contains(
+            "func startInitialIndexingFromOnboarding(isUserInitiated: Bool)"
+        ))
+    }
+
     func testOnboardingDisclosesCoordinateGeocoding() throws {
         let onboarding = try contents(of: "Memorable/Views/OnboardingView.swift")
         let infoPlist = try contents(of: "Memorable/Info.plist")
@@ -633,7 +779,36 @@ final class ProjectConfigurationTests: XCTestCase {
             "@Published private(set) var indexingService: IndexingService?"
         ))
         XCTAssertTrue(searchView.contains("semanticRuntime.isCheckingIndexAvailability"))
-        XCTAssertTrue(searchView.contains("Loading your library…"))
+        let preparedServiceCondition = "if let indexingService, let searchEngine, !semanticRuntime.isCheckingIndexAvailability"
+        XCTAssertEqual(
+            mainTabView.components(separatedBy: preparedServiceCondition).count - 1,
+            2,
+            "Both tabs must keep the same preparation shell until index loading finishes"
+        )
+        let searchBar = try sourceSection(
+            in: searchView,
+            from: "private var searchBar: some View",
+            to: "private var initialIndexingExperience: some View"
+        )
+        XCTAssertTrue(searchBar.contains(
+            ".disabled(!semanticRuntime.readiness.isSemanticSearchReady)"
+        ))
+        let searchPlaceholder = try sourceSection(
+            in: searchView,
+            from: "private var searchPlaceholder: String",
+            to: "private var searchPreparationStatusText: String"
+        )
+        XCTAssertTrue(searchPlaceholder.contains("return Self.placeholders[0]"))
+        XCTAssertFalse(searchPlaceholder.contains("Warming search"))
+        XCTAssertFalse(searchPlaceholder.contains("Preparing search"))
+        let searchPreparationStatus = try sourceSection(
+            in: searchView,
+            from: "private var searchPreparationStatusText: String",
+            to: "// MARK: - Banners"
+        )
+        XCTAssertTrue(searchPreparationStatus.contains("return \"Preparing search...\""))
+        XCTAssertFalse(searchPreparationStatus.contains("Warming search"))
+        XCTAssertFalse(searchPreparationStatus.contains("Loading your library"))
         XCTAssertFalse(mainTabView.contains("Ready to index your photos"))
         XCTAssertTrue(contentView.contains("private var launchShell"))
         XCTAssertFalse(contentView.contains("private var loadingView"))
@@ -641,7 +816,39 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertFalse(contentView.contains("ProgressView()"), "Launch checks must not look like indexing")
         XCTAssertTrue(mainTabView.contains("private struct SearchPreparationShell"))
         XCTAssertFalse(mainTabView.contains("private struct SemanticWarmupView"))
-        XCTAssertFalse(mainTabView.contains("ProgressView()"), "Search warmup must stay inside the static home shell")
+        let searchPreparationShell = try sourceSection(
+            in: mainTabView,
+            from: "private struct SearchPreparationShell",
+            to: "private var statusText: String"
+        )
+        XCTAssertTrue(searchPreparationShell.contains("Text(\"Search your photos...\")"))
+        XCTAssertTrue(searchPreparationShell.contains(".disabled(true)"))
+
+        let failedPreparationState = try sourceSection(
+            in: String(searchPreparationShell),
+            from: "if case .failed = semanticRuntime.phase",
+            to: "} else {"
+        )
+        XCTAssertTrue(failedPreparationState.contains("Text(statusText)"))
+        XCTAssertTrue(failedPreparationState.contains("Button(\"Try Again\", action: retry)"))
+        XCTAssertFalse(failedPreparationState.contains("ProgressView()"))
+
+        let warmingPreparationState = try sourceSection(
+            in: String(searchPreparationShell),
+            from: "} else {",
+            to: ".accessibilityElement(children: .combine)"
+        )
+        XCTAssertTrue(warmingPreparationState.contains("ProgressView()"))
+        XCTAssertTrue(warmingPreparationState.contains("Text(statusText)"))
+        XCTAssertFalse(warmingPreparationState.contains("Try Again"))
+        let preparationStatus = try sourceSection(
+            in: mainTabView,
+            from: "private var statusText: String",
+            to: "    }\n}"
+        )
+        XCTAssertTrue(preparationStatus.contains("return \"Preparing search...\""))
+        XCTAssertFalse(preparationStatus.contains("Warming search"))
+        XCTAssertFalse(preparationStatus.contains("Loading your library"))
 
         let markChecking = try XCTUnwrap(warmup.range(of: "semanticRuntime.markIndexWarming"))
         let verifyEntitlement = try XCTUnwrap(warmup.range(of: "await ProManager.shared.verifyEntitlement()"))

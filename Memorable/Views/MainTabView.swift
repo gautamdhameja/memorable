@@ -79,7 +79,7 @@ struct MainTabView: View {
 
     var body: some View {
         TabView(selection: $navigation.destination) {
-            if let indexingService, let searchEngine {
+            if let indexingService, let searchEngine, !semanticRuntime.isCheckingIndexAvailability {
                 SearchView(
                     indexingService: indexingService,
                     searchEngine: searchEngine,
@@ -94,7 +94,7 @@ struct MainTabView: View {
                     .tag(MainTabDestination.search)
             }
 
-            if let indexingService, let searchEngine {
+            if let indexingService, let searchEngine, !semanticRuntime.isCheckingIndexAvailability {
                 MoreView(
                     indexingService: indexingService,
                     searchEngine: searchEngine,
@@ -420,7 +420,7 @@ private struct SearchPreparationShell: View {
                         Image(systemName: "magnifyingglass")
                             .foregroundStyle(Celestial.Colors.primaryFixedDim)
                             .accessibilityHidden(true)
-                        Text(statusText)
+                        Text("Search your photos...")
                             .font(Celestial.Typography.body)
                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         Spacer()
@@ -430,17 +430,39 @@ private struct SearchPreparationShell: View {
                     .modifier(GlassSearchBarModifier(cornerRadius: 13))
                     .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
                     .padding(.top, 20)
+                    .disabled(true)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Search photos")
+                    .accessibilityValue("Unavailable")
+                    .accessibilityHint(statusText)
 
                     if case .failed = semanticRuntime.phase {
                         VStack(alignment: .leading, spacing: Celestial.Spacing.contentGap) {
                             Text("Search setup needs attention")
                                 .font(Celestial.Typography.interfaceTitle3)
                                 .foregroundStyle(Celestial.Colors.onSurface)
+                            Text(statusText)
+                                .font(Celestial.Typography.supporting)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             Button("Try Again", action: retry)
                                 .celestialPrimaryButtonStyle()
                         }
                         .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                         .padding(.top, Celestial.Spacing.sectionGap)
+                    } else {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(Celestial.Colors.primaryFixedDim)
+                                .accessibilityHidden(true)
+                            Text(statusText)
+                                .font(Celestial.Typography.supporting)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                            Spacer()
+                        }
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                        .padding(.top, Celestial.Spacing.sectionGap)
+                        .accessibilityElement(children: .combine)
                     }
 
                     Spacer()
@@ -451,16 +473,10 @@ private struct SearchPreparationShell: View {
 
     private var statusText: String {
         switch semanticRuntime.phase {
-        case .idle:
-            return "Preparing search..."
-        case .warmingCore(let promoted):
-            return promoted ? "Prioritizing search..." : "Warming search..."
-        case .waitingForIndex:
-            return "Loading your library…"
-        case .ready:
-            return "Search is ready"
         case .failed(let message):
             return message
+        default:
+            return "Preparing search..."
         }
     }
 }

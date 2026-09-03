@@ -215,7 +215,10 @@ struct DuplicateFinderView: View {
         case .failure(let error):
             logger.error("Failed to delete duplicate photo: \(error.safeDiagnosticCode)")
             deletionAlertTitle = "Couldn't delete photo"
-            deletionAlertMessage = error.localizedDescription
+            deletionAlertMessage = UserFacingErrorMessage.message(
+                for: error,
+                fallback: "The photo couldn't be deleted. Try again."
+            )
         }
     }
 }

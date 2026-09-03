@@ -144,6 +144,36 @@ final class IndexingJobQueueTests: XCTestCase {
         XCTAssertEqual(activeCount, 0)
     }
 
+    func testCancellingIdleWaitDoesNotRetainCallerUntilActiveJobFinishes() async {
+        let waiterRegistered = Gate()
+        let queue = IndexingJobQueue(
+            now: Date.init,
+            sleep: { try await Task.sleep(nanoseconds: $0) },
+            idleWaiterRegistered: { _ in waiterRegistered.open() }
+        )
+        let gate = Gate()
+        queue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .indexPhotos,
+            priority: .userInitiated
+        ) {
+            await gate.wait()
+            return .completed
+        })
+        await Task.yield()
+
+        let waiter = Task { @MainActor in
+            await queue.waitUntilIdle()
+        }
+        await waiterRegistered.wait()
+        waiter.cancel()
+        await waiter.value
+
+        XCTAssertFalse(queue.isIdle)
+        gate.open()
+        await queue.waitUntilIdle()
+    }
+
     func testDependencyBlocksUntilRequiredJobCompletes() async {
         let queue = IndexingJobQueue()
         let workflowID = UUID()
@@ -362,6 +392,32 @@ final class IndexingJobQueueTests: XCTestCase {
 
         await queue.waitUntilIdle()
         XCTAssertEqual(events, ["geocode-start", "geocode-cancelled", "index"])
+    }
+
+    func testFolderWorkQueuedBeforeEnrichmentPreservesEnrichment() async {
+        let queue = IndexingJobQueue()
+        var events: [String] = []
+
+        queue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .indexFolder,
+            priority: .userInitiated
+        ) {
+            events.append("folder")
+            return .completed
+        })
+        queue.enqueue(IndexingJob(
+            workflowID: UUID(),
+            kind: .enrichPhotos,
+            priority: .enrichment
+        ) {
+            events.append("enrichment")
+            return .completed
+        })
+
+        await queue.waitUntilIdle()
+
+        XCTAssertEqual(events, ["folder", "enrichment"])
     }
 
     func testUserInitiatedJobPreemptsSurpriseValidation() async {

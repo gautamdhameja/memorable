@@ -128,7 +128,10 @@ struct SourceManagerView: View {
                                     do {
                                         try await indexingService.deleteFolderSource(id: source.id)
                                     } catch {
-                                        deleteError = "Failed to delete \(source.name): \(error.localizedDescription)"
+                                        deleteError = UserFacingErrorMessage.message(
+                                            for: error,
+                                            fallback: "Couldn't delete \(source.name). Try again."
+                                        )
                                         logger.error("Failed to delete a source: \(error.safeDiagnosticCode)")
                                     }
                                 }

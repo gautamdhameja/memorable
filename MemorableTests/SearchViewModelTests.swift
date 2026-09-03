@@ -8,6 +8,10 @@ final class SearchViewModelTests: XCTestCase {
         var errorDescription: String? { "expected failure" }
     }
 
+    private enum UnknownError: Error {
+        case failure
+    }
+
     @MainActor
     func testEditingTextDoesNotCancelSubmittedSearch() async throws {
         let searcher = ControlledSearcher()
@@ -328,10 +332,58 @@ final class SearchViewModelTests: XCTestCase {
         model.submitSearch()
         await model.waitForCurrentSearch()
 
-        XCTAssertEqual(model.searchError, "Search failed: expected failure")
+        XCTAssertEqual(model.searchError, "expected failure")
         XCTAssertFalse(model.isSearching)
         XCTAssertNil(model.activeSearchID)
         XCTAssertTrue(model.results.isEmpty)
+    }
+
+    @MainActor
+    func testUnknownPreparationFailureUsesSafeGenericCopy() async {
+        let model = SearchViewModel(dependencies: .init(
+            prioritizeUserSearch: {},
+            isSemanticSearchReady: { false },
+            isIndexReady: { false },
+            isIndexLoaded: { false },
+            prepareForSearch: { throw UnknownError.failure },
+            search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
+            detectScreenshotIDs: { _ in [] },
+            validResultIDs: { _ in [] },
+            addHistory: { _ in },
+            loadHistory: { [] },
+            clearHistory: {},
+            removeHistory: { _ in },
+            now: { 1 }
+        ))
+
+        model.setQueryText("cats")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.searchError, "Search couldn't be completed. Try again.")
+    }
+
+    func testUserReachableErrorsProvideExplicitMessages() {
+        let errors: [any Error] = [
+            SearchEngineError.corruptedIndex,
+            SearchEngineError.invalidEmbedding,
+            SearchEngineError.textEncoderUnavailable,
+            CLIPTokenizer.TokenizerError.filesNotFound,
+            DatabaseCapabilityError.unavailable,
+            DatabaseCapabilityError.indexingUnavailableInFallback,
+            PhotoSharePreparationError.unsupportedMedia,
+            PhotoSharePreparationError.sourceUnavailable,
+            PhotoSharePreparationError.fileTooLarge,
+            PhotoSharePreparationError.storageUnavailable,
+            ProManager.PurchaseError.unverified,
+        ]
+
+        for error in errors {
+            let description = (error as? any LocalizedError)?.errorDescription
+            XCTAssertNotNil(description, "Missing explicit user message for \(type(of: error))")
+            XCTAssertFalse(description?.isEmpty ?? true)
+            XCTAssertFalse(description?.contains("The operation couldn") ?? true)
+        }
     }
 
     @MainActor

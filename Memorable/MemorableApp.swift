@@ -4,8 +4,37 @@ import os
 
 let logger = Logger(subsystem: "com.blockdeep.memorable", category: "app")
 
+struct ForegroundOnboardingIndexIntent {
+    private var isPending = false
+
+    mutating func record(requested: Bool, isApplicationActive: Bool) {
+        isPending = requested && isApplicationActive
+    }
+
+    mutating func consume() -> Bool {
+        defer { isPending = false }
+        return isPending
+    }
+}
+
+enum BackgroundIndexingLaunchEligibility {
+    static func terminalResult(
+        isDeviceSupported: Bool,
+        authorizationStatus: PHAuthorizationStatus
+    ) -> BackgroundIndexingLaunchResult? {
+        guard isDeviceSupported else { return .terminalFailure }
+        switch authorizationStatus {
+        case .authorized, .limited:
+            return nil
+        default:
+            return .terminalFailure
+        }
+    }
+}
+
 @main
 struct MemorableApp: App {
+    @UIApplicationDelegateAdaptor(MemorableAppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
 
     var body: some Scene {
@@ -91,6 +120,8 @@ class AppState: ObservableObject {
     private var modelPrewarmTask: Task<PrewarmedModels, Error>?
     private var modelPrewarmGeneration: UInt64 = 0
     private var isApplicationActive = false
+    private var backgroundIndexingPreparationTask: Task<Void, Error>?
+    private var foregroundOnboardingIndexIntent = ForegroundOnboardingIndexIntent()
     private let requestPhotoAuthorization: () async -> PHAuthorizationStatus
     private let currentPhotoAuthorization: () -> PHAuthorizationStatus
     private let deviceSupportProvider: () -> Bool
@@ -126,6 +157,15 @@ class AppState: ObservableObject {
         semanticRuntime.setPromotionHandler { [weak self] in
             self?.currentWarmupPriority = .userInitiatedSearch
         }
+        BackgroundIndexingController.shared.configure(
+            resume: { [weak self] in
+                guard let self else { return .terminalFailure }
+                return await self.resumeInitialIndexingForSystemTask()
+            },
+            expire: { [weak self] in
+                self?.indexingService?.handleScheduledBackgroundTaskExpiration()
+            }
+        )
     }
 
     func initialize() async {
@@ -149,9 +189,55 @@ class AppState: ObservableObject {
     func setApplicationActive(_ isActive: Bool) {
         isApplicationActive = isActive
         indexingService?.setApplicationActive(isActive)
+        if ForegroundSemanticWarmupPolicy.shouldStart(
+            isApplicationActive: isActive,
+            isShellReady: readiness.isShellReady,
+            isSemanticSearchReady: semanticRuntime.readiness.isSemanticSearchReady
+        ) {
+            semanticRuntime.startPostPaintWarmup()
+        }
     }
 
-    private func initialize(knownAuthorizationStatus: PHAuthorizationStatus?) async {
+    func recordOnboardingIndexRequest(_ requested: Bool, isForeground: Bool) {
+        foregroundOnboardingIndexIntent.record(
+            requested: requested,
+            isApplicationActive: isForeground
+        )
+    }
+
+    private func resumeInitialIndexingForSystemTask() async -> BackgroundIndexingLaunchResult {
+        let status = currentPhotoAuthorization()
+        if let terminalResult = BackgroundIndexingLaunchEligibility.terminalResult(
+            isDeviceSupported: isDeviceSupported,
+            authorizationStatus: status
+        ) {
+            return terminalResult
+        }
+
+        if !readiness.isShellReady {
+            await initialize(
+                knownAuthorizationStatus: status,
+                startsSemanticWarmup: false
+            )
+        }
+        guard readiness.isShellReady else { return .retryableFailure }
+
+        do {
+            try await prepareIndexingStackForBackground()
+        } catch is CancellationError {
+            return .retryableFailure
+        } catch {
+            logger.error("Background indexing preparation failed: \(error.safeDiagnosticCode)")
+            return .retryableFailure
+        }
+        guard let indexingService else { return .retryableFailure }
+        return await indexingService.resumeInitialIndexingForSystemTask()
+    }
+
+    private func initialize(
+        knownAuthorizationStatus: PHAuthorizationStatus?,
+        startsSemanticWarmup: Bool = true
+    ) async {
         guard !isInitializing && !readiness.isShellReady else { return }
         isDeviceSupported = deviceSupportProvider()
         guard isDeviceSupported else { return }
@@ -191,13 +277,16 @@ class AppState: ObservableObject {
         #if DEBUG || STARTUP_METRICS
         PerformanceMetrics.shared.end(PerformancePhase.launchToShell)
         #endif
-        semanticRuntime.startPostPaintWarmup()
+        if startsSemanticWarmup {
+            semanticRuntime.startPostPaintWarmup()
+        }
     }
 
     func handleMemoryWarning() {
         VideoPlaybackCoordinator.shared.cancelForMemoryPressure()
         PhotoLibrary.clearAssetCache()
         semanticRuntime.cancelWarmupForMemoryPressure()
+        backgroundIndexingPreparationTask?.cancel()
         cancelModelPrewarm()
         captionPreparationTask?.cancel()
         captionPreparationTask = nil
@@ -279,7 +368,11 @@ class AppState: ObservableObject {
 
     private func warmCoreSearch(priority: SemanticWarmupPriority) async throws {
         try Task.checkCancellation()
-        guard !isCoreWarmupRunning else { return }
+        try await waitForBackgroundIndexingPreparationCleanup()
+        while isCoreWarmupRunning {
+            try Task.checkCancellation()
+            await Task.yield()
+        }
         isCoreWarmupRunning = true
         currentWarmupPriority = priority
         defer { isCoreWarmupRunning = false }
@@ -296,6 +389,12 @@ class AppState: ObservableObject {
             if let existingSearch = searchEngine, let existingIndexing = indexingService {
                 search = existingSearch
                 indexing = existingIndexing
+                if textEncoder == nil {
+                    let encoder = try await TextEncoder()
+                    try Task.checkCancellation()
+                    textEncoder = encoder
+                    search.installTextEncoder(encoder)
+                }
                 Self.resumeExistingSearchForWarmup(search)
                 semanticRuntime.markSemanticModelReady()
             } else {
@@ -413,10 +512,110 @@ class AppState: ObservableObject {
             throw CancellationError()
         } catch {
             logger.error("Model loading failed: \(error.safeDiagnosticCode)")
-            semanticRuntime.markFailure(error.localizedDescription)
-            errorMessage = error.localizedDescription
+            let message = UserFacingErrorMessage.message(
+                for: error,
+                fallback: "Search couldn't be prepared. Close and reopen Memorable, then try again."
+            )
+            semanticRuntime.markFailure(message)
+            errorMessage = message
             throw error
         }
+    }
+
+    /// Restores only the components required to persist more embeddings. A
+    /// scheduler launch must not hydrate the resident search index, tokenizer,
+    /// text model, captions, or launch maintenance while the app is backgrounded.
+    private func prepareIndexingStackForBackground() async throws {
+        if indexingService != nil { return }
+        if let backgroundIndexingPreparationTask {
+            try await backgroundIndexingPreparationTask.value
+            return
+        }
+        guard !isCoreWarmupRunning else { throw CancellationError() }
+        let preparationTask = Task { @MainActor [weak self] in
+            guard let self else { throw CancellationError() }
+            try await performBackgroundIndexingPreparation()
+        }
+        backgroundIndexingPreparationTask = preparationTask
+
+        do {
+            try await withTaskCancellationHandler {
+                try await preparationTask.value
+            } onCancel: {
+                preparationTask.cancel()
+            }
+            backgroundIndexingPreparationTask = nil
+            restartForegroundWarmupAfterBackgroundPreparationIfNeeded()
+        } catch {
+            backgroundIndexingPreparationTask = nil
+            preparationTask.cancel()
+            throw error
+        }
+    }
+
+    /// A cancelled background preparation still owns `isCoreWarmupRunning`
+    /// until its defer executes. Keep its task handle published until that
+    /// owner clears it, so a foreground warmup cannot start against half-torn
+    /// down state after memory pressure.
+    private func waitForBackgroundIndexingPreparationCleanup() async throws {
+        while let preparationTask = backgroundIndexingPreparationTask {
+            do {
+                try await preparationTask.value
+                try Task.checkCancellation()
+                // The owning call clears a successfully finished task after
+                // its await resumes. Yield so it can publish that cleanup.
+                await Task.yield()
+            } catch is CancellationError {
+                try Task.checkCancellation()
+                // The preparation owner clears the handle after its defer
+                // unwinds. Yield rather than spinning or treating a cancelled
+                // setup as a real preparation failure.
+                await Task.yield()
+            }
+        }
+    }
+
+    private func performBackgroundIndexingPreparation() async throws {
+        isCoreWarmupRunning = true
+        defer { isCoreWarmupRunning = false }
+
+        async let databaseTask = CancellableDetachedOperation.run(priority: .utility) {
+            AppDatabase.shared as any DatabaseProtocol
+        }
+        let encoder: ImageEncoder
+        if let imageEncoder {
+            encoder = imageEncoder
+        } else {
+            encoder = try await ImageEncoder()
+        }
+        let database = try await databaseTask
+        try Task.checkCancellation()
+
+        let search = SearchEngine(database: database)
+        let indexing = IndexingService(
+            imageEncoder: encoder,
+            searchEngine: search,
+            database: database
+        )
+        imageEncoder = encoder
+        searchEngine = search
+        indexingService = indexing
+        wireIndexingCallbacks(indexing)
+        indexing.setApplicationActive(isApplicationActive)
+        ProManager.shared.onFreeTierReconciliationNeeded = { [weak indexing] in
+            await indexing?.reconcileFreeTier()
+        }
+        await ProManager.shared.verifyEntitlement()
+        try Task.checkCancellation()
+    }
+
+    private func restartForegroundWarmupAfterBackgroundPreparationIfNeeded() {
+        guard ForegroundSemanticWarmupPolicy.shouldStart(
+            isApplicationActive: isApplicationActive,
+            isShellReady: readiness.isShellReady,
+            isSemanticSearchReady: semanticRuntime.readiness.isSemanticSearchReady
+        ) else { return }
+        semanticRuntime.startPostPaintWarmup()
     }
 
     static func resumeExistingSearchForWarmup(_ searchEngine: SearchEngine) {
@@ -463,8 +662,9 @@ class AppState: ObservableObject {
         }
         guard UserDefaults.standard.bool(forKey: AppKeys.startIndexAfterOnboarding) else { return }
         UserDefaults.standard.set(false, forKey: AppKeys.startIndexAfterOnboarding)
+        let isUserInitiated = foregroundOnboardingIndexIntent.consume()
         guard !indexing.isReady && !indexing.progress.isRunning else { return }
-        indexing.startIndexing()
+        indexing.startInitialIndexingFromOnboarding(isUserInitiated: isUserInitiated)
     }
 
     nonisolated static func mayConsumePendingOnboardingRequest(isCancelled: Bool) -> Bool {

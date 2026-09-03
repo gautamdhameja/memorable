@@ -278,18 +278,18 @@ final class SearchEngine: Sendable {
     private let injectedPhotoSimilaritySearch: SimilaritySearching?
     private let injectedVideoSimilaritySearch: SimilaritySearching?
 
-    private let textEncoder: TextEmbeddingEncoding
+    private let textEncoder: OSAllocatedUnfairLock<(any TextEmbeddingEncoding)?>
     private let database: DatabaseProtocol
     private let locationGazetteer: OfflineLocationGazetteer
     init(
-        textEncoder: TextEmbeddingEncoding,
+        textEncoder: TextEmbeddingEncoding? = nil,
         database: DatabaseProtocol = AppDatabase.shared,
         photoSimilaritySearch: SimilaritySearching? = nil,
         videoSimilaritySearch: SimilaritySearching? = nil,
         residentMediaLimit: Int = SearchIndexLimits.residentMediaItems,
         locationGazetteer: OfflineLocationGazetteer = .shared
     ) {
-        self.textEncoder = textEncoder
+        self.textEncoder = OSAllocatedUnfairLock(initialState: textEncoder)
         self.database = database
         self.locationGazetteer = locationGazetteer
         self.injectedPhotoSimilaritySearch = photoSimilaritySearch
@@ -304,6 +304,17 @@ final class SearchEngine: Sendable {
                 videoSimilaritySearch: videoSimilaritySearch
             )
         )
+    }
+
+    func installTextEncoder(_ encoder: TextEmbeddingEncoding) {
+        textEncoder.withLock { $0 = encoder }
+    }
+
+    private func currentTextEncoder() throws -> TextEmbeddingEncoding {
+        guard let encoder = textEncoder.withLock({ $0 }) else {
+            throw SearchEngineError.textEncoderUnavailable
+        }
+        return encoder
     }
 
     func loadIndex() throws {
@@ -570,7 +581,7 @@ final class SearchEngine: Sendable {
             texts.append(contentsOf: effectiveHints.negativeTerms)
             for text in texts where precomputedEmbeddings[text] == nil {
                 try checkSearchGeneration(memoryPressureGeneration)
-                let embedding = try await textEncoder.encodeCancellable(text: text)
+                let embedding = try await currentTextEncoder().encodeCancellable(text: text)
                 try checkSearchGeneration(memoryPressureGeneration)
                 guard embedding.count == embeddingDim else {
                     throw SearchEngineError.invalidEmbedding
@@ -1816,7 +1827,7 @@ final class SearchEngine: Sendable {
         if let precomputed = precomputedEmbeddings[text] {
             embedding = precomputed
         } else {
-            embedding = try textEncoder.encode(text: text)
+            embedding = try currentTextEncoder().encode(text: text)
         }
         guard embedding.count == embeddingDim else {
             throw SearchEngineError.invalidEmbedding

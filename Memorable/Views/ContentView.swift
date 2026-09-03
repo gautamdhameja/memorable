@@ -13,7 +13,7 @@ struct ContentView: View {
             if !onboardingComplete {
                 OnboardingView(
                     isComplete: $onboardingComplete,
-                    startIndexAfterCompletion: $startIndexAfterOnboarding
+                    startIndexAfterCompletion: onboardingIndexRequestBinding
                 )
             } else if appState.authorizationStatus == .denied || appState.authorizationStatus == .restricted {
                 photoAccessDeniedView
@@ -46,6 +46,9 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             if !onboardingComplete {
+                if newPhase != .active {
+                    appState.recordOnboardingIndexRequest(false, isForeground: false)
+                }
                 updateOnboardingModelPrewarm(for: newPhase)
                 return
             }
@@ -128,6 +131,19 @@ struct ContentView: View {
         if !appState.readiness.isShellReady && appState.errorMessage == nil {
             await appState.initialize()
         }
+    }
+
+    private var onboardingIndexRequestBinding: Binding<Bool> {
+        Binding(
+            get: { startIndexAfterOnboarding },
+            set: { requested in
+                startIndexAfterOnboarding = requested
+                appState.recordOnboardingIndexRequest(
+                    requested,
+                    isForeground: scenePhase == .active
+                )
+            }
+        )
     }
 
     private func updateOnboardingModelPrewarm(for phase: ScenePhase) {

@@ -371,7 +371,10 @@ final class SearchViewModel: ObservableObject {
         } catch {
             logger.error("[SearchViewModel #\(searchID)] Search failed: \(error.safeDiagnosticCode)")
             if activeSearchID == searchID {
-                searchError = "Search failed: \(error.localizedDescription)"
+                searchError = UserFacingErrorMessage.message(
+                    for: error,
+                    fallback: "Search couldn't be completed. Try again."
+                )
                 results = []
             }
         }

@@ -4,6 +4,62 @@ import Photos
 
 final class AppReadinessTests: XCTestCase {
 
+    func testForegroundOnboardingIndexIntentIsConsumedOnlyOnce() {
+        var intent = ForegroundOnboardingIndexIntent()
+
+        intent.record(requested: true, isApplicationActive: true)
+
+        XCTAssertTrue(intent.consume())
+        XCTAssertFalse(intent.consume())
+    }
+
+    func testOnboardingIndexIntentRejectsInactiveOrCancelledRequest() {
+        var intent = ForegroundOnboardingIndexIntent()
+
+        intent.record(requested: true, isApplicationActive: false)
+        XCTAssertFalse(intent.consume())
+
+        intent.record(requested: true, isApplicationActive: true)
+        intent.record(requested: false, isApplicationActive: true)
+        XCTAssertFalse(intent.consume())
+    }
+
+    func testBackgroundIndexingEligibilityTreatsDeviceAndAuthorizationAsTerminal() {
+        XCTAssertEqual(
+            BackgroundIndexingLaunchEligibility.terminalResult(
+                isDeviceSupported: false,
+                authorizationStatus: .authorized
+            ),
+            .terminalFailure
+        )
+        XCTAssertEqual(
+            BackgroundIndexingLaunchEligibility.terminalResult(
+                isDeviceSupported: true,
+                authorizationStatus: .denied
+            ),
+            .terminalFailure
+        )
+        XCTAssertEqual(
+            BackgroundIndexingLaunchEligibility.terminalResult(
+                isDeviceSupported: true,
+                authorizationStatus: .restricted
+            ),
+            .terminalFailure
+        )
+        XCTAssertNil(
+            BackgroundIndexingLaunchEligibility.terminalResult(
+                isDeviceSupported: true,
+                authorizationStatus: .authorized
+            )
+        )
+        XCTAssertNil(
+            BackgroundIndexingLaunchEligibility.terminalResult(
+                isDeviceSupported: true,
+                authorizationStatus: .limited
+            )
+        )
+    }
+
     func testOnboardingPrewarmStartsOnlyWhileFirstRunIsActive() {
         XCTAssertEqual(
             OnboardingModelPrewarmPolicy.action(

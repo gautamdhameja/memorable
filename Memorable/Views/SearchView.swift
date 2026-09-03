@@ -200,7 +200,8 @@ struct SearchView: View {
                             VStack(spacing: 0) {
                                 // Indexing banners
                                 if indexingService.progress.isRunning
-                                    || indexingService.isThermallyPaused {
+                                    || indexingService.isThermallyPaused
+                                    || indexingService.backgroundExecutionState == .pausedAwaitingForeground {
                                     IndexingBannerView(indexingService: indexingService)
                                         .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
                                         .padding(.bottom, Celestial.Spacing.stackedContainerGap)
@@ -448,6 +449,12 @@ struct SearchView: View {
         .frame(minHeight: 52)
         .modifier(GlassSearchBarModifier(cornerRadius: 13))
         .opacity(searchEngine.isIndexLoaded || !viewModel.queryText.isEmpty ? 1.0 : 0.85)
+        .disabled(!semanticRuntime.readiness.isSemanticSearchReady)
+        .accessibilityHint(
+            semanticRuntime.readiness.isSemanticSearchReady
+                ? ""
+                : searchPreparationStatusText
+        )
     }
 
     private var initialIndexingExperience: some View {
@@ -478,16 +485,16 @@ struct SearchView: View {
     }
 
     private var searchPlaceholder: String {
-        if indexingService.isReady {
-            return Self.placeholders[placeholderIndex]
+        guard semanticRuntime.readiness.isSemanticSearchReady else {
+            return Self.placeholders[0]
         }
+        return Self.placeholders[placeholderIndex]
+    }
+
+    private var searchPreparationStatusText: String {
         switch semanticRuntime.phase {
-        case .warmingCore(let promoted):
-            return promoted ? "Prioritizing search..." : "Warming search..."
-        case .waitingForIndex:
-            return "Index your photos to search..."
-        case .failed:
-            return "Search setup failed"
+        case .failed(let message):
+            return message
         default:
             return "Preparing search..."
         }
@@ -1075,7 +1082,7 @@ struct SearchView: View {
         VStack(spacing: 12) {
             ProgressView()
                 .tint(Celestial.Colors.primaryDim)
-            Text("Loading your library…")
+            Text(searchPreparationStatusText)
                 .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
         }

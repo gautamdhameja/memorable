@@ -10,6 +10,9 @@ private let hitFreeLimitKey = "indexing.hitFreeLimit"
 class IndexingService: ObservableObject {
     @Published var progress = IndexingProgress(total: 0, completed: 0, isRunning: false) {
         didSet {
+            if isInitialIndexingExperiencePending {
+                BackgroundIndexingController.shared.update(progress: progress)
+            }
             guard oldValue.isRunning, !progress.isRunning else { return }
             if photoChangeScanState.startPendingScanIfPossible(isIndexing: false) {
                 startPhotoChangeScan()
@@ -31,6 +34,7 @@ class IndexingService: ObservableObject {
     @Published private(set) var isDeletingDuplicatePhoto = false
     @Published private(set) var isInitialIndexingExperiencePending: Bool
     @Published private(set) var isInitialLibraryIndexingActive = false
+    @Published private(set) var backgroundExecutionState: IndexingBackgroundExecutionState = .foreground
     @Published var indexVersion: Int = 0 {
         didSet {
             #if DEBUG
@@ -95,6 +99,10 @@ class IndexingService: ObservableObject {
     private var scheduledSavedFolderSourceIDs: Set<String> = []
     private var thermalSafetyState = ThermalIndexingState()
     private var hasKnownExistingIndex = false
+    private var hasDeferredSearchIndexReload = false
+    private var deferredPostIndexingWorkflowID: UUID?
+    private var hasCompletedInitialIndexCheck = false
+    private var allowsLifecycleAutoResume = false
     private var hasCompletedInitialIndexingExperience: Bool
     private var thermalObserver: NotificationObservation?
     private struct ThermalResumeIntent {
@@ -133,7 +141,12 @@ class IndexingService: ObservableObject {
             },
             setProgress: { [weak self] in self?.progress = $0 },
             setHitFreeLimit: { [weak self] in self?.hitFreeLimit = $0 },
-            reloadSearchIndex: { [weak self] in await self?.reloadSearchIndex() == true }
+            shouldStartNextBatch: { [weak self] in
+                self?.canStartNextLibraryBatch() ?? false
+            },
+            reloadSearchIndex: { [weak self] in
+                await self?.reloadSearchIndexFromLibraryWorker() == true
+            }
         )
     )
 
@@ -167,12 +180,17 @@ class IndexingService: ObservableObject {
         self.searchEngine = searchEngine
         self.database = database
         self.initialIndexingDefaults = initialIndexingDefaults
-        self.isInitialIndexingExperiencePending = InitialIndexingExperienceStore.isPending(
+        let initialIndexingExperiencePending = InitialIndexingExperienceStore.isPending(
             in: initialIndexingDefaults
         )
+        self.isInitialIndexingExperiencePending = initialIndexingExperiencePending
         self.hasCompletedInitialIndexingExperience = InitialIndexingExperienceStore.isCompleted(
             in: initialIndexingDefaults
         )
+        if initialIndexingExperiencePending,
+           InitialIndexingInterruptionStore.wasInterrupted(in: initialIndexingDefaults) {
+            self.backgroundExecutionState = .pausedAwaitingForeground
+        }
         self.surpriseQueryCacheLoader = surpriseQueryCacheLoader
         self.searchIndexContentRevisionLoader = searchIndexContentRevisionLoader ?? {
             try database.searchIndexContentRevision()
@@ -225,13 +243,12 @@ class IndexingService: ObservableObject {
             didLoadIndex: loaded,
             isPending: isInitialIndexingExperiencePending
         ) {
-            startIndexing()
+            resumeIndexingAutomatically()
         }
         if scheduleAutoResume && loaded {
             enqueueLibraryIndexing(
                 isAutoResume: true,
-                delayAfterDependencies: IndexingConfig.postLaunchAutoResumeDelaySeconds,
-                enqueueLaunchEnrichment: true
+                delayAfterDependencies: IndexingConfig.postLaunchAutoResumeDelaySeconds
             )
         }
         if scheduleOrphanCleanup && loaded {
@@ -245,6 +262,9 @@ class IndexingService: ObservableObject {
                 delayAfterDependencies: IndexingConfig.postLaunchMaintenanceDelaySeconds
             )
         }
+        allowsLifecycleAutoResume = scheduleAutoResume
+        hasCompletedInitialIndexCheck = true
+        scheduleForegroundInitialIndexingResumeIfNeeded()
         #if DEBUG
         logger.info("[IndexingService] checkAndLoadExistingIndex finish loaded=\(loaded), isReady=\(self.isReady), indexLoaded=\(self.searchEngine.isIndexLoaded), totalSize=\(self.searchEngine.totalSize)")
         #endif
@@ -363,12 +383,27 @@ class IndexingService: ObservableObject {
     }
 
     func startIndexing() {
+        startIndexing(isUserInitiated: true)
+    }
+
+    /// Starts the persisted initial-indexing request after onboarding. The
+    /// caller supplies whether this invocation is the user's explicit action,
+    /// because continued-processing submission is allowed only for that case.
+    func startInitialIndexingFromOnboarding(isUserInitiated: Bool) {
+        startIndexing(isUserInitiated: isUserInitiated)
+    }
+
+    private func resumeIndexingAutomatically() {
+        startIndexing(isUserInitiated: false)
+    }
+
+    private func startIndexing(isUserInitiated: Bool) {
         let usesInitialExperience = shouldUseInitialIndexingExperience()
-        let resume: () -> Void = { [weak self] in self?.startIndexing() }
+        let resume: () -> Void = { [weak self] in self?.resumeIndexingAutomatically() }
         let intent = ThermalResumeIntent(id: UUID(), action: resume)
         guard canStartIndexing(resumeWhenCool: intent) else {
             if usesInitialExperience, isThermallyPaused, !progress.isRunning {
-                activateInitialIndexingExperience()
+                activateInitialIndexingExperience(isUserInitiated: false)
             }
             return
         }
@@ -376,7 +411,7 @@ class IndexingService: ObservableObject {
         cancelEnrichmentWork()
         guard markRunningIfIdle() else { return }
         if usesInitialExperience {
-            activateInitialIndexingExperience()
+            activateInitialIndexingExperience(isUserInitiated: isUserInitiated)
         }
         thermalResumeIntent = intent
         hideValidatedSearchSuggestions()
@@ -398,7 +433,13 @@ class IndexingService: ObservableObject {
     }
 
     func rebuildRequiredIndex() {
-        let resume: () -> Void = { [weak self] in self?.rebuildRequiredIndex() }
+        rebuildRequiredIndex(isUserInitiated: true)
+    }
+
+    private func rebuildRequiredIndex(isUserInitiated: Bool) {
+        let resume: () -> Void = { [weak self] in
+            self?.rebuildRequiredIndex(isUserInitiated: false)
+        }
         let intent = ThermalResumeIntent(id: UUID(), action: resume)
         guard canStartIndexing(resumeWhenCool: intent) else { return }
         searchEngine.resumeAfterMemoryPressure()
@@ -410,7 +451,7 @@ class IndexingService: ObservableObject {
         stopIndexing(preserveThermalResume: true)
         guard markRunningIfIdle() else { return }
         if isInitialIndexingExperiencePending {
-            activateInitialIndexingExperience()
+            activateInitialIndexingExperience(isUserInitiated: isUserInitiated)
         }
         thermalResumeIntent = intent
         hideValidatedSearchSuggestions()
@@ -419,9 +460,11 @@ class IndexingService: ObservableObject {
     }
 
     func stopIndexing() {
+        let stoppedInitialIndexing = isInitialLibraryIndexingActive
+            || isInitialIndexingExperiencePending
         stopIndexing(preserveThermalResume: false)
-        if isInitialLibraryIndexingActive || isInitialIndexingExperiencePending {
-            completeInitialIndexingExperience()
+        if stoppedInitialIndexing {
+            completeInitialIndexingExperience(systemTaskSuccess: false)
         }
     }
 
@@ -429,6 +472,9 @@ class IndexingService: ObservableObject {
         jobQueue.cancelAll()
         cancelGeocodingRetry()
         scheduledSavedFolderSourceIDs.removeAll()
+        if !preserveThermalResume {
+            deferredPostIndexingWorkflowID = nil
+        }
         librarySession = nil
         if preserveThermalResume {
             markGeocodingWaitingToResume()
@@ -489,6 +535,11 @@ class IndexingService: ObservableObject {
         isApplicationActive = isActive
 
         if !isActive {
+            if isInitialIndexingExperiencePending {
+                if progress.isRunning || hasLibraryIndexingWork {
+                    backgroundExecutionState = .continuingInBackground
+                }
+            }
             cancelGeocodingRetry()
             if jobQueue.contains(.geocodeMedia) {
                 jobQueue.cancel(.geocodeMedia)
@@ -498,9 +549,45 @@ class IndexingService: ObservableObject {
         }
 
         scheduleGeocodingResumeCheck()
+        Task { @MainActor [weak self] in
+            await self?.enqueueDeferredPostIndexingWorkIfNeeded()
+        }
+        if hasDeferredSearchIndexReload {
+            hasDeferredSearchIndexReload = false
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !(await reloadSearchIndex()) {
+                    hasDeferredSearchIndexReload = true
+                }
+            }
+        }
+        scheduleForegroundInitialIndexingResumeIfNeeded()
+    }
+
+    func resumeInitialIndexingForSystemTask() async -> BackgroundIndexingLaunchResult {
+        guard isInitialIndexingExperiencePending else { return .completed }
+        if progress.isRunning || hasLibraryIndexingWork {
+            return .running
+        }
+
+        resumeIndexingAutomatically()
+        return progress.isRunning || hasLibraryIndexingWork ? .running : .retryableFailure
+    }
+
+    func handleScheduledBackgroundTaskExpiration() {
+        guard ScheduledInitialIndexingExpirationPolicy.shouldInterrupt(
+            isApplicationActive: isApplicationActive,
+            isInitialIndexingPending: isInitialIndexingExperiencePending
+        ) else { return }
+        interruptInitialIndexingForSystemExpiration(notifyController: false)
     }
 
     func cancelAllWorkForMemoryPressure() {
+        let interruptedInitialIndexing = isInitialIndexingExperiencePending
+        if interruptedInitialIndexing {
+            InitialIndexingInterruptionStore.markInterrupted(in: initialIndexingDefaults)
+            backgroundExecutionState = .pausedAwaitingForeground
+        }
         jobQueue.cancelAll()
         cancelGeocodingRetry()
         hideValidatedSearchSuggestions()
@@ -523,6 +610,9 @@ class IndexingService: ObservableObject {
         stopObservingThermalChanges()
         isReady = false
         endBackgroundTask()
+        if interruptedInitialIndexing {
+            BackgroundIndexingController.shared.initialIndexingWasInterrupted()
+        }
         searchEngine.suspendForMemoryPressure()
         onIndexUnavailable?()
     }
@@ -690,7 +780,7 @@ class IndexingService: ObservableObject {
             if thermalResumeIntent == nil {
                 thermalResumeIntent = ThermalResumeIntent(
                     id: UUID(),
-                    action: { [weak self] in self?.startIndexing() }
+                    action: { [weak self] in self?.resumeIndexingAutomatically() }
                 )
             }
             return
@@ -699,10 +789,7 @@ class IndexingService: ObservableObject {
               !searchEngine.isMemoryPressureSuspended else { return }
 
         if suspendedWork.libraryIndexing {
-            enqueueLibraryIndexing(
-                isAutoResume: true,
-                enqueueLaunchEnrichment: true
-            )
+            enqueueLibraryIndexing(isAutoResume: true)
         } else if suspendedWork.enrichment {
             enqueueEnrichment(workflowID: UUID())
         }
@@ -958,6 +1045,60 @@ class IndexingService: ObservableObject {
 
     // MARK: - Private
 
+    private var hasLibraryIndexingWork: Bool {
+        jobQueue.contains(.indexPhotos) || jobQueue.contains(.indexVideos)
+    }
+
+    private func reloadSearchIndexFromLibraryWorker() async -> Bool {
+        guard isApplicationActive else {
+            hasDeferredSearchIndexReload = true
+            return false
+        }
+        return await reloadSearchIndex()
+    }
+
+    private func scheduleForegroundInitialIndexingResumeIfNeeded() {
+        guard InitialIndexingForegroundResumePolicy.shouldSchedule(
+                isApplicationActive: isApplicationActive,
+                hasCompletedInitialIndexCheck: hasCompletedInitialIndexCheck,
+                allowsAutoResume: allowsLifecycleAutoResume,
+                isPending: isInitialIndexingExperiencePending,
+                progressIsRunning: progress.isRunning,
+                hasLibraryWork: hasLibraryIndexingWork
+              ) else {
+            if isApplicationActive,
+               isInitialIndexingExperiencePending,
+               progress.isRunning || hasLibraryIndexingWork {
+                backgroundExecutionState = .foreground
+            }
+            return
+        }
+
+        resumeIndexingAutomatically()
+        if progress.isRunning || hasLibraryIndexingWork {
+            backgroundExecutionState = .foreground
+        }
+    }
+
+    private func canStartNextLibraryBatch() -> Bool {
+        guard isInitialIndexingExperiencePending else { return true }
+        return IndexingBackgroundTimePolicy.canStartNextBatch(
+            isApplicationActive: isApplicationActive,
+            hasScheduledTaskAssertion: BackgroundIndexingController.shared.hasActiveSystemTask,
+            backgroundTimeRemaining: UIApplication.shared.backgroundTimeRemaining
+        )
+    }
+
+    private func interruptInitialIndexingForSystemExpiration(notifyController: Bool = true) {
+        guard isInitialIndexingExperiencePending else { return }
+        InitialIndexingInterruptionStore.markInterrupted(in: initialIndexingDefaults)
+        backgroundExecutionState = .pausedAwaitingForeground
+        stopIndexing(preserveThermalResume: false)
+        if notifyController {
+            BackgroundIndexingController.shared.initialIndexingWasInterrupted()
+        }
+    }
+
     private func markRunningIfIdle() -> Bool {
         guard !progress.isRunning else { return false }
         progress.isRunning = true
@@ -973,25 +1114,39 @@ class IndexingService: ObservableObject {
         )
     }
 
-    private func activateInitialIndexingExperience() {
+    private func activateInitialIndexingExperience(isUserInitiated: Bool) {
         isInitialLibraryIndexingActive = true
-        guard !isInitialIndexingExperiencePending else { return }
-        isInitialIndexingExperiencePending = true
-        InitialIndexingExperienceStore.begin(in: initialIndexingDefaults)
+        backgroundExecutionState = isApplicationActive ? .foreground : .continuingInBackground
+        if !isInitialIndexingExperiencePending {
+            isInitialIndexingExperiencePending = true
+            InitialIndexingExperienceStore.begin(in: initialIndexingDefaults)
+        }
+        InitialIndexingInterruptionStore.clear(in: initialIndexingDefaults)
+        BackgroundIndexingController.shared.initialIndexingDidStart(
+            isApplicationActive: isApplicationActive,
+            isUserInitiated: isUserInitiated
+        )
     }
 
-    private func completeInitialIndexingExperience() {
+    private func completeInitialIndexingExperience(systemTaskSuccess: Bool = true) {
         isInitialLibraryIndexingActive = false
-        persistInitialIndexingExperienceCompletion()
+        persistInitialIndexingExperienceCompletion(systemTaskSuccess: systemTaskSuccess)
     }
 
-    private func persistInitialIndexingExperienceCompletion() {
+    private func persistInitialIndexingExperienceCompletion(systemTaskSuccess: Bool = true) {
         guard isInitialIndexingExperiencePending || !hasCompletedInitialIndexingExperience else {
             return
         }
         isInitialIndexingExperiencePending = false
         hasCompletedInitialIndexingExperience = true
+        backgroundExecutionState = .foreground
         InitialIndexingExperienceStore.complete(in: initialIndexingDefaults)
+        InitialIndexingInterruptionStore.clear(in: initialIndexingDefaults)
+        if systemTaskSuccess {
+            BackgroundIndexingController.shared.initialIndexingDidComplete()
+        } else {
+            BackgroundIndexingController.shared.initialIndexingWasStopped()
+        }
     }
 
     private func dismissInterruptedInitialPresentationIfNeeded() {
@@ -1043,7 +1198,11 @@ class IndexingService: ObservableObject {
         let transition = ThermalSafetyPolicy.transition(
             from: thermalSafetyState,
             thermalState: thermalState,
-            hasActiveWork: !jobQueue.isIdle || progress.isRunning
+            hasActiveWork: ThermalWorkActivityPolicy.hasActiveWork(
+                isJobQueueIdle: jobQueue.isIdle,
+                isProgressRunning: progress.isRunning,
+                hasDeferredPostIndexingWorkflow: deferredPostIndexingWorkflowID != nil
+            )
         )
         thermalSafetyState = transition.state
         isThermallyPaused = transition.state.isPaused
@@ -1055,12 +1214,14 @@ class IndexingService: ObservableObject {
             if thermalResumeIntent == nil {
                 thermalResumeIntent = ThermalResumeIntent(
                     id: UUID(),
-                    action: { [weak self] in self?.startIndexing() }
+                    action: { [weak self] in self?.resumeIndexingAutomatically() }
                 )
             }
             stopIndexing(preserveThermalResume: true)
         case .restartWork:
-            let resume = thermalResumeIntent?.action ?? { [weak self] in self?.startIndexing() }
+            let resume = thermalResumeIntent?.action ?? {
+                [weak self] in self?.resumeIndexingAutomatically()
+            }
             thermalResumeIntent = nil
             resume()
         }
@@ -1202,7 +1363,6 @@ class IndexingService: ObservableObject {
         autoResumeLibraryCount: Int? = nil,
         isAutoResume: Bool = false,
         delayAfterDependencies: TimeInterval = 0,
-        enqueueLaunchEnrichment: Bool = false,
         resumeIntentID: UUID? = nil
     ) {
         guard canStartIndexing() else { return }
@@ -1220,16 +1380,17 @@ class IndexingService: ObservableObject {
                     guard self.isInitialIndexingExperiencePending else { return .completed }
                     self.cancelEnrichmentWork()
                     guard self.markRunningIfIdle() else { return .cancelled }
-                    self.activateInitialIndexingExperience()
+                    self.activateInitialIndexingExperience(isUserInitiated: false)
                 case .complete:
-                    self.completeInitialIndexingExperience()
-                    self.enqueueGeocoding(workflowID: workflowID)
+                    await self.completeBaseIndexingAndSchedulePostIndexingWork(
+                        workflowID: workflowID
+                    )
                     return .completed
                 case .resume:
                     self.cancelEnrichmentWork()
                     guard self.markRunningIfIdle() else { return .cancelled }
                     if self.isInitialIndexingExperiencePending {
-                        self.activateInitialIndexingExperience()
+                        self.activateInitialIndexingExperience(isUserInitiated: false)
                     }
                     self.newPhotosAvailable = false
                 }
@@ -1260,6 +1421,11 @@ class IndexingService: ObservableObject {
 
             self.beginBackgroundTask()
             self.librarySession = await self.libraryWorker.indexPhotos()
+            if self.librarySession?.wasInterrupted == true {
+                self.librarySession = nil
+                self.interruptInitialIndexingForSystemExpiration()
+                return .cancelled
+            }
             if Task.isCancelled {
                 self.librarySession = nil
                 self.endBackgroundTask()
@@ -1287,6 +1453,10 @@ class IndexingService: ObservableObject {
                 self.endBackgroundTask()
             }
             await self.libraryWorker.indexVideos(session: session)
+            if session.wasInterrupted {
+                self.interruptInitialIndexingForSystemExpiration()
+                return .cancelled
+            }
             guard !Task.isCancelled else {
                 self.progress.isRunning = false
                 self.dismissInterruptedInitialPresentationIfNeeded()
@@ -1311,19 +1481,9 @@ class IndexingService: ObservableObject {
                     logger.error("Failed to complete empty index rebuild: \(error.safeDiagnosticCode)")
                 }
             }
-            self.persistInitialIndexingExperienceCompletion()
-            self.enqueuePostIndexingJobs(workflowID: workflowID)
-            await self.enqueueSavedFolderReindexingIfNeeded()
+            await self.completeBaseIndexingAndSchedulePostIndexingWork(workflowID: workflowID)
             return .completed
         })
-
-        if enqueueLaunchEnrichment {
-            enqueueEnrichment(
-                workflowID: workflowID,
-                dependencies: [.indexPhotos],
-                delayAfterDependencies: IndexingConfig.surpriseValidationDelaySeconds
-            )
-        }
     }
 
     static func shouldCompleteEmptyRequiredRebuild(
@@ -1333,15 +1493,103 @@ class IndexingService: ObservableObject {
         rebuildRequired && !hasMediaCandidates
     }
 
-    private func enqueuePostIndexingJobs(workflowID: UUID) {
+    private func enqueuePostIndexingJobs(
+        workflowID: UUID,
+        dependencies: Set<IndexingJobKind>
+    ) {
         jobQueue.cancel(.enrichPhotos)
-        enqueueEnrichment(workflowID: workflowID, dependencies: [.indexVideos])
+        enqueueEnrichment(workflowID: workflowID, dependencies: dependencies)
         enqueueSurpriseQueryValidation(
             workflowID: workflowID,
-            dependencies: [.indexVideos],
+            dependencies: dependencies,
             delayAfterDependencies: IndexingConfig.surpriseValidationDelaySeconds
         )
-        enqueueGeocoding(workflowID: workflowID, dependencies: [.indexVideos])
+        enqueueGeocoding(workflowID: workflowID, dependencies: dependencies)
+    }
+
+    private func deferPostIndexingWork(workflowID: UUID) {
+        // No maintenance may survive the base pass while inactive. In
+        // particular, this removes the launch-time enrichment job that was
+        // queued behind photos before the base run reached this decision.
+        jobQueue.cancel(.enrichPhotos)
+        if deferredPostIndexingWorkflowID == nil {
+            deferredPostIndexingWorkflowID = workflowID
+        }
+    }
+
+    private func completeBaseIndexingAndSchedulePostIndexingWork(
+        workflowID: UUID
+    ) async {
+        let defersPostIndexingWork = PostIndexingContinuationPolicy.shouldDeferUntilForeground(
+            isApplicationActive: isApplicationActive
+        )
+        if defersPostIndexingWork {
+            // Record the continuation before completing a scheduled task: its
+            // completion may let iOS suspend the process immediately.
+            deferPostIndexingWork(workflowID: workflowID)
+        }
+        persistInitialIndexingExperienceCompletion()
+        if !defersPostIndexingWork {
+            await enqueuePostIndexingWork(workflowID: workflowID)
+        }
+    }
+
+    private func enqueuePostIndexingWork(workflowID: UUID) async {
+        // Folder work is user initiated and preempts enrichment. Queue it
+        // first, then enqueue maintenance so cancellation cannot leave the
+        // base run without another enrichment pass.
+        await enqueueSavedFolderReindexingIfNeeded()
+        guard canScheduleAutomaticMaintenance() else {
+            preservePostIndexingDeferralIfBackgrounded(workflowID: workflowID)
+            return
+        }
+        // A thermal interruption can leave an earlier deferred workflow
+        // behind. This successful continuation supersedes it.
+        deferredPostIndexingWorkflowID = nil
+        enqueuePostIndexingJobs(
+            workflowID: workflowID,
+            dependencies: PostIndexingContinuationPolicy.dependencies(
+                isDeferredUntilAfterBaseCompletion: false
+            )
+        )
+    }
+
+    private func enqueueDeferredPostIndexingWorkIfNeeded() async {
+        guard let workflowID = deferredPostIndexingWorkflowID,
+              canScheduleAutomaticMaintenance() else { return }
+        // Discover and queue saved folders before maintenance. Folder jobs are
+        // user initiated and therefore preempt enrichment by design.
+        await enqueueSavedFolderReindexingIfNeeded()
+        guard canScheduleAutomaticMaintenance(),
+              deferredPostIndexingWorkflowID == workflowID else { return }
+        // Do not clear the marker until every await and eligibility check has
+        // passed. Thermal cancellation then retains a recoverable workflow.
+        deferredPostIndexingWorkflowID = nil
+        enqueuePostIndexingJobs(
+            workflowID: workflowID,
+            dependencies: PostIndexingContinuationPolicy.dependencies(
+                isDeferredUntilAfterBaseCompletion: true
+            )
+        )
+    }
+
+    private func canScheduleAutomaticMaintenance() -> Bool {
+        AutomaticMaintenanceEligibilityPolicy.canSchedule(
+            isApplicationActive: isApplicationActive,
+            allowsIndexingWrites: database.allowsIndexingWrites,
+            isMemoryPressureSuspended: searchEngine.isMemoryPressureSuspended,
+            isThermallySafe: !ThermalSafetyPolicy.shouldPause(
+                for: ProcessInfo.processInfo.thermalState
+            ),
+            isTaskCancelled: Task.isCancelled
+        )
+    }
+
+    private func preservePostIndexingDeferralIfBackgrounded(workflowID: UUID) {
+        guard PostIndexingContinuationPolicy.shouldDeferUntilForeground(
+            isApplicationActive: isApplicationActive
+        ), !Task.isCancelled else { return }
+        deferPostIndexingWork(workflowID: workflowID)
     }
 
     private func enqueueSurpriseQueryValidation(
@@ -1399,10 +1647,7 @@ class IndexingService: ObservableObject {
 
     private func enqueueSavedFolderReindexingIfNeeded() async {
         guard ProManager.shared.isPro,
-              database.allowsIndexingWrites,
-              !searchEngine.isMemoryPressureSuspended,
-              !ThermalSafetyPolicy.shouldPause(for: ProcessInfo.processInfo.thermalState),
-              !Task.isCancelled else { return }
+              canScheduleAutomaticMaintenance() else { return }
 
         let sources: [PhotoSource]
         do {
@@ -1416,6 +1661,8 @@ class IndexingService: ObservableObject {
             logger.error("Failed to load saved folders for re-indexing: \(error.safeDiagnosticCode)")
             return
         }
+
+        guard canScheduleAutomaticMaintenance() else { return }
 
         let candidates = SavedFolderReindexPolicy.sourcesToReindex(
             from: sources,
@@ -1497,13 +1744,11 @@ class IndexingService: ObservableObject {
     }
 
     private func resumeIndexingAfterProUnlock() async {
-        let hasLibraryIndexingWork = jobQueue.contains(.indexPhotos)
-            || jobQueue.contains(.indexVideos)
         if ProUnlockIndexingRecoveryPolicy.shouldStartLibraryIndexing(
             isMemoryPressureSuspended: searchEngine.isMemoryPressureSuspended,
             hasLibraryIndexingWork: hasLibraryIndexingWork
         ) {
-            startIndexing()
+            resumeIndexingAutomatically()
         }
         await enqueueSavedFolderReindexingIfNeeded()
     }
@@ -1883,10 +2128,24 @@ class IndexingService: ObservableObject {
     }
 
     func handleBackgroundTaskExpiration() {
-        #if DEBUG
-        logger.warning("[IndexingService] Background time expired; cancelling active indexing workflow")
-        #endif
-        stopIndexing(preserveThermalResume: false)
+        if BackgroundIndexingController.shared.hasActiveSystemTask {
+            #if DEBUG
+            logger.info("[IndexingService] UIKit background time expired; scheduled task continues indexing")
+            #endif
+            // The longer-lived BackgroundTasks assertion now owns execution.
+            // End only UIKit's finite transition allowance.
+            endBackgroundTask()
+        } else if isInitialIndexingExperiencePending {
+            #if DEBUG
+            logger.warning("[IndexingService] Background time expired; checkpointing initial indexing")
+            #endif
+            interruptInitialIndexingForSystemExpiration()
+        } else {
+            #if DEBUG
+            logger.warning("[IndexingService] Background time expired; cancelling active indexing workflow")
+            #endif
+            stopIndexing(preserveThermalResume: false)
+        }
     }
 
     private func endBackgroundTask() {

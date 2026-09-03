@@ -109,6 +109,8 @@ private final class SmartQueryCircuitBreaker: Sendable {
 }
 
 @available(iOS 26.0, *)
+/// Private control-flow error consumed by `parse`. It is converted to a local
+/// fallback or a diagnostic code and never crosses a user-presentation boundary.
 private enum SmartQueryResponseError: Error, Sendable {
     case cancelled
     case responder(String)

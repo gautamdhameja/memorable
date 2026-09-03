@@ -349,7 +349,10 @@ class ProManager: ObservableObject {
             }
         } catch {
             logger.error("Purchase failed: \(error.safeDiagnosticCode)")
-            purchaseError = "Purchase failed: \(error.localizedDescription)"
+            purchaseError = UserFacingErrorMessage.message(
+                for: error,
+                fallback: "The purchase couldn't be completed. Try again."
+            )
         }
     }
 
@@ -366,7 +369,10 @@ class ProManager: ObservableObject {
             try await AppStore.sync()
         } catch {
             logger.error("Restore failed: \(error.safeDiagnosticCode)")
-            purchaseError = "Restore failed: \(error.localizedDescription)"
+            purchaseError = UserFacingErrorMessage.message(
+                for: error,
+                fallback: "Purchases couldn't be restored. Try again."
+            )
             return
         }
 
@@ -574,7 +580,11 @@ class ProManager: ObservableObject {
         }
     }
 
-    enum PurchaseError: Error {
+    enum PurchaseError: LocalizedError {
         case unverified
+
+        var errorDescription: String? {
+            "Memorable could not verify this purchase. Try again or use Restore Purchases."
+        }
     }
 }

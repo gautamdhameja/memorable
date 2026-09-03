@@ -85,10 +85,6 @@ enum FolderScanOperation {
     }
 }
 
-private enum FolderSourceRegistrationError: Error {
-    case bookmarkPersistenceFailed
-}
-
 enum FolderIndexingOutcome: Equatable {
     case completed
     case completedWithWarnings
@@ -248,7 +244,10 @@ final class FolderIndexingWorker {
                     }
                 )
             } catch let error as PhotoSourceRegistrationError {
-                callbacks.reportError(error.localizedDescription)
+                callbacks.reportError(UserFacingErrorMessage.message(
+                    for: error,
+                    fallback: "The folder couldn't be added. Check access and try again."
+                ))
                 logger.error("Failed to create source: \(error.safeDiagnosticCode)")
                 return .failed
             } catch {

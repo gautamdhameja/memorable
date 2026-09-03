@@ -7,6 +7,14 @@ struct IndexingBannerView: View {
         if indexingService.isThermallyPaused {
             return "Paused while this iPhone cools"
         }
+        switch indexingService.backgroundExecutionState {
+        case .continuingInBackground:
+            return "Continuing in background"
+        case .pausedAwaitingForeground:
+            return "Indexing paused by iOS"
+        case .foreground:
+            break
+        }
         switch indexingService.progress.phase {
         case .photos: return "Building photo search"
         case .videos: return "Adding your videos"
@@ -18,6 +26,12 @@ struct IndexingBannerView: View {
     private var detail: String {
         if indexingService.isThermallyPaused {
             return "Indexing resumes automatically when the temperature returns to normal."
+        }
+        if indexingService.backgroundExecutionState == .pausedAwaitingForeground {
+            return "Your progress is saved. Indexing resumes automatically when Memorable is active."
+        }
+        if indexingService.backgroundExecutionState == .continuingInBackground {
+            return "You can return later. iOS may pause this work when background time runs out."
         }
 
         let progress = indexingService.progress
@@ -52,7 +66,7 @@ struct IndexingBannerView: View {
                 value: indexingService.progress.percentage,
                 total: 100
             )
-            .tint(indexingService.isThermallyPaused ? Celestial.Colors.amber : Celestial.Colors.primaryDim)
+            .tint(isPaused ? Celestial.Colors.amber : Celestial.Colors.primaryDim)
 
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(detail)
@@ -62,7 +76,7 @@ struct IndexingBannerView: View {
 
                 Spacer(minLength: 4)
 
-                Button(indexingService.isThermallyPaused ? "Cancel" : "Stop") {
+                Button(isPaused ? "Cancel" : "Stop") {
                     indexingService.stopIndexing()
                 }
                 .font(Celestial.Typography.captionStrong)
@@ -70,7 +84,7 @@ struct IndexingBannerView: View {
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
                 .accessibilityLabel(
-                    indexingService.isThermallyPaused
+                    isPaused
                         ? "Cancel automatic indexing resume"
                         : "Stop indexing"
                 )
@@ -84,6 +98,11 @@ struct IndexingBannerView: View {
             )
         )
         .accessibilityElement(children: .contain)
+    }
+
+    private var isPaused: Bool {
+        indexingService.isThermallyPaused
+            || indexingService.backgroundExecutionState == .pausedAwaitingForeground
     }
 }
 

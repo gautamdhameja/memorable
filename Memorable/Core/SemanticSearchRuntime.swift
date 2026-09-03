@@ -233,7 +233,10 @@ final class SemanticSearchRuntime: ObservableObject {
     private func failWarmup(_ error: Error, generation: UInt64) {
         guard generation == warmupGeneration else { return }
         warmupTask = nil
-        markFailure(error.localizedDescription)
+        markFailure(UserFacingErrorMessage.message(
+            for: error,
+            fallback: "Search couldn't be prepared. Close and reopen Memorable, then try again."
+        ))
     }
 
     private func finishCancelledWarmup(generation: UInt64) {

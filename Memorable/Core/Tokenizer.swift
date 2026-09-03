@@ -18,8 +18,12 @@ final class CLIPTokenizer: Sendable {
     private let cache = OSAllocatedUnfairLock(initialState: [String: [Int]]())
     private let maxCacheSize = 1000
 
-    enum TokenizerError: Error {
+    enum TokenizerError: LocalizedError {
         case filesNotFound
+
+        var errorDescription: String? {
+            "The search vocabulary is missing. Reinstall Memorable and try again."
+        }
     }
 
     init(contextLength: Int = 64) throws {

@@ -14,6 +14,20 @@ extension Error {
     }
 }
 
+enum UserFacingErrorMessage {
+    /// Only errors that deliberately conform to `LocalizedError` may supply UI
+    /// copy. This prevents Swift's synthesized enum/debug text from leaking into
+    /// alerts while preserving specific guidance from audited app errors.
+    static func message(for error: Error, fallback: String) -> String {
+        guard let description = (error as? any LocalizedError)?.errorDescription?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !description.isEmpty else {
+            return fallback
+        }
+        return description
+    }
+}
+
 enum CancellableDetachedOperation {
     static func run<Value: Sendable>(
         priority: TaskPriority = .utility,

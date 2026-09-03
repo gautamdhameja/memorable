@@ -32,7 +32,7 @@ enum PhotoShareFileCleanup {
     }
 }
 
-enum PhotoSharePreparationError: Error, Equatable, Sendable {
+enum PhotoSharePreparationError: LocalizedError, Equatable, Sendable {
     case unsupportedMedia
     case sourceUnavailable
     case fileTooLarge
@@ -50,6 +50,8 @@ enum PhotoSharePreparationError: Error, Equatable, Sendable {
             return "The photo could not be prepared. Check available storage and try again."
         }
     }
+
+    var errorDescription: String? { userMessage }
 }
 
 enum PhotoShareResourcePolicy {

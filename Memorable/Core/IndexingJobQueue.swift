@@ -81,16 +81,19 @@ final class IndexingJobQueue {
     private var cancelledIDs: Set<UUID> = []
     private var sequence = 0
     private var wakeTask: Task<Void, Never>?
-    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+    private var idleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private let now: Clock
     private let sleep: Sleeper
+    private let idleWaiterRegistered: (UUID) -> Void
 
     init(
         now: @escaping Clock = Date.init,
-        sleep: @escaping Sleeper = { try await Task.sleep(nanoseconds: $0) }
+        sleep: @escaping Sleeper = { try await Task.sleep(nanoseconds: $0) },
+        idleWaiterRegistered: @escaping (UUID) -> Void = { _ in }
     ) {
         self.now = now
         self.sleep = sleep
+        self.idleWaiterRegistered = idleWaiterRegistered
     }
 
     var isIdle: Bool {
@@ -101,7 +104,10 @@ final class IndexingJobQueue {
     var retainedCancellationCount: Int { cancelledIDs.count }
 
     func contains(_ kind: IndexingJobKind) -> Bool {
-        active?.job.kind == kind || pending.contains { $0.job.kind == kind }
+        let hasActive = active.map {
+            $0.job.kind == kind && !cancelledIDs.contains($0.job.id)
+        } ?? false
+        return hasActive || pending.contains { $0.job.kind == kind }
     }
 
     func enqueue(_ job: IndexingJob) {
@@ -148,8 +154,20 @@ final class IndexingJobQueue {
 
     func waitUntilIdle() async {
         guard !isIdle else { return }
-        await withCheckedContinuation { continuation in
-            idleWaiters.append(continuation)
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled, !isIdle else {
+                    continuation.resume()
+                    return
+                }
+                idleWaiters[waiterID] = continuation
+                idleWaiterRegistered(waiterID)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelIdleWaiter(waiterID)
+            }
         }
     }
 
@@ -226,9 +244,13 @@ final class IndexingJobQueue {
 
     private func finishIdleWaitersIfNeeded() {
         guard isIdle else { return }
-        let waiters = idleWaiters
+        let waiters = Array(idleWaiters.values)
         idleWaiters.removeAll()
         waiters.forEach { $0.resume() }
+    }
+
+    private func cancelIdleWaiter(_ id: UUID) {
+        idleWaiters.removeValue(forKey: id)?.resume()
     }
 
     private func eligibleAt(for pendingJob: PendingJob) -> Date? {

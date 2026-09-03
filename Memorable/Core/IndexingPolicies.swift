@@ -58,6 +58,126 @@ enum InitialIndexingExperiencePolicy {
     }
 }
 
+enum InitialIndexingForegroundResumePolicy {
+    static func shouldSchedule(
+        isApplicationActive: Bool,
+        hasCompletedInitialIndexCheck: Bool,
+        allowsAutoResume: Bool,
+        isPending: Bool,
+        progressIsRunning: Bool,
+        hasLibraryWork: Bool
+    ) -> Bool {
+        isApplicationActive
+            && hasCompletedInitialIndexCheck
+            && allowsAutoResume
+            && isPending
+            && !progressIsRunning
+            && !hasLibraryWork
+    }
+}
+
+enum ForegroundSemanticWarmupPolicy {
+    static func shouldStart(
+        isApplicationActive: Bool,
+        isShellReady: Bool,
+        isSemanticSearchReady: Bool
+    ) -> Bool {
+        isApplicationActive && isShellReady && !isSemanticSearchReady
+    }
+}
+
+enum IndexingBackgroundTimePolicy {
+    /// Leave enough time for the current database write and cancellation path
+    /// to finish before UIKit's finite background assertion expires.
+    static let minimumRemainingSeconds: TimeInterval = 10
+
+    static func canStartNextBatch(
+        isApplicationActive: Bool,
+        hasScheduledTaskAssertion: Bool,
+        backgroundTimeRemaining: TimeInterval
+    ) -> Bool {
+        isApplicationActive
+            || hasScheduledTaskAssertion
+            || backgroundTimeRemaining == .greatestFiniteMagnitude
+            || backgroundTimeRemaining >= minimumRemainingSeconds
+    }
+}
+
+enum PostIndexingContinuationPolicy {
+    static func shouldDeferUntilForeground(isApplicationActive: Bool) -> Bool {
+        !isApplicationActive
+    }
+
+    static func dependencies(
+        isDeferredUntilAfterBaseCompletion: Bool
+    ) -> Set<IndexingJobKind> {
+        isDeferredUntilAfterBaseCompletion ? [] : [.indexVideos]
+    }
+}
+
+enum AutomaticMaintenanceEligibilityPolicy {
+    static func canSchedule(
+        isApplicationActive: Bool,
+        allowsIndexingWrites: Bool,
+        isMemoryPressureSuspended: Bool,
+        isThermallySafe: Bool,
+        isTaskCancelled: Bool
+    ) -> Bool {
+        isApplicationActive
+            && allowsIndexingWrites
+            && !isMemoryPressureSuspended
+            && isThermallySafe
+            && !isTaskCancelled
+    }
+}
+
+enum ScheduledInitialIndexingExpirationPolicy {
+    static func shouldInterrupt(
+        isApplicationActive: Bool,
+        isInitialIndexingPending: Bool
+    ) -> Bool {
+        !isApplicationActive && isInitialIndexingPending
+    }
+}
+
+enum InitialIndexingInterruptionStore {
+    private static let interruptedKey = "indexing.initialCheckpoint.interrupted"
+
+    static func markInterrupted(in defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: interruptedKey)
+    }
+
+    static func wasInterrupted(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: interruptedKey)
+    }
+
+    static func clear(in defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: interruptedKey)
+    }
+}
+
+enum ContinuedIndexingProgress {
+    static let totalUnits: Int64 = 1_000
+
+    static func completedUnits(for progress: IndexingProgress) -> Int64 {
+        let fraction = progress.total > 0
+            ? min(1, max(0, Double(progress.completed) / Double(progress.total)))
+            : 0
+        let completed: Double
+        switch progress.phase {
+        case .photos:
+            completed = fraction * 750
+        case .videos:
+            completed = 750 + (fraction * 250)
+        case .enrichment:
+            completed = 1_000
+        case .idle:
+            completed = 0
+        }
+        return Int64(completed.rounded(.down))
+    }
+}
+
 struct IndexingProgressPublisher {
     static let minimumInterval: TimeInterval = 0.25
 
@@ -94,6 +214,18 @@ enum ThermalIndexingEffect: Equatable {
 struct ThermalIndexingState: Equatable {
     var isPaused = false
     var resumeWhenCool = false
+}
+
+enum ThermalWorkActivityPolicy {
+    static func hasActiveWork(
+        isJobQueueIdle: Bool,
+        isProgressRunning: Bool,
+        hasDeferredPostIndexingWorkflow: Bool
+    ) -> Bool {
+        !isJobQueueIdle
+            || isProgressRunning
+            || hasDeferredPostIndexingWorkflow
+    }
 }
 
 enum ThermalSafetyPolicy {

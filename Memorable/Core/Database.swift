@@ -20,11 +20,25 @@ import os
 
 // MARK: - Embedding Index
 
-enum SearchEngineError: Error, Equatable {
+enum SearchEngineError: LocalizedError, Equatable {
     /// Persisted index columns or embedding rows are malformed. Refuse to load.
     case corruptedIndex
     /// A model returned an embedding with an unsafe shape.
     case invalidEmbedding
+    /// Background indexing may intentionally defer the query model until the
+    /// app returns to the foreground and search becomes interactive.
+    case textEncoderUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .corruptedIndex:
+            return "The search index is damaged. Rebuild it from More, then try again."
+        case .invalidEmbedding:
+            return "Search found inconsistent local data. Rebuild the index from More, then try again."
+        case .textEncoderUnavailable:
+            return "Search is still getting ready. Try again in a moment."
+        }
+    }
 }
 
 enum SearchIndexLimits {
@@ -391,11 +405,23 @@ struct GeocodingCounts {
     let indexedVideos: Int
 }
 
-enum DatabaseCapabilityError: Error, Equatable {
+enum DatabaseCapabilityError: LocalizedError, Equatable {
     case unavailable
     case indexingUnavailableInFallback
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            return "Local search storage is unavailable. Close and reopen Memorable, then try again."
+        case .indexingUnavailableInFallback:
+            return "Memorable cannot update the search index right now. Close and reopen the app, then try again."
+        }
+    }
 }
 
+/// Internal diagnostic state retained by the test-only throwing initializer.
+/// Its associated strings can contain storage details and must never be shown
+/// directly in user-facing copy.
 enum DatabaseInitializationError: Error {
     case persistentAndFallbackFailed(persistent: String, fallback: String)
 }

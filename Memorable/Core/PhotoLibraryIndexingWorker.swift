@@ -82,16 +82,34 @@ final class PhotoLibraryIndexingWorker {
         )
     }
 
-    nonisolated static func shouldFinalizePhotoPass(isCancelled: Bool) -> Bool {
-        !isCancelled
+    nonisolated static func shouldFinalizePhotoPass(
+        isCancelled: Bool,
+        wasInterrupted: Bool
+    ) -> Bool {
+        !isCancelled && !wasInterrupted
     }
 
-    nonisolated static func shouldFinalizeVideoPass(isCancelled: Bool) -> Bool {
-        !isCancelled
+    nonisolated static func shouldFinalizeVideoPass(
+        isCancelled: Bool,
+        wasInterrupted: Bool
+    ) -> Bool {
+        !isCancelled && !wasInterrupted
     }
 
     nonisolated static func shouldContinuePhotoFallback(isCancelled: Bool) -> Bool {
         !isCancelled
+    }
+
+    nonisolated static func shouldInterruptBeforeNextBatch(canStartNextBatch: Bool) -> Bool {
+        !canStartNextBatch
+    }
+
+    static func persistInterruptedPhotoBatch(
+        _ photos: [IndexedPhoto],
+        using persist: ([IndexedPhoto]) async -> Int
+    ) async -> Int {
+        guard !photos.isEmpty else { return 0 }
+        return await persist(photos)
     }
 
     final class Session {
@@ -101,6 +119,7 @@ final class PhotoLibraryIndexingWorker {
         let hasMediaCandidates: Bool
         var indexedMediaCount: Int
         var hitFreeLimit: Bool
+        var wasInterrupted = false
 
         init(
             videoAssets: PHFetchResult<PHAsset>,
@@ -126,6 +145,7 @@ final class PhotoLibraryIndexingWorker {
         let currentProgress: () -> IndexingProgress
         let setProgress: (IndexingProgress) -> Void
         let setHitFreeLimit: (Bool) -> Void
+        let shouldStartNextBatch: () -> Bool
         let reloadSearchIndex: () async -> Bool
     }
 
@@ -263,6 +283,12 @@ final class PhotoLibraryIndexingWorker {
             return assets
         }
 
+        guard !Self.shouldInterruptBeforeNextBatch(
+            canStartNextBatch: callbacks.shouldStartNextBatch()
+        ) else {
+            populatedSession.wasInterrupted = true
+            return populatedSession
+        }
         let firstBatch = await makeBatch()
         currentProgress.rateBaselineCompleted = indexed
         currentProgress.phaseStartedAt = Date()
@@ -273,6 +299,12 @@ final class PhotoLibraryIndexingWorker {
 
         while nextLoadTask != nil || batchCursor.hasRemaining {
             if Task.isCancelled { break }
+            guard !Self.shouldInterruptBeforeNextBatch(
+                canStartNextBatch: callbacks.shouldStartNextBatch()
+            ) else {
+                populatedSession.wasInterrupted = true
+                break
+            }
             if !FreeTier.canIndexMore(indexedMediaCount: populatedSession.indexedMediaCount, isPro: isPro) {
                 populatedSession.hitFreeLimit = true
                 markIndexLimitReached(isPro: isPro)
@@ -401,7 +433,20 @@ final class PhotoLibraryIndexingWorker {
             await Task.yield()
         }
 
-        guard Self.shouldFinalizePhotoPass(isCancelled: Task.isCancelled) else {
+        if populatedSession.wasInterrupted {
+            let persistedCount = await Self.persistInterruptedPhotoBatch(batch) { [self] photos in
+                await persistPhotoBatch(photos)
+            }
+            populatedSession.indexedMediaCount = Self.updatedMediaCount(
+                current: populatedSession.indexedMediaCount,
+                persistedPhotoCount: persistedCount
+            )
+            return populatedSession
+        }
+        guard Self.shouldFinalizePhotoPass(
+            isCancelled: Task.isCancelled,
+            wasInterrupted: populatedSession.wasInterrupted
+        ) else {
             return populatedSession
         }
         if !batch.isEmpty {
@@ -443,6 +488,12 @@ final class PhotoLibraryIndexingWorker {
         var existingVideos: Set<String> = []
         for index in 0..<session.videoAssets.count {
             if Task.isCancelled { break }
+            guard !Self.shouldInterruptBeforeNextBatch(
+                canStartNextBatch: callbacks.shouldStartNextBatch()
+            ) else {
+                session.wasInterrupted = true
+                break
+            }
             if index.isMultiple(of: SearchIndexLimits.databasePageMediaItems) {
                 let end = min(
                     session.videoAssets.count,
@@ -489,11 +540,17 @@ final class PhotoLibraryIndexingWorker {
             if indexed % 10 == 0 { await Task.yield() }
         }
 
-        guard Self.shouldFinalizeVideoPass(isCancelled: Task.isCancelled) else { return }
+        guard Self.shouldFinalizeVideoPass(
+            isCancelled: Task.isCancelled,
+            wasInterrupted: session.wasInterrupted
+        ) else { return }
         if session.videoAssets.count > 0 {
             _ = await callbacks.reloadSearchIndex()
         }
-        guard Self.shouldFinalizeVideoPass(isCancelled: Task.isCancelled) else { return }
+        guard Self.shouldFinalizeVideoPass(
+            isCancelled: Task.isCancelled,
+            wasInterrupted: session.wasInterrupted
+        ) else { return }
         currentProgress.searchableCount = callbacks.searchableCount()
         currentProgress.isRunning = false
         progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)

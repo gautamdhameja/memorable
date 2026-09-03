@@ -6,6 +6,285 @@ import os
 @testable import Memorable
 
 final class IndexingPolicyTests: XCTestCase {
+    func testBackgroundIndexingIdentifiersStayBundleScoped() {
+        let bundleIdentifier = "com.example.memorable"
+        let runID = UUID(uuidString: "00000000-0000-0000-0000-000000000123")!
+
+        XCTAssertEqual(
+            BackgroundIndexingIdentifiers.processing(bundleIdentifier: bundleIdentifier),
+            "com.example.memorable.indexing.processing"
+        )
+        XCTAssertEqual(
+            BackgroundIndexingIdentifiers.continuedWildcard(bundleIdentifier: bundleIdentifier),
+            "com.example.memorable.indexing.continued.*"
+        )
+        XCTAssertEqual(
+            BackgroundIndexingIdentifiers.continued(
+                bundleIdentifier: bundleIdentifier,
+                runID: runID
+            ),
+            "com.example.memorable.indexing.continued.00000000-0000-0000-0000-000000000123"
+        )
+    }
+
+    func testForegroundResumeRequiresPendingIdleInitialIndex() {
+        XCTAssertTrue(InitialIndexingForegroundResumePolicy.shouldSchedule(
+            isApplicationActive: true,
+            hasCompletedInitialIndexCheck: true,
+            allowsAutoResume: true,
+            isPending: true,
+            progressIsRunning: false,
+            hasLibraryWork: false
+        ))
+        XCTAssertFalse(InitialIndexingForegroundResumePolicy.shouldSchedule(
+            isApplicationActive: false,
+            hasCompletedInitialIndexCheck: true,
+            allowsAutoResume: true,
+            isPending: true,
+            progressIsRunning: false,
+            hasLibraryWork: false
+        ))
+        XCTAssertFalse(InitialIndexingForegroundResumePolicy.shouldSchedule(
+            isApplicationActive: true,
+            hasCompletedInitialIndexCheck: true,
+            allowsAutoResume: true,
+            isPending: false,
+            progressIsRunning: false,
+            hasLibraryWork: false
+        ))
+        XCTAssertFalse(InitialIndexingForegroundResumePolicy.shouldSchedule(
+            isApplicationActive: true,
+            hasCompletedInitialIndexCheck: true,
+            allowsAutoResume: true,
+            isPending: true,
+            progressIsRunning: true,
+            hasLibraryWork: false
+        ))
+        XCTAssertFalse(InitialIndexingForegroundResumePolicy.shouldSchedule(
+            isApplicationActive: true,
+            hasCompletedInitialIndexCheck: true,
+            allowsAutoResume: true,
+            isPending: true,
+            progressIsRunning: false,
+            hasLibraryWork: true
+        ))
+        XCTAssertFalse(InitialIndexingForegroundResumePolicy.shouldSchedule(
+            isApplicationActive: true,
+            hasCompletedInitialIndexCheck: false,
+            allowsAutoResume: true,
+            isPending: true,
+            progressIsRunning: false,
+            hasLibraryWork: false
+        ))
+        XCTAssertFalse(InitialIndexingForegroundResumePolicy.shouldSchedule(
+            isApplicationActive: true,
+            hasCompletedInitialIndexCheck: true,
+            allowsAutoResume: false,
+            isPending: true,
+            progressIsRunning: false,
+            hasLibraryWork: false
+        ))
+    }
+
+    func testForegroundSemanticWarmupRequiresActiveReadyShellAndUnreadySearch() {
+        XCTAssertTrue(ForegroundSemanticWarmupPolicy.shouldStart(
+            isApplicationActive: true,
+            isShellReady: true,
+            isSemanticSearchReady: false
+        ))
+        XCTAssertFalse(ForegroundSemanticWarmupPolicy.shouldStart(
+            isApplicationActive: false,
+            isShellReady: true,
+            isSemanticSearchReady: false
+        ))
+        XCTAssertFalse(ForegroundSemanticWarmupPolicy.shouldStart(
+            isApplicationActive: true,
+            isShellReady: false,
+            isSemanticSearchReady: false
+        ))
+        XCTAssertFalse(ForegroundSemanticWarmupPolicy.shouldStart(
+            isApplicationActive: true,
+            isShellReady: true,
+            isSemanticSearchReady: true
+        ))
+    }
+
+    func testBackgroundTimePolicyStopsBeforeOrdinaryAssertionExpires() {
+        XCTAssertTrue(IndexingBackgroundTimePolicy.canStartNextBatch(
+            isApplicationActive: true,
+            hasScheduledTaskAssertion: false,
+            backgroundTimeRemaining: 0
+        ))
+        XCTAssertTrue(IndexingBackgroundTimePolicy.canStartNextBatch(
+            isApplicationActive: false,
+            hasScheduledTaskAssertion: true,
+            backgroundTimeRemaining: 0
+        ))
+        XCTAssertTrue(IndexingBackgroundTimePolicy.canStartNextBatch(
+            isApplicationActive: false,
+            hasScheduledTaskAssertion: false,
+            backgroundTimeRemaining: .greatestFiniteMagnitude
+        ))
+        XCTAssertFalse(IndexingBackgroundTimePolicy.canStartNextBatch(
+            isApplicationActive: false,
+            hasScheduledTaskAssertion: false,
+            backgroundTimeRemaining: IndexingBackgroundTimePolicy.minimumRemainingSeconds - 0.1
+        ))
+    }
+
+    func testPostIndexingWorkDefersWheneverTheApplicationIsInactive() {
+        XCTAssertFalse(PostIndexingContinuationPolicy.shouldDeferUntilForeground(
+            isApplicationActive: true
+        ))
+        XCTAssertTrue(PostIndexingContinuationPolicy.shouldDeferUntilForeground(
+            isApplicationActive: false
+        ))
+        XCTAssertEqual(
+            PostIndexingContinuationPolicy.dependencies(
+                isDeferredUntilAfterBaseCompletion: false
+            ),
+            [.indexVideos]
+        )
+        XCTAssertEqual(
+            PostIndexingContinuationPolicy.dependencies(
+                isDeferredUntilAfterBaseCompletion: true
+            ),
+            []
+        )
+    }
+
+    func testAutomaticMaintenanceRequiresEveryLifecycleSafetyCondition() {
+        XCTAssertTrue(AutomaticMaintenanceEligibilityPolicy.canSchedule(
+            isApplicationActive: true,
+            allowsIndexingWrites: true,
+            isMemoryPressureSuspended: false,
+            isThermallySafe: true,
+            isTaskCancelled: false
+        ))
+        XCTAssertFalse(AutomaticMaintenanceEligibilityPolicy.canSchedule(
+            isApplicationActive: false,
+            allowsIndexingWrites: true,
+            isMemoryPressureSuspended: false,
+            isThermallySafe: true,
+            isTaskCancelled: false
+        ))
+        XCTAssertFalse(AutomaticMaintenanceEligibilityPolicy.canSchedule(
+            isApplicationActive: true,
+            allowsIndexingWrites: false,
+            isMemoryPressureSuspended: false,
+            isThermallySafe: true,
+            isTaskCancelled: false
+        ))
+        XCTAssertFalse(AutomaticMaintenanceEligibilityPolicy.canSchedule(
+            isApplicationActive: true,
+            allowsIndexingWrites: true,
+            isMemoryPressureSuspended: true,
+            isThermallySafe: true,
+            isTaskCancelled: false
+        ))
+        XCTAssertFalse(AutomaticMaintenanceEligibilityPolicy.canSchedule(
+            isApplicationActive: true,
+            allowsIndexingWrites: true,
+            isMemoryPressureSuspended: false,
+            isThermallySafe: false,
+            isTaskCancelled: false
+        ))
+        XCTAssertFalse(AutomaticMaintenanceEligibilityPolicy.canSchedule(
+            isApplicationActive: true,
+            allowsIndexingWrites: true,
+            isMemoryPressureSuspended: false,
+            isThermallySafe: true,
+            isTaskCancelled: true
+        ))
+    }
+
+    func testScheduledExpirationInterruptsOnlyInactivePendingInitialIndexing() {
+        XCTAssertTrue(ScheduledInitialIndexingExpirationPolicy.shouldInterrupt(
+            isApplicationActive: false,
+            isInitialIndexingPending: true
+        ))
+        XCTAssertFalse(ScheduledInitialIndexingExpirationPolicy.shouldInterrupt(
+            isApplicationActive: true,
+            isInitialIndexingPending: true
+        ))
+        XCTAssertFalse(ScheduledInitialIndexingExpirationPolicy.shouldInterrupt(
+            isApplicationActive: false,
+            isInitialIndexingPending: false
+        ))
+    }
+
+    func testInitialIndexingInterruptionMarkerRoundTripsAndClears() {
+        let suiteName = "InitialIndexingInterruptionTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertFalse(InitialIndexingInterruptionStore.wasInterrupted(in: defaults))
+        InitialIndexingInterruptionStore.markInterrupted(in: defaults)
+        XCTAssertTrue(InitialIndexingInterruptionStore.wasInterrupted(in: defaults))
+        InitialIndexingInterruptionStore.clear(in: defaults)
+        XCTAssertFalse(InitialIndexingInterruptionStore.wasInterrupted(in: defaults))
+    }
+
+    func testContinuedProcessingProgressAllocatesPhotosBeforeVideos() {
+        XCTAssertEqual(
+            ContinuedIndexingProgress.completedUnits(for: IndexingProgress(
+                total: 100,
+                completed: 50,
+                isRunning: true,
+                phase: .photos
+            )),
+            375
+        )
+        XCTAssertEqual(
+            ContinuedIndexingProgress.completedUnits(for: IndexingProgress(
+                total: 20,
+                completed: 10,
+                isRunning: true,
+                phase: .videos,
+                photosComplete: true
+            )),
+            875
+        )
+    }
+
+    func testPhotoLibraryWorkerStopsAtEveryRejectedBatchBoundary() {
+        XCTAssertFalse(PhotoLibraryIndexingWorker.shouldInterruptBeforeNextBatch(
+            canStartNextBatch: true
+        ))
+        XCTAssertTrue(PhotoLibraryIndexingWorker.shouldInterruptBeforeNextBatch(
+            canStartNextBatch: false
+        ))
+    }
+
+    @MainActor
+    func testPhotoLibraryWorkerPersistsBufferedRowsBeforeCooperativeInterruption() async {
+        let photo = makeOrphanPolicyPhoto(localIdentifier: "buffered-photo")
+        var receivedIdentifiers: [String] = []
+
+        let persistedCount = await PhotoLibraryIndexingWorker.persistInterruptedPhotoBatch(
+            [photo]
+        ) { photos in
+            receivedIdentifiers = photos.map(\.localIdentifier)
+            return photos.count
+        }
+
+        XCTAssertEqual(persistedCount, 1)
+        XCTAssertEqual(receivedIdentifiers, ["buffered-photo"])
+    }
+
+    @MainActor
+    func testPhotoLibraryWorkerSkipsPersistenceWhenInterruptedBufferIsEmpty() async {
+        var didPersist = false
+
+        let persistedCount = await PhotoLibraryIndexingWorker.persistInterruptedPhotoBatch([]) { photos in
+            didPersist = true
+            return photos.count
+        }
+
+        XCTAssertEqual(persistedCount, 0)
+        XCTAssertFalse(didPersist)
+    }
+
     func testDuplicateScanGenerationRejectsCancelledOrSupersededResults() {
         XCTAssertTrue(DuplicateScanGenerationPolicy.acceptsCompletion(
             startedGeneration: 4,
@@ -211,6 +490,31 @@ final class IndexingPolicyTests: XCTestCase {
         }
     }
 
+    func testDeferredPostIndexingWorkflowCountsAsActiveThermalWork() {
+        XCTAssertTrue(ThermalWorkActivityPolicy.hasActiveWork(
+            isJobQueueIdle: true,
+            isProgressRunning: false,
+            hasDeferredPostIndexingWorkflow: true
+        ))
+        XCTAssertFalse(ThermalWorkActivityPolicy.hasActiveWork(
+            isJobQueueIdle: true,
+            isProgressRunning: false,
+            hasDeferredPostIndexingWorkflow: false
+        ))
+
+        let transition = ThermalSafetyPolicy.transition(
+            from: ThermalIndexingState(),
+            thermalState: .serious,
+            hasActiveWork: ThermalWorkActivityPolicy.hasActiveWork(
+                isJobQueueIdle: true,
+                isProgressRunning: false,
+                hasDeferredPostIndexingWorkflow: true
+            )
+        )
+        XCTAssertEqual(transition.effect, .cancelWork)
+        XCTAssertTrue(transition.state.resumeWhenCool)
+    }
+
     func testThermalSafetyRestartsRequestedWorkAfterRecovery() {
         let transition = ThermalSafetyPolicy.transition(
             from: ThermalIndexingState(isPaused: true, resumeWhenCool: true),
@@ -337,13 +641,33 @@ final class IndexingPolicyTests: XCTestCase {
     }
 
     func testCancelledPhotoPassDoesNotFinalizePendingWrites() {
-        XCTAssertFalse(PhotoLibraryIndexingWorker.shouldFinalizePhotoPass(isCancelled: true))
-        XCTAssertTrue(PhotoLibraryIndexingWorker.shouldFinalizePhotoPass(isCancelled: false))
+        XCTAssertFalse(PhotoLibraryIndexingWorker.shouldFinalizePhotoPass(
+            isCancelled: true,
+            wasInterrupted: false
+        ))
+        XCTAssertFalse(PhotoLibraryIndexingWorker.shouldFinalizePhotoPass(
+            isCancelled: false,
+            wasInterrupted: true
+        ))
+        XCTAssertTrue(PhotoLibraryIndexingWorker.shouldFinalizePhotoPass(
+            isCancelled: false,
+            wasInterrupted: false
+        ))
     }
 
     func testCancelledVideoPassDoesNotReloadOrPublishCompletion() {
-        XCTAssertFalse(PhotoLibraryIndexingWorker.shouldFinalizeVideoPass(isCancelled: true))
-        XCTAssertTrue(PhotoLibraryIndexingWorker.shouldFinalizeVideoPass(isCancelled: false))
+        XCTAssertFalse(PhotoLibraryIndexingWorker.shouldFinalizeVideoPass(
+            isCancelled: true,
+            wasInterrupted: false
+        ))
+        XCTAssertFalse(PhotoLibraryIndexingWorker.shouldFinalizeVideoPass(
+            isCancelled: false,
+            wasInterrupted: true
+        ))
+        XCTAssertTrue(PhotoLibraryIndexingWorker.shouldFinalizeVideoPass(
+            isCancelled: false,
+            wasInterrupted: false
+        ))
     }
 
     func testCancelledBlockedVideoPersistenceDoesNotReportSuccess() async {
@@ -1066,7 +1390,7 @@ final class IndexingPolicyTests: XCTestCase {
     }
 
     @MainActor
-    func testBackgroundInterruptionKeepsResumeIntentButDeactivatesInitialUI() {
+    func testBackgroundInterruptionKeepsResumeIntentAndForegroundRestartsIt() async {
         let suiteName = "InitialIndexingServiceInterruptionTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -1078,6 +1402,10 @@ final class IndexingPolicyTests: XCTestCase {
             ),
             initialIndexingDefaults: defaults
         )
+        _ = await service.checkAndLoadExistingIndex(
+            scheduleAutoResume: true,
+            scheduleOrphanCleanup: false
+        )
         service.startIndexing()
         XCTAssertTrue(service.isInitialLibraryIndexingActive)
 
@@ -1085,8 +1413,44 @@ final class IndexingPolicyTests: XCTestCase {
 
         XCTAssertTrue(service.isInitialIndexingExperiencePending)
         XCTAssertFalse(service.isInitialLibraryIndexingActive)
-        service.progress.isRunning = true
+        XCTAssertEqual(service.backgroundExecutionState, .pausedAwaitingForeground)
+        XCTAssertTrue(InitialIndexingInterruptionStore.wasInterrupted(in: defaults))
         XCTAssertFalse(service.shouldShowInitialIndexingExperience)
+
+        service.setApplicationActive(true)
+
+        XCTAssertEqual(service.backgroundExecutionState, .foreground)
+        XCTAssertTrue(service.progress.isRunning)
+        XCTAssertFalse(InitialIndexingInterruptionStore.wasInterrupted(in: defaults))
+        service.stopIndexing()
+    }
+
+    @MainActor
+    func testScheduledExpirationAfterForegroundDoesNotPauseInitialIndexing() async {
+        let suiteName = "InitialIndexingServiceForegroundExpirationTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let service = makeSurpriseLaunchService(
+            database: SearchFixtureDatabase(),
+            cachedState: SurpriseQueryCache.State(
+                validatedQueries: [],
+                lastValidatedCount: 0
+            ),
+            initialIndexingDefaults: defaults
+        )
+        _ = await service.checkAndLoadExistingIndex(
+            scheduleAutoResume: true,
+            scheduleOrphanCleanup: false
+        )
+        service.setApplicationActive(true)
+        service.startIndexing()
+
+        service.handleScheduledBackgroundTaskExpiration()
+
+        XCTAssertTrue(service.isInitialIndexingExperiencePending)
+        XCTAssertTrue(service.isInitialLibraryIndexingActive)
+        XCTAssertEqual(service.backgroundExecutionState, .foreground)
+        XCTAssertFalse(InitialIndexingInterruptionStore.wasInterrupted(in: defaults))
         service.stopIndexing()
     }
 
