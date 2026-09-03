@@ -474,6 +474,19 @@ final class ProjectConfigurationTests: XCTestCase {
         )
     }
 
+    func testMoreNavigationKeepsBarGeometryStableAcrossPushes() throws {
+        let moreView = try contents(of: "Memorable/Views/MoreView.swift")
+        let moreRoot = try sourceSection(
+            in: moreView,
+            from: "struct MoreView: View",
+            to: "struct PrivacyPolicyView: View"
+        )
+
+        XCTAssertFalse(moreRoot.contains(".toolbar(.hidden, for: .navigationBar)"))
+        XCTAssertTrue(moreRoot.contains(".toolbar(.visible, for: .navigationBar)"))
+        XCTAssertTrue(moreRoot.contains("ToolbarItem(placement: .principal)"))
+    }
+
     func testBrandTypographyOutranksSecondaryScreenTitles() throws {
         let theme = try contents(of: "Memorable/Views/Theme.swift")
         let moreView = try contents(of: "Memorable/Views/MoreView.swift")

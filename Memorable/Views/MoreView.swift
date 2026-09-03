@@ -33,14 +33,9 @@ struct MoreView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text("More")
-                            .font(Celestial.Typography.screenTitle)
-                            .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
-                            .padding(.top, 14)
-
                         indexStatus
                             .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
-                            .padding(.top, Celestial.Spacing.sectionGap)
+                            .padding(.top, Celestial.Spacing.contentGap)
 
                         VStack(spacing: 0) {
                             NavigationLink {
@@ -121,7 +116,16 @@ struct MoreView: View {
                     }
                 }
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("More")
+                        .font(Celestial.Typography.screenTitle)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                }
+            }
             .preferredColorScheme(.dark)
             .sheet(isPresented: $showSources) {
                 NavigationStack {
