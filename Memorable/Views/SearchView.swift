@@ -417,6 +417,14 @@ struct SearchView: View {
                    ) {
                     self.selectedPhoto = nil
                 }
+                if let todayMemory,
+                   !FolderResultAccessPolicy.allows(
+                       sourceId: todayMemory.heroPhoto.sourceId,
+                       isPro: false
+                   ) {
+                    self.todayMemory = nil
+                    isTodayMemoryResolved = true
+                }
                 viewModel.validateVisibleResults(reason: "Pro entitlement changed")
             }
             .onChange(of: viewModel.results.map(\.localIdentifier)) { _, identifiers in
@@ -1808,7 +1816,15 @@ struct SearchView: View {
                 }
                 wasCancelled = Task.isCancelled
                 if !wasCancelled {
-                    todayMemory = summary
+                    if let summary,
+                       FolderResultAccessPolicy.allows(
+                           sourceId: summary.heroPhoto.sourceId,
+                           isPro: proManager.isPro
+                       ) {
+                        todayMemory = summary
+                    } else {
+                        todayMemory = nil
+                    }
                     isTodayMemoryResolved = true
                 }
             } catch is CancellationError {
