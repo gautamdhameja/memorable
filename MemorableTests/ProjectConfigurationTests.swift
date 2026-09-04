@@ -258,6 +258,15 @@ final class ProjectConfigurationTests: XCTestCase {
         ))
         XCTAssertTrue(controller.contains("BGProcessingTaskRequest"))
         XCTAssertTrue(controller.contains("BGContinuedProcessingTaskRequest"))
+        XCTAssertTrue(controller.contains("BackgroundIndexingIdentifiers.continued("))
+        XCTAssertTrue(
+            controller.contains("ContinuedProcessingRegistration.registerAndSubmit"),
+            "Continued-processing registration and submission must use the tested ordering contract"
+        )
+        XCTAssertFalse(
+            controller.contains("forTaskWithIdentifier: continuedWildcardIdentifier"),
+            "The continued-processing wildcard is only a plist permission pattern; register a concrete identifier"
+        )
     }
 
     func testReleaseChecklistRequiresPhysicalDeviceBackgroundTaskVerification() throws {

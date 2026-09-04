@@ -90,6 +90,19 @@ enum ContinuedProcessingSubmissionPolicy {
     }
 }
 
+enum ContinuedProcessingRegistration {
+    static func registerAndSubmit(
+        identifier: String,
+        register: (String) -> Bool,
+        submit: (String) throws -> Void
+    ) rethrows -> Bool {
+        guard !identifier.hasSuffix(".*") else { return false }
+        guard register(identifier) else { return false }
+        try submit(identifier)
+        return true
+    }
+}
+
 /// Owns the system assertions that let an initial, user-requested indexing run
 /// survive a scene transition. The indexing database remains the source of
 /// truth: system tasks only resume the same idempotent workflow and never carry
@@ -144,22 +157,6 @@ final class BackgroundIndexingController {
         } else {
             logger.info("Background indexing processing handler registered")
         }
-
-        if #available(iOS 26.0, *) {
-            let continuedRegistered = BGTaskScheduler.shared.register(
-                forTaskWithIdentifier: continuedWildcardIdentifier,
-                using: .main
-            ) { task in
-                MainActor.assumeIsolated {
-                    BackgroundIndexingController.shared.handleLaunch(task)
-                }
-            }
-            if !continuedRegistered {
-                logger.error("Continued indexing handler registration failed")
-            } else {
-                logger.info("Continued indexing handler registered")
-            }
-        }
     }
 
     func initialIndexingDidStart(
@@ -211,10 +208,6 @@ final class BackgroundIndexingController {
 
     private var processingIdentifier: String {
         BackgroundIndexingIdentifiers.processing(bundleIdentifier: bundleIdentifier)
-    }
-
-    private var continuedWildcardIdentifier: String {
-        BackgroundIndexingIdentifiers.continuedWildcard(bundleIdentifier: bundleIdentifier)
     }
 
     private func handleLaunch(_ task: BGTask) {
@@ -310,13 +303,32 @@ final class BackgroundIndexingController {
             bundleIdentifier: bundleIdentifier,
             runID: UUID()
         )
-        let request = BGContinuedProcessingTaskRequest(
-            identifier: identifier,
-            title: "Indexing your library",
-            subtitle: "Making your photos and videos searchable."
-        )
         do {
-            try BGTaskScheduler.shared.submit(request)
+            let registered = try ContinuedProcessingRegistration.registerAndSubmit(
+                identifier: identifier,
+                register: { registeredIdentifier in
+                    BGTaskScheduler.shared.register(
+                        forTaskWithIdentifier: registeredIdentifier,
+                        using: .main
+                    ) { task in
+                        MainActor.assumeIsolated {
+                            BackgroundIndexingController.shared.handleLaunch(task)
+                        }
+                    }
+                },
+                submit: { submittedIdentifier in
+                    let request = BGContinuedProcessingTaskRequest(
+                        identifier: submittedIdentifier,
+                        title: "Indexing your library",
+                        subtitle: "Making your photos and videos searchable."
+                    )
+                    try BGTaskScheduler.shared.submit(request)
+                }
+            )
+            guard registered else {
+                logger.error("Continued indexing handler registration failed")
+                return
+            }
             continuedRequestIdentifier = identifier
             logger.info("Continued indexing request submitted")
         } catch {

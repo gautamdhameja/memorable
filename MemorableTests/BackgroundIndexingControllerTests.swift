@@ -3,6 +3,10 @@ import XCTest
 
 @MainActor
 final class BackgroundIndexingControllerTests: XCTestCase {
+    private enum SubmissionError: Error {
+        case failed
+    }
+
     private final class TaskHandle: BackgroundIndexingTaskHandle {
         private(set) var completions: [Bool] = []
         private(set) var progressUpdates: [(Int64, String, String)] = []
@@ -193,6 +197,74 @@ final class BackgroundIndexingControllerTests: XCTestCase {
             isApplicationActive: false,
             isUserInitiated: false
         ))
+    }
+
+    func testContinuedProcessingRegistersConcreteIdentifierBeforeSubmittingSameIdentifier() {
+        let identifier = "com.example.memorable.indexing.continued.00000000-0000-0000-0000-000000000123"
+        var events: [String] = []
+
+        let registered = ContinuedProcessingRegistration.registerAndSubmit(
+            identifier: identifier,
+            register: {
+                events.append("register:\($0)")
+                return true
+            },
+            submit: { events.append("submit:\($0)") }
+        )
+
+        XCTAssertTrue(registered)
+        XCTAssertFalse(identifier.hasSuffix(".*"))
+        XCTAssertEqual(events, ["register:\(identifier)", "submit:\(identifier)"])
+    }
+
+    func testContinuedProcessingRegistrationFailureSkipsSubmission() {
+        let identifier = "com.example.memorable.indexing.continued.failed"
+        var submittedIdentifiers: [String] = []
+
+        let registered = ContinuedProcessingRegistration.registerAndSubmit(
+            identifier: identifier,
+            register: { _ in false },
+            submit: { submittedIdentifiers.append($0) }
+        )
+
+        XCTAssertFalse(registered)
+        XCTAssertTrue(submittedIdentifiers.isEmpty)
+    }
+
+    func testContinuedProcessingRejectsWildcardBeforeRegistration() {
+        var events: [String] = []
+
+        let registered = ContinuedProcessingRegistration.registerAndSubmit(
+            identifier: "com.example.memorable.indexing.continued.*",
+            register: {
+                events.append("register:\($0)")
+                return true
+            },
+            submit: { events.append("submit:\($0)") }
+        )
+
+        XCTAssertFalse(registered)
+        XCTAssertTrue(events.isEmpty)
+    }
+
+    func testContinuedProcessingSubmissionFailurePropagatesAfterRegistration() {
+        let identifier = "com.example.memorable.indexing.continued.submission-failure"
+        var events: [String] = []
+
+        XCTAssertThrowsError(try ContinuedProcessingRegistration.registerAndSubmit(
+            identifier: identifier,
+            register: {
+                events.append("register:\($0)")
+                return true
+            },
+            submit: {
+                events.append("submit:\($0)")
+                throw SubmissionError.failed
+            }
+        )) { error in
+            XCTAssertEqual(error as? SubmissionError, .failed)
+        }
+        XCTAssertEqual(events, ["register:\(identifier)", "submit:\(identifier)"])
     }
 
     func testProgressUpdatesAreCoalescedUntilValueOrSubtitleChanges() async {
