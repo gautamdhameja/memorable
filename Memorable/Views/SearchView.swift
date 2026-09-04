@@ -19,6 +19,7 @@ struct SearchView: View {
     @ObservedObject private var proManager = ProManager.shared
     @Environment(\.database) private var database
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.displayScale) private var displayScale
     @State private var smartAlbums: [SmartAlbum] = []
     @State private var todayMemory: OnThisDaySummary?
     @State private var isTodayMemoryResolved = false
@@ -709,18 +710,20 @@ struct SearchView: View {
                 .foregroundStyle(Celestial.Colors.onSurface)
                 .padding(.horizontal, 2)
 
-            HStack(alignment: .top, spacing: 13) {
-                Color.clear
-                    .frame(width: 44)
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
+            VStack(spacing: 0) {
+                Rectangle()
                     .fill(Celestial.Colors.surfaceContainerLow.opacity(0.48))
-                    .frame(height: 236)
+                    .aspectRatio(SearchHomeCardMetrics.imageAspectRatio, contentMode: .fit)
                     .overlay {
                         ProgressView()
                             .tint(Celestial.Colors.primaryDim)
                             .accessibilityLabel("Looking for today's memories")
                     }
+                Color.clear
+                    .frame(height: SearchHomeCardMetrics.captionHeight)
             }
+            .background(Celestial.Colors.surfaceContainerLow.opacity(0.74))
+            .clipShape(SearchHomeCardMetrics.cardShape)
         }
         .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
     }
@@ -958,52 +961,46 @@ struct SearchView: View {
             }
             .padding(.horizontal, 2)
 
-            HStack(alignment: .top, spacing: 13) {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(Date.now.formatted(.dateTime.day(.twoDigits)))
-                        .font(Celestial.Typography.interfaceTitle3)
-                        .foregroundStyle(Celestial.Colors.onSurface)
-                    Text(Date.now.formatted(.dateTime.month(.abbreviated)).uppercased())
-                        .font(Celestial.Typography.microEmphasized)
-                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                }
-                .frame(width: 44, alignment: .trailing)
-                .padding(.top, 8)
+            NavigationLink {
+                OnThisDayView(captionService: captionService)
+            } label: {
+                VStack(alignment: .leading, spacing: 0) {
+                    SearchHomePhotoImage(
+                        result: memory.heroPhoto.searchResult,
+                        targetSize: CGSize(width: 1_024, height: 768)
+                    )
+                    .aspectRatio(SearchHomeCardMetrics.imageAspectRatio, contentMode: .fit)
 
-                NavigationLink {
-                    OnThisDayView(captionService: captionService)
-                } label: {
-                    VStack(alignment: .leading, spacing: 0) {
-                        SearchHomePhotoImage(
-                            result: memory.heroPhoto.searchResult,
-                            targetSize: CGSize(width: 1_100, height: 680)
-                        )
-                        .frame(height: 178)
-
+                    HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(memoryTitle(memory))
-                                .font(Celestial.Typography.memoryCaption)
+                                .font(Celestial.Typography.bodyStrong)
                                 .foregroundStyle(Celestial.Colors.onSurface)
                             Text(memorySummary(memory))
                                 .font(Celestial.Typography.caption)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 13)
+
+                        Image(systemName: "chevron.right")
+                            .font(Celestial.Typography.microStrong)
+                            .foregroundStyle(Celestial.Colors.outlineVariant)
+                            .accessibilityHidden(true)
                     }
-                    .background(Celestial.Colors.surfaceContainerLow.opacity(0.74))
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(Celestial.Colors.hairline, lineWidth: 0.8)
-                    }
-                    .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .frame(minHeight: SearchHomeCardMetrics.captionHeight)
+                    .padding(.horizontal, 16)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Today in Your Memories, \(memoryTitle(memory))")
-                .accessibilityHint("Opens memories from this day")
+                .background(Celestial.Colors.surfaceContainerLow.opacity(0.74))
+                .clipShape(SearchHomeCardMetrics.cardShape)
+                .overlay {
+                    SearchHomeCardMetrics.cardShape
+                        .stroke(Celestial.Colors.hairline, lineWidth: 0.8)
+                }
+                .contentShape(SearchHomeCardMetrics.cardShape)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Today in Your Memories, \(memoryTitle(memory))")
+            .accessibilityHint("Opens memories from this day")
         }
         .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
     }
@@ -1069,14 +1066,20 @@ struct SearchView: View {
                        ) {
                         SearchHomePhotoImage(
                             result: preview.result,
-                            targetSize: CGSize(width: 280, height: 220)
+                            targetSize: CGSize(
+                                width: SearchHomeCardMetrics.recentThumbnailWidth * displayScale,
+                                height: SearchHomeCardMetrics.recentThumbnailHeight * displayScale
+                            )
                         )
                     } else {
                         RecentSearchPlaceholder()
                     }
                 }
-                .frame(width: 66, height: 54)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .frame(
+                    width: SearchHomeCardMetrics.recentThumbnailWidth,
+                    height: SearchHomeCardMetrics.recentThumbnailHeight
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.query)
@@ -1848,6 +1851,18 @@ struct SearchView: View {
 
 }
 
+private enum SearchHomeCardMetrics {
+    static let imageAspectRatio: CGFloat = 4.0 / 3.0
+    static let captionHeight: CGFloat = 62
+    static let cornerRadius: CGFloat = 20
+    static let recentThumbnailWidth: CGFloat = 64
+    static let recentThumbnailHeight: CGFloat = 48
+
+    static var cardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+}
+
 private struct RecentSearchTimelineRail: View {
     let isFirst: Bool
     let isLast: Bool
@@ -1888,7 +1903,7 @@ private struct SearchHomePhotoImage: View {
             if let image {
                 Image(uiImage: image)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1899,7 +1914,7 @@ private struct SearchHomePhotoImage: View {
                 imageLoadGeneration &+= 1
                 let generation = imageLoadGeneration
                 image = nil
-                let loaded = await PhotoLibrary.loadImage(
+                let loaded = await PhotoLibrary.loadPreviewImage(
                     for: result,
                     targetSize: targetSize
                 )

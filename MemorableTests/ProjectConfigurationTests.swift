@@ -760,6 +760,54 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(zoomableImage.contains("PhotoLibrary.loadPreviewImage("))
     }
 
+    func testSearchHomeKeepsPreviewCompositionAndUsesInterfaceTypography() throws {
+        let searchView = try contents(of: "Memorable/Views/SearchView.swift")
+        let memoryCard = try sourceSection(
+            in: searchView,
+            from: "private func todayMemoryView(",
+            to: "private var searchHistoryView: some View"
+        )
+        let homeImage = try sourceSection(
+            in: searchView,
+            from: "private struct SearchHomePhotoImage: View",
+            to: "private struct RecentSearchPlaceholder: View"
+        )
+        let recentSearchRow = try sourceSection(
+            in: searchView,
+            from: "private func recentSearchTimelineRow(",
+            to: "private func recentSearchMetadata("
+        )
+
+        XCTAssertFalse(memoryCard.contains("Date.now"))
+        XCTAssertFalse(memoryCard.contains("Celestial.Typography.memoryCaption"))
+        XCTAssertTrue(memoryCard.contains("Celestial.Typography.bodyStrong"))
+        XCTAssertTrue(memoryCard.contains("HStack(alignment: .center"))
+        XCTAssertTrue(memoryCard.contains(
+            ".frame(minHeight: SearchHomeCardMetrics.captionHeight)"
+        ))
+        XCTAssertTrue(memoryCard.contains(
+            ".aspectRatio(SearchHomeCardMetrics.imageAspectRatio, contentMode: .fit)"
+        ))
+        XCTAssertTrue(searchView.contains("static let imageAspectRatio: CGFloat = 4.0 / 3.0"))
+        XCTAssertTrue(searchView.contains("static let recentThumbnailWidth: CGFloat = 64"))
+        XCTAssertTrue(searchView.contains("static let recentThumbnailHeight: CGFloat = 48"))
+        XCTAssertTrue(recentSearchRow.contains(
+            "width: SearchHomeCardMetrics.recentThumbnailWidth * displayScale"
+        ))
+        XCTAssertTrue(recentSearchRow.contains(
+            "height: SearchHomeCardMetrics.recentThumbnailHeight * displayScale"
+        ))
+        XCTAssertTrue(recentSearchRow.contains(
+            "width: SearchHomeCardMetrics.recentThumbnailWidth,"
+        ))
+        XCTAssertTrue(recentSearchRow.contains(
+            "height: SearchHomeCardMetrics.recentThumbnailHeight"
+        ))
+        XCTAssertTrue(homeImage.contains("PhotoLibrary.loadPreviewImage("))
+        XCTAssertTrue(homeImage.contains(".scaledToFit()"))
+        XCTAssertFalse(homeImage.contains(".scaledToFill()"))
+    }
+
     func testValidatedSuggestionsAreExclusiveWithSearchHistory() throws {
         let searchView = try contents(of: "Memorable/Views/SearchView.swift")
         let homeView = try sourceSection(
