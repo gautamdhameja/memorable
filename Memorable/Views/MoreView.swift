@@ -314,19 +314,23 @@ struct MoreView: View {
 }
 
 struct PrivacyPolicyView: View {
-    private static let policyText: String = {
+    private static let policyText: AttributedString = {
         guard let url = Bundle.main.url(
             forResource: "PRIVACY_POLICY",
             withExtension: "txt"
         ) else {
             logger.error("[PrivacyPolicy] Bundled policy resource is missing")
-            return "The privacy policy is unavailable. Close and reopen Memorable, then try again."
+            return AttributedString("The privacy policy is unavailable. Close and reopen Memorable, then try again.")
         }
         do {
-            return try String(contentsOf: url, encoding: .utf8)
+            let text = try String(contentsOf: url, encoding: .utf8)
+            return try AttributedString(
+                markdown: text,
+                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+            )
         } catch {
             logger.error("[PrivacyPolicy] Could not read bundled policy: \(error.safeDiagnosticCode)")
-            return "The privacy policy is unavailable. Close and reopen Memorable, then try again."
+            return AttributedString("The privacy policy is unavailable. Close and reopen Memorable, then try again.")
         }
     }()
 
@@ -342,7 +346,7 @@ struct PrivacyPolicyView: View {
                     .padding(Celestial.Spacing.pageHorizontalInset)
             }
         }
-        .celestialNavigationTitle("Privacy")
+        .celestialNavigationTitle("Privacy policy")
     }
 }
 

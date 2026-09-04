@@ -1,67 +1,38 @@
-Privacy policy for Memorable: AI Photo Search
-Last updated: August 30, 2026
+**Privacy policy for Memorable: AI Photo Search**
+Last updated: September 5, 2026
 
-Overview
+Memorable analyzes photos, videos, and search queries on your iPhone. The developer does not receive them or collect usage data. The app has no accounts, ads, tracking, or analytics. Technical logs stay on your device; the app does not upload them.
 
-Memorable processes locally available photo and video contents and search query text on your iPhone. The developer does not operate a backend for the app and does not receive your photos, videos, queries, index, or usage activity.
+**Photo and folder access**
 
-Data the developer does not collect
+Memorable reads the photos and videos you allow it to access so you can search and view them. It does not download iCloud-only media. You can limit or revoke Photo Library access in iOS Settings.
 
-Memorable does not include developer-operated data collection. In particular, the app has:
+If you add a folder, Memorable reads images in that folder and saves permission to reopen it until you remove the folder source.
 
-- No developer account or backend service
-- No analytics or telemetry
-- No user tracking or advertising
-- No advertising identifier use
-- No third-party data-collection SDK
-- No external crash-report upload
+**Data stored on your iPhone**
 
-The app can write technical diagnostics to the local iOS logging system. The app does not upload those logs, and the developer does not receive them through Memorable.
+Memorable stores a search index, including image features, text found in images, dates, and locations. It also saves recent searches, smart albums, folder access permissions, and settings. AI processing runs on your device with bundled models.
 
-On-device processing
+The search database and folder access files use iOS file protection and are excluded from device backups.
 
-Memorable uses bundled Core ML models to analyze media and encode search text on your device. It stores generated embeddings, OCR text, scene labels, dates, dimensions, searchable place names, search history, and app settings locally.
+**Apple services**
 
-During indexing and search, photo and video contents and search query text are not sent to the developer, Apple's reverse-geocoding service, or an AI service. The app disables network access on PhotoKit media requests. As a result, it does not fetch iCloud-only media for indexing. User-initiated sharing, described below, provides one selected photo to the destination you choose.
+To find place names, Memorable may send GPS coordinates from your photos and videos to Apple's location services. These requests do not include media contents or search queries.
 
-Apple service traffic
+Apple processes Pro purchases and restores, and verifies purchase status. Its services handle the account, transaction, and device information needed for those functions.
 
-During indexing and commerce, Memorable uses two Apple-managed services that may use network access:
+**Sharing and playback**
 
-1. Apple reverse geocoding: If indexed media contains GPS metadata, Memorable may send its latitude and longitude coordinates to Apple's MapKit or Core Location reverse-geocoding service. Apple returns place names such as city, state, and country. Memorable stores those place names locally. It does not send the photo or video contents or your search query text with the request.
+A photo is shared only after you tap Share and choose a destination. The copy can include GPS, camera, date, and other embedded metadata. The destination's privacy policy applies to its use of the photo.
 
-2. Apple StoreKit: Memorable uses StoreKit for Pro product information, entitlement verification, purchases, restores, refunds, and transaction updates. StoreKit exchanges the account, product, transaction, and device information that Apple requires to provide those services. The developer does not receive photo contents, video contents, search query text, or the local search index through StoreKit.
+If you choose an AirPlay destination, Apple and that destination handle playback.
 
-Photo library access
+**Retention and deletion**
 
-Memorable requests Photo Library access to index and display media locally. You can limit or revoke this access in iOS Settings.
+Local data stays until you remove it or delete Memorable. You can clear recent searches and remove folder sources in the app. Removing a folder source deletes its search index and saved access permission. Re-indexing rebuilds search data; it keeps saved folders.
 
-User-initiated sharing
+Delete Memorable to remove its local data. This does not delete your original photos or videos.
 
-Memorable displays the iOS share sheet only after you tap Share for a photo. The app copies the locally available image resource without changing its bytes, then provides the copy to the Apple share sheet so you can choose a destination. The file can include the source image's embedded GPS, camera, date, and other metadata. The destination you select may transmit or store the image according to its own behavior and privacy policy. Memorable does not choose a destination, start sharing automatically, or receive the image or destination information through a developer backend. PhotoKit network access remains disabled while Memorable prepares the image.
+**Changes and contact**
 
-User-controlled playback
-
-Memorable allows AirPlay when you choose an external playback destination in the system player. Apple and the selected playback destination handle that connection. Picture in Picture continues playback through the local iOS system player. Memorable does not start external playback automatically or send playback data to the developer.
-
-Folder access
-
-If you use Pro to add a folder source, Memorable reads supported images only from the folder you select. It stores a security-scoped bookmark so it can reopen that folder. Bookmark files are protected and excluded from device backup. The app rejects special files, symbolic links, and paths outside the selected folder. It also bounds directory traversal and reads an immutable snapshot of each accepted file before image parsing.
-
-Memorable accepts up to 32 new folder registrations. If an earlier version already saved more folders, Memorable keeps all of them visible so you can remove them. Rebuilding the index preserves folder registrations and bookmarks, then schedules those folders for indexing when Pro is active. A confirmed loss of Pro access removes derived folder index rows but preserves the registrations and bookmarks so they can be indexed again after Pro is restored.
-
-Local storage and deletion
-
-Memorable stores its search database and app state in the app sandbox. The local data directory uses iOS complete-unless-open file protection and is excluded from iCloud and device backups. You can delete the search index in the app. Uninstalling Memorable removes the app's locally stored data according to iOS behavior.
-
-Children's privacy
-
-The developer does not collect personal data from users, including children.
-
-Policy changes
-
-An app update will include any material change to this policy.
-
-Contact
-
-For privacy questions, use the support page listed on the App Store product page.
+Policy changes are included in app updates. For privacy questions, use the support page listed on Memorable's App Store page.

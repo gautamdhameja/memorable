@@ -207,7 +207,7 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertFalse(sources.contains("UIPasteboard"))
         XCTAssertTrue(privacyPolicy.contains("only after you tap Share"))
         XCTAssertTrue(privacyPolicy.contains("choose a destination"))
-        XCTAssertTrue(privacyPolicy.contains("does not choose a destination, start sharing automatically"))
+        XCTAssertTrue(privacyPolicy.contains("GPS, camera, date, and other embedded metadata"))
     }
 
     func testAppSourcesDoNotCreateGeneralNetworkClients() throws {
@@ -523,7 +523,7 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(moreView.contains("NavigationLink(\"Licenses"))
         XCTAssertTrue(moreView.contains("LicensesView()"))
         XCTAssertTrue(moreView.contains("forResource: \"PRIVACY_POLICY\""))
-        XCTAssertTrue(bundledPolicy.contains("The developer does not operate a backend"))
+        XCTAssertTrue(bundledPolicy.contains("The developer does not receive them or collect usage data"))
         XCTAssertTrue(bundledPolicy.contains("only after you tap Share"))
     }
 
