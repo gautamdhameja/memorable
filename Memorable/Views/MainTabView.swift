@@ -449,8 +449,9 @@ private struct SearchPreparationShell: View {
                         }
                         .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                         .padding(.top, Celestial.Spacing.sectionGap)
+                        Spacer()
                     } else {
-                        HStack(spacing: 10) {
+                        VStack(spacing: 10) {
                             ProgressView()
                                 .controlSize(.small)
                                 .tint(Celestial.Colors.primaryFixedDim)
@@ -458,14 +459,11 @@ private struct SearchPreparationShell: View {
                             Text(statusText)
                                 .font(Celestial.Typography.supporting)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                            Spacer()
                         }
                         .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
-                        .padding(.top, Celestial.Spacing.sectionGap)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .accessibilityElement(children: .combine)
                     }
-
-                    Spacer()
                 }
             }
         }

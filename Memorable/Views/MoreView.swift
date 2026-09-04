@@ -212,6 +212,7 @@ struct MoreView: View {
             }
         }
         .padding(Celestial.Spacing.surfaceContentInset)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(GlassPanelModifier(cornerRadius: 20))
     }
 
