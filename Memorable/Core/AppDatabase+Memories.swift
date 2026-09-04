@@ -99,14 +99,78 @@ extension AppDatabase {
     }
 
     func onThisDayPhotos() throws -> [(year: Int, photos: [IndexedPhotoReference])] {
+        var yearGroups: [Int: [IndexedPhotoReference]] = [:]
+        for candidate in try distinctOnThisDayPhotos() {
+            yearGroups[candidate.year, default: []].append(candidate.photo)
+        }
+
+        return yearGroups
+            .sorted { $0.key > $1.key }
+            .map { (year: $0.key, photos: $0.value) }
+    }
+
+    func onThisDaySummary() throws -> OnThisDaySummary? {
+        var heroPhoto: IndexedPhotoReference?
+        var mostRecentYear = Int.min
+        var years = Set<Int>()
+        var photoCount = 0
+
+        for candidate in try distinctOnThisDayPhotos() {
+            if heroPhoto == nil {
+                heroPhoto = candidate.photo
+            }
+            mostRecentYear = max(mostRecentYear, candidate.year)
+            years.insert(candidate.year)
+            photoCount += 1
+        }
+
+        guard let heroPhoto else { return nil }
+        return OnThisDaySummary(
+            heroPhoto: heroPhoto,
+            mostRecentYear: mostRecentYear,
+            yearCount: years.count,
+            photoCount: photoCount
+        )
+    }
+
+    private struct OnThisDayCandidate {
+        let year: Int
+        let photo: IndexedPhotoReference
+        let embedding: Data
+    }
+
+    private func distinctOnThisDayPhotos() throws -> [(year: Int, photo: IndexedPhotoReference)] {
+        let candidates = try dbQueue.read { db in
+            try Self.fetchOnThisDayCandidates(in: db)
+        }
+        var results: [(year: Int, photo: IndexedPhotoReference)] = []
+        var acceptedCountsByYear: [Int: Int] = [:]
+        var duplicateFilters: [Int: MemoryDuplicateFilter] = [:]
+
+        for candidate in candidates {
+            if Task.isCancelled { throw CancellationError() }
+            if acceptedCountsByYear[candidate.year] == nil,
+               acceptedCountsByYear.count >= MemoryConfig.maximumOnThisDayYears {
+                break
+            }
+            guard acceptedCountsByYear[candidate.year, default: 0]
+                    < MemoryConfig.maximumOnThisDayPhotosPerYear else { continue }
+
+            var duplicateFilter = duplicateFilters[candidate.year] ?? MemoryDuplicateFilter()
+            guard duplicateFilter.accepts(candidate.embedding) else { continue }
+            duplicateFilters[candidate.year] = duplicateFilter
+            acceptedCountsByYear[candidate.year, default: 0] += 1
+            results.append((year: candidate.year, photo: candidate.photo))
+        }
+        return results
+    }
+
+    private static func fetchOnThisDayCandidates(in db: Database) throws -> [OnThisDayCandidate] {
         let calendar = Calendar.current
         let today = Date()
-        let currentMonth = calendar.component(.month, from: today)
-        let currentDay = calendar.component(.day, from: today)
-        let currentYear = calendar.component(.year, from: today)
-
-        return try dbQueue.read { db in
-            let sql = """
+        let cursor = try Row.fetchCursor(
+            db,
+            sql: """
                 SELECT id, localIdentifier, creationDate, sourceId, filePath, embedding
                 FROM indexed_photos
                 WHERE rowid IN (
@@ -122,47 +186,38 @@ extension AppDatabase {
                   AND cast(strftime('%Y', creationDate, 'localtime') as integer) < ?
                 ORDER BY creationDate DESC
                 LIMIT ?
-            """
-            let cursor = try Row.fetchCursor(
-                db,
-                sql: sql,
-                arguments: [
-                    SearchIndexLimits.maximumPhotoRows,
-                    currentMonth,
-                    currentDay,
-                    currentYear,
-                    MemoryConfig.maximumOnThisDayYears
-                        * MemoryConfig.maximumOnThisDayPhotosPerYear,
-                ]
-            )
-            var yearGroups: [Int: [IndexedPhotoReference]] = [:]
-            var duplicateFilters: [Int: MemoryDuplicateFilter] = [:]
-            while let row = try cursor.next() {
-                guard let date: Date = row["creationDate"] else { continue }
-                let year = calendar.component(.year, from: date)
-                if yearGroups[year] == nil,
-                   yearGroups.count >= MemoryConfig.maximumOnThisDayYears {
-                    break
-                }
-                guard yearGroups[year, default: []].count
-                        < MemoryConfig.maximumOnThisDayPhotosPerYear else { continue }
-                let embedding: Data = row["embedding"]
-                var duplicateFilter = duplicateFilters[year] ?? MemoryDuplicateFilter()
-                guard duplicateFilter.accepts(embedding) else { continue }
-                duplicateFilters[year] = duplicateFilter
-                yearGroups[year, default: []].append(IndexedPhotoReference(
+            """,
+            arguments: [
+                SearchIndexLimits.maximumPhotoRows,
+                calendar.component(.month, from: today),
+                calendar.component(.day, from: today),
+                calendar.component(.year, from: today),
+                MemoryConfig.maximumOnThisDayYears
+                    * MemoryConfig.maximumOnThisDayPhotosPerYear,
+            ]
+        )
+        var candidates: [OnThisDayCandidate] = []
+        candidates.reserveCapacity(
+            MemoryConfig.maximumOnThisDayYears * MemoryConfig.maximumOnThisDayPhotosPerYear
+        )
+
+        while let row = try cursor.next() {
+            if Task.isCancelled { throw CancellationError() }
+            guard let date: Date = row["creationDate"] else { continue }
+            let year = calendar.component(.year, from: date)
+            candidates.append(OnThisDayCandidate(
+                year: year,
+                photo: IndexedPhotoReference(
                     id: row["id"],
                     localIdentifier: row["localIdentifier"],
                     creationDate: date,
                     sourceId: row["sourceId"],
                     filePath: row["filePath"]
-                ))
-            }
-
-            return yearGroups
-                .sorted { $0.key > $1.key }
-                .map { (year: $0.key, photos: $0.value) }
+                ),
+                embedding: row["embedding"]
+            ))
         }
+        return candidates
     }
 
     // MARK: - Search History
@@ -203,12 +258,12 @@ extension AppDatabase {
                     "previewResultCount": preview?.resultCount,
                 ]
             )
-            // Keep only the most recent 20
+            // Keep only the bounded recent-history window.
             try db.execute(sql: """
                 DELETE FROM search_history WHERE id NOT IN (
-                    SELECT id FROM search_history ORDER BY searchedAt DESC LIMIT 20
+                    SELECT id FROM search_history ORDER BY searchedAt DESC LIMIT ?
                 )
-            """)
+            """, arguments: [SearchHistoryPolicy.maximumCount])
         }
     }
 
@@ -250,18 +305,22 @@ extension AppDatabase {
 
     func loadSearchHistory() throws -> [String] {
         try dbQueue.read { db in
-            try String.fetchAll(db, sql: "SELECT query FROM search_history ORDER BY searchedAt DESC LIMIT 20")
+            try String.fetchAll(
+                db,
+                sql: "SELECT query FROM search_history ORDER BY searchedAt DESC LIMIT ?",
+                arguments: [SearchHistoryPolicy.maximumCount]
+            )
         }
     }
 
     func loadSearchHistoryPreviews(limit: Int) throws -> [RecentSearchPreview] {
-        let boundedLimit = max(0, min(limit, 20))
+        let boundedLimit = max(0, min(limit, SearchHistoryPolicy.maximumCount))
         guard boundedLimit > 0 else { return [] }
         return try dbQueue.read { db in
             try Row.fetchAll(
                 db,
                 sql: """
-                    SELECT query, previewResultID, previewScore, previewLocalIdentifier,
+                    SELECT query, searchedAt, previewResultID, previewScore, previewLocalIdentifier,
                            previewCreationDate, previewIsVideo, previewBestFramePosition,
                            previewSourceId, previewFilePath, previewResultCount
                     FROM search_history
@@ -289,7 +348,8 @@ extension AppDatabase {
                 return RecentSearchPreview(
                     query: query,
                     result: result,
-                    resultCount: resultCount ?? 0
+                    resultCount: resultCount ?? 0,
+                    searchedAt: row["searchedAt"]
                 )
             }
         }
@@ -303,7 +363,11 @@ extension AppDatabase {
 
     func removeSearchHistory(at index: Int) throws {
         try dbQueue.write { db in
-            let rows = try Row.fetchAll(db, sql: "SELECT id FROM search_history ORDER BY searchedAt DESC LIMIT 20")
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT id FROM search_history ORDER BY searchedAt DESC LIMIT ?",
+                arguments: [SearchHistoryPolicy.maximumCount]
+            )
             guard index < rows.count else { return }
             let id: Int64 = rows[index]["id"]
             try db.execute(sql: "DELETE FROM search_history WHERE id = ?", arguments: [id])

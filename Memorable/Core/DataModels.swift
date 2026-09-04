@@ -88,6 +88,13 @@ struct IndexedPhotoReference: Identifiable, Sendable {
     }
 }
 
+struct OnThisDaySummary: Sendable {
+    let heroPhoto: IndexedPhotoReference
+    let mostRecentYear: Int
+    let yearCount: Int
+    let photoCount: Int
+}
+
 struct SlideshowPhoto: Identifiable, Sendable {
     let id: String
     let localIdentifier: String

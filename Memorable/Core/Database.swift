@@ -552,6 +552,7 @@ protocol DatabaseProtocol: Sendable {
 
     // Queries
     func onThisDayPhotos() throws -> [(year: Int, photos: [IndexedPhotoReference])]
+    func onThisDaySummary() throws -> OnThisDaySummary?
 
     // Search History
     func addSearchHistory(_ query: String) throws
@@ -588,6 +589,18 @@ enum FolderSourceDeletionError: LocalizedError, Equatable {
 }
 
 extension DatabaseProtocol {
+    func onThisDaySummary() throws -> OnThisDaySummary? {
+        let groups = try onThisDayPhotos().filter { !$0.photos.isEmpty }
+        guard let mostRecentGroup = groups.max(by: { $0.year < $1.year }),
+              let heroPhoto = mostRecentGroup.photos.first else { return nil }
+        return OnThisDaySummary(
+            heroPhoto: heroPhoto,
+            mostRecentYear: mostRecentGroup.year,
+            yearCount: groups.count,
+            photoCount: groups.reduce(0) { $0 + $1.photos.count }
+        )
+    }
+
     func updatePhotoLocations(_ updates: [LocationBackfillUpdate]) throws {
         for update in updates {
             try updatePhotoLocationStrings(

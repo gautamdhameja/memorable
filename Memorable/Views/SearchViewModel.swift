@@ -372,12 +372,10 @@ final class SearchViewModel: ObservableObject {
     }
 
     private func missingRecentSearchPreviewQueries() -> [String] {
-        RecentSearchHomePolicy.items(
+        RecentSearchHomePolicy.missingPreviewQueries(
             history: searchHistory,
             previews: recentSearchPreviews
-        ).compactMap { item in
-            item.preview == nil ? item.query : nil
-        }
+        )
     }
 
     private func backfillMissingRecentSearchPreviews(

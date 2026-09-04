@@ -1,6 +1,7 @@
 import SwiftUI
 import Photos
 import AVKit
+import Combine
 
 struct SearchView: View {
     @ObservedObject var indexingService: IndexingService
@@ -19,6 +20,11 @@ struct SearchView: View {
     @Environment(\.database) private var database
     @Environment(\.scenePhase) private var scenePhase
     @State private var smartAlbums: [SmartAlbum] = []
+    @State private var todayMemory: OnThisDaySummary?
+    @State private var isTodayMemoryResolved = false
+    @State private var todayMemoryLoadTask: Task<Void, Never>?
+    @State private var todayMemoryRefreshState = TodayMemoryRefreshState()
+    @State private var isViewVisible = false
     @State private var totalLibraryCount: Int = 0
     @State private var placeholderIndex: Int = 0
     @State private var placeholderTimer: Task<Void, Never>?
@@ -157,7 +163,9 @@ struct SearchView: View {
 
     var body: some View {
         let filteredSearchResults = viewModel.filteredResults(viewModel.results)
-        NavigationStack {
+        // Erase the large navigation subtree before attaching presentation and
+        // lifecycle observers so Swift can type-check each graph independently.
+        let navigationContent = AnyView(NavigationStack {
             ZStack {
                 CelestialBackdrop()
 
@@ -282,6 +290,9 @@ struct SearchView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .preferredColorScheme(.dark)
+        })
+
+        let presentedContent = navigationContent
             .fullScreenCover(item: $selectedPhoto) { result in
                 if result.isVideo {
                     Color.clear.onAppear {
@@ -322,11 +333,15 @@ struct SearchView: View {
             } message: {
                 Text("Close and reopen Memorable to complete the reset. Apple Photos are not changed. The reset deletes the local search index, search history, saved albums, and folder registrations. Rebuild the index and add folders again afterward.")
             }
+
+        let lifecycleContent = presentedContent
             .onAppear {
+                isViewVisible = true
                 viewModel.setSortMode(rawValue: sortModeRaw)
                 if indexingService.isReady {
                     startPlaceholderRotation()
                 }
+                requestTodayMemoryRefresh()
             }
             .task {
                 // Load DB-backed data off the main thread's critical path so
@@ -350,23 +365,46 @@ struct SearchView: View {
                     previews: data.previews
                 )
                 viewModel.startRecentSearchPreviewBackfill()
+                requestTodayMemoryRefresh()
 
                 let count = await libraryCount
                 guard !Task.isCancelled else { return }
                 totalLibraryCount = count
             }
             .onDisappear {
+                isViewVisible = false
                 placeholderTimer?.cancel()
                 cancelFindSimilar()
                 cancelPendingVideoPlayerPresentation()
                 viewModel.cancelRecentSearchPreviewBackfill()
+                todayMemoryLoadTask?.cancel()
+                todayMemoryRefreshState.cancel()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                 cancelFindSimilar()
                 viewModel.handleMemoryPressure()
             }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
+                    .merge(with: NotificationCenter.default.publisher(
+                        for: UIApplication.significantTimeChangeNotification
+                    ))
+            ) { _ in
+                todayMemory = nil
+                isTodayMemoryResolved = false
+                requestTodayMemoryRefresh()
+            }
+
+        let searchObservationContent = lifecycleContent
             .onChange(of: sortModeRaw) { _, newValue in
                 viewModel.setSortMode(rawValue: newValue)
+            }
+            .onChange(of: viewModel.queryText) { _, query in
+                if query.isEmpty {
+                    requestTodayMemoryRefresh()
+                } else {
+                    todayMemoryLoadTask?.cancel()
+                }
             }
             .onChange(of: proManager.isPro) { _, isPro in
                 guard !isPro else { return }
@@ -393,11 +431,13 @@ struct SearchView: View {
                 if indexingService.isReady {
                     startPlaceholderRotation()
                     viewModel.startRecentSearchPreviewBackfill()
+                    requestTodayMemoryRefresh()
                 }
             }
             .onChange(of: indexingService.progress.isRunning) { _, isRunning in
                 if !isRunning {
                     viewModel.startRecentSearchPreviewBackfill()
+                    requestTodayMemoryRefresh()
                 }
             }
             .onChange(of: semanticRuntime.readiness.isSemanticSearchReady) { _, isReady in
@@ -405,6 +445,8 @@ struct SearchView: View {
                     viewModel.startRecentSearchPreviewBackfill()
                 }
             }
+
+        searchObservationContent
             .onChange(of: indexingService.indexVersion) { oldValue, newValue in
                 #if DEBUG
                 logger.info("[SearchView] indexVersion changed \(oldValue) -> \(newValue); activeSearchID=\(viewModel.activeSearchID.map(String.init) ?? "nil"), results=\(viewModel.results.count), lastResults=\(viewModel.lastResults.count)")
@@ -414,6 +456,7 @@ struct SearchView: View {
                 // visible results here: background enrichment/reloads can advance
                 // indexVersion without invalidating the user's current UI.
                 viewModel.validateVisibleResults(reason: "indexVersion changed")
+                requestTodayMemoryRefresh()
             }
             .onChange(of: surpriseRequestID) { _, _ in
                 performSurpriseSearch()
@@ -421,6 +464,7 @@ struct SearchView: View {
             .onChange(of: searchHomeRequestID) { _, _ in
                 cancelFindSimilar()
                 viewModel.setQueryText("")
+                requestTodayMemoryRefresh()
             }
             .onChange(of: scenePhase) {
                 if scenePhase == .active {
@@ -440,11 +484,11 @@ struct SearchView: View {
 
                     viewModel.validateVisibleResults(reason: "foreground return")
                     viewModel.startRecentSearchPreviewBackfill()
+                    requestTodayMemoryRefresh()
                 } else {
                     viewModel.cancelRecentSearchPreviewBackfill()
                 }
             }
-        }
     }
 
     // MARK: - Search Bar
@@ -591,18 +635,30 @@ struct SearchView: View {
         return (canShowValidatedSuggestions && viewModel.shouldShowDiscoverySuggestions)
             || !smartAlbums.isEmpty
             || !viewModel.searchHistory.isEmpty
+            || todayMemory != nil
+            || !isTodayMemoryResolved
     }
 
     private var homeView: some View {
         VStack(alignment: .leading, spacing: 0) {
+            let primarySections = SearchHomeLayoutPolicy.primarySections(
+                isTodayMemoryResolved: isTodayMemoryResolved,
+                hasTodayMemory: todayMemory != nil,
+                hasRecentSearches: !viewModel.searchHistory.isEmpty
+            )
+            ForEach(primarySections, id: \.self) { section in
+                primaryHomeSection(section)
+                    .padding(
+                        .top,
+                        section == primarySections.first ? 0 : Celestial.Spacing.sectionGap
+                    )
+            }
             if canShowValidatedSuggestions && viewModel.shouldShowDiscoverySuggestions {
                 validatedSuggestionsView
+                    .padding(.top, primarySections.isEmpty ? 0 : Celestial.Spacing.sectionGap)
             }
             if !smartAlbums.isEmpty {
                 smartAlbumsView
-            }
-            if !viewModel.searchHistory.isEmpty {
-                searchHistoryView
             }
             if indexingService.hitFreeLimit
                 && totalLibraryCount > searchEngine.totalSize {
@@ -620,6 +676,45 @@ struct SearchView: View {
                     .padding(.top, 24)
             }
         }
+    }
+
+    @ViewBuilder
+    private func primaryHomeSection(_ section: SearchHomePrimarySection) -> some View {
+        switch section {
+        case .todayMemoryLoading:
+            todayMemoryLoadingView
+        case .todayMemory:
+            if let todayMemory {
+                todayMemoryView(todayMemory)
+            }
+        case .recentSearches:
+            searchHistoryView
+                .allowsHitTesting(isTodayMemoryResolved)
+                .accessibilityHidden(!isTodayMemoryResolved)
+        }
+    }
+
+    private var todayMemoryLoadingView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Today in Your Memories")
+                .font(Celestial.Typography.bodyEmphasized)
+                .foregroundStyle(Celestial.Colors.onSurface)
+                .padding(.horizontal, 2)
+
+            HStack(alignment: .top, spacing: 13) {
+                Color.clear
+                    .frame(width: 44)
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Celestial.Colors.surfaceContainerLow.opacity(0.48))
+                    .frame(height: 236)
+                    .overlay {
+                        ProgressView()
+                            .tint(Celestial.Colors.primaryDim)
+                            .accessibilityLabel("Looking for today's memories")
+                    }
+            }
+        }
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
     }
 
     private var validatedSuggestionsView: some View {
@@ -842,6 +937,69 @@ struct SearchView: View {
 
     // MARK: - Recent Queries
 
+    private func todayMemoryView(_ memory: OnThisDaySummary) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Today in Your Memories")
+                    .font(Celestial.Typography.bodyEmphasized)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Spacer()
+                Text("View memories")
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            }
+            .padding(.horizontal, 2)
+
+            HStack(alignment: .top, spacing: 13) {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(Date.now.formatted(.dateTime.day(.twoDigits)))
+                        .font(Celestial.Typography.interfaceTitle3)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                    Text(Date.now.formatted(.dateTime.month(.abbreviated)).uppercased())
+                        .font(Celestial.Typography.microEmphasized)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                }
+                .frame(width: 44, alignment: .trailing)
+                .padding(.top, 8)
+
+                NavigationLink {
+                    OnThisDayView(captionService: captionService)
+                } label: {
+                    VStack(alignment: .leading, spacing: 0) {
+                        SearchHomePhotoImage(
+                            result: memory.heroPhoto.searchResult,
+                            targetSize: CGSize(width: 1_100, height: 680)
+                        )
+                        .frame(height: 178)
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(memoryTitle(memory))
+                                .font(Celestial.Typography.memoryCaption)
+                                .foregroundStyle(Celestial.Colors.onSurface)
+                            Text(memorySummary(memory))
+                                .font(Celestial.Typography.caption)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 13)
+                    }
+                    .background(Celestial.Colors.surfaceContainerLow.opacity(0.74))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(Celestial.Colors.hairline, lineWidth: 0.8)
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Today in Your Memories, \(memoryTitle(memory))")
+                .accessibilityHint("Opens memories from this day")
+            }
+        }
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+    }
+
     private var searchHistoryView: some View {
         let items = RecentSearchHomePolicy.items(
             history: viewModel.searchHistory,
@@ -850,7 +1008,7 @@ struct SearchView: View {
 
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Recent searches")
+                Text("Recent Searches")
                     .font(Celestial.Typography.bodyEmphasized)
                     .foregroundStyle(Celestial.Colors.onSurface)
                 Spacer()
@@ -868,86 +1026,73 @@ struct SearchView: View {
                 .accessibilityLabel("Recent search options")
             }
             .padding(.leading, 2)
-            .padding(.bottom, 10)
+            .padding(.bottom, 8)
 
-            if let newest = items.first {
-                recentSearchCard(newest, prominence: .primary)
-
-                let olderItems = Array(items.dropFirst())
-                if !olderItems.isEmpty {
-                    LazyVGrid(
-                        columns: [
-                            GridItem(
-                                .flexible(),
-                                spacing: Celestial.Spacing.stackedContainerGap
-                            ),
-                            GridItem(.flexible()),
-                        ],
-                        alignment: .leading,
-                        spacing: Celestial.Spacing.stackedContainerGap
-                    ) {
-                        ForEach(olderItems) { item in
-                            recentSearchCard(item, prominence: .secondary)
-                        }
-                    }
-                    .padding(.top, Celestial.Spacing.stackedContainerGap)
+            LazyVStack(spacing: 0) {
+                ForEach(items) { item in
+                    recentSearchTimelineRow(
+                        item,
+                        isFirst: item.id == items.first?.id,
+                        isLast: item.id == items.last?.id
+                    )
                 }
             }
         }
         .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
     }
 
-    private func recentSearchCard(
+    private func recentSearchTimelineRow(
         _ item: RecentSearchHomeItem,
-        prominence: RecentSearchCardProminence
+        isFirst: Bool,
+        isLast: Bool
     ) -> some View {
         Button {
             viewModel.setQueryText(item.query)
             performSearch(saveToHistory: true)
         } label: {
-            ZStack(alignment: .bottomLeading) {
-                if let preview = item.preview,
-                   FolderResultAccessPolicy.allows(
-                       sourceId: preview.result.sourceId,
-                       isPro: proManager.isPro
-                   ) {
-                    RecentSearchPreviewImage(
-                        result: preview.result,
-                        targetSize: prominence.targetSize
-                    )
-                } else {
-                    RecentSearchPlaceholder()
-                }
+            HStack(spacing: 12) {
+                RecentSearchTimelineRail(isFirst: isFirst, isLast: isLast)
 
-                LinearGradient(
-                    colors: [.clear, Color.black.opacity(0.2), Color.black.opacity(0.88)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                Group {
+                    if let preview = item.preview,
+                       FolderResultAccessPolicy.allows(
+                           sourceId: preview.result.sourceId,
+                           isPro: proManager.isPro
+                       ) {
+                        SearchHomePhotoImage(
+                            result: preview.result,
+                            targetSize: CGSize(width: 280, height: 220)
+                        )
+                    } else {
+                        RecentSearchPlaceholder()
+                    }
+                }
+                .frame(width: 66, height: 54)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.query)
-                        .font(
-                            prominence == .primary
-                                ? Celestial.Typography.bodyEmphasized
-                                : Celestial.Typography.supportingEmphasized
-                        )
-                        .foregroundStyle(.white)
+                        .font(Celestial.Typography.supportingEmphasized)
+                        .foregroundStyle(Celestial.Colors.onSurface)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
 
-                    recentSearchMetadata(item, prominence: prominence)
+                    if let metadata = recentSearchMetadata(item) {
+                        Text(metadata)
+                            .font(Celestial.Typography.micro)
+                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                            .lineLimit(1)
+                    }
                 }
-                .padding(prominence == .primary ? 16 : 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(Celestial.Typography.microStrong)
+                    .foregroundStyle(Celestial.Colors.outlineVariant)
+                    .accessibilityHidden(true)
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: prominence.height)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Celestial.Colors.outlineVariant.opacity(0.36), lineWidth: 0.7)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .frame(minHeight: 68)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -961,27 +1106,18 @@ struct SearchView: View {
         .accessibilityHint("Runs this recent search")
     }
 
-    @ViewBuilder
-    private func recentSearchMetadata(
-        _ item: RecentSearchHomeItem,
-        prominence: RecentSearchCardProminence
-    ) -> some View {
-        let resultCount = item.preview?.resultCount ?? 0
-        if prominence == .primary || resultCount > 0 {
-            HStack(spacing: 5) {
-                if prominence == .primary {
-                    Text("Most recent")
-                    if resultCount > 0 {
-                        Text("·")
-                    }
-                }
-                if resultCount > 0 {
-                    Text("\(resultCount.formatted()) \(resultCount == 1 ? "result" : "results")")
-                }
-            }
-            .font(Celestial.Typography.micro)
-            .foregroundStyle(Color.white.opacity(0.72))
+    private func recentSearchMetadata(_ item: RecentSearchHomeItem) -> String? {
+        guard let preview = item.preview else { return nil }
+        var parts: [String] = []
+        if let searchedAt = preview.searchedAt {
+            parts.append(relativeSearchDate(searchedAt))
         }
+        if preview.resultCount > 0 {
+            parts.append(
+                "\(preview.resultCount.formatted()) \(preview.resultCount == 1 ? "result" : "results")"
+            )
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     // MARK: - Last Results (when search cleared)
@@ -1631,6 +1767,63 @@ struct SearchView: View {
         return "Other \"\(summary.visualQuery)\" matches"
     }
 
+    private func memoryTitle(_ memory: OnThisDaySummary) -> String {
+        let currentYear = Calendar.current.component(.year, from: Date())
+        let yearsAgo = max(1, currentYear - memory.mostRecentYear)
+        return "\(yearsAgo) \(yearsAgo == 1 ? "year" : "years") ago today"
+    }
+
+    private func memorySummary(_ memory: OnThisDaySummary) -> String {
+        let photos = "\(memory.photoCount.formatted()) \(memory.photoCount == 1 ? "photo" : "photos")"
+        guard memory.yearCount > 1 else { return photos }
+        return "\(photos) across \(memory.yearCount.formatted()) years"
+    }
+
+    private func relativeSearchDate(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        if calendar.component(.year, from: date) == calendar.component(.year, from: Date()) {
+            return date.formatted(.dateTime.month(.abbreviated).day())
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+
+    private func requestTodayMemoryRefresh() {
+        let canStart = todayMemoryLoadTask == nil
+            && isViewVisible
+            && indexingService.isReady
+            && !indexingService.progress.isRunning
+            && viewModel.queryText.isEmpty
+            && viewModel.results.isEmpty
+            && viewModel.lastResults.isEmpty
+        guard todayMemoryRefreshState.request(canStart: canStart) else { return }
+
+        let database = database
+        todayMemoryLoadTask = Task { @MainActor in
+            var wasCancelled = false
+            do {
+                let summary = try await CancellableDetachedOperation.run {
+                    try database.onThisDaySummary()
+                }
+                wasCancelled = Task.isCancelled
+                if !wasCancelled {
+                    todayMemory = summary
+                    isTodayMemoryResolved = true
+                }
+            } catch is CancellationError {
+                wasCancelled = true
+            } catch {
+                logger.error("Failed to refresh today's memories: \(error.safeDiagnosticCode)")
+                isTodayMemoryResolved = true
+            }
+            todayMemoryLoadTask = nil
+            if todayMemoryRefreshState.finish(wasCancelled: wasCancelled) {
+                requestTodayMemoryRefresh()
+            }
+        }
+    }
+
     private func performSearch(saveToHistory: Bool = false) {
         guard !viewModel.normalizedQuery.isEmpty else { return }
         Haptics.light()
@@ -1639,26 +1832,33 @@ struct SearchView: View {
 
 }
 
-private enum RecentSearchCardProminence {
-    case primary
-    case secondary
+private struct RecentSearchTimelineRail: View {
+    let isFirst: Bool
+    let isLast: Bool
 
-    var height: CGFloat {
-        switch self {
-        case .primary: return 198
-        case .secondary: return 150
+    var body: some View {
+        ZStack {
+            VStack(spacing: 0) {
+                Rectangle()
+                    .fill(isFirst ? Color.clear : Celestial.Colors.primaryDim.opacity(0.24))
+                Rectangle()
+                    .fill(isLast ? Color.clear : Celestial.Colors.primaryDim.opacity(0.24))
+            }
+            .frame(width: 1)
+            Circle()
+                .fill(Celestial.Colors.primaryDim)
+                .frame(width: 7, height: 7)
+                .overlay {
+                    Circle()
+                        .stroke(Celestial.Colors.background, lineWidth: 2)
+                }
         }
-    }
-
-    var targetSize: CGSize {
-        switch self {
-        case .primary: return CGSize(width: 1_050, height: 620)
-        case .secondary: return CGSize(width: 540, height: 480)
-        }
+        .frame(width: 10, height: 68)
+        .accessibilityHidden(true)
     }
 }
 
-private struct RecentSearchPreviewImage: View {
+private struct SearchHomePhotoImage: View {
     let result: SearchResult
     let targetSize: CGSize
     @State private var image: UIImage?

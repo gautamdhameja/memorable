@@ -4,6 +4,16 @@ import os
 import CoreLocation
 @testable import Memorable
 
+private extension RecentSearchPreview {
+    var withoutSearchDate: RecentSearchPreview {
+        RecentSearchPreview(
+            query: query,
+            result: result,
+            resultCount: resultCount
+        )
+    }
+}
+
 private final class FailingResetFileManager: FileManager, @unchecked Sendable {
     private let failingPath: String
 
@@ -224,7 +234,9 @@ final class DatabaseTests: XCTestCase {
         try database.addSearchHistory(preview.query, preview: preview)
 
         XCTAssertEqual(try database.loadSearchHistory(), ["California 2022"])
-        XCTAssertEqual(try database.loadSearchHistoryPreviews(limit: 3), [preview])
+        let storedPreviews = try database.loadSearchHistoryPreviews(limit: 3)
+        XCTAssertEqual(storedPreviews.map(\.withoutSearchDate), [preview])
+        XCTAssertNotNil(storedPreviews.first?.searchedAt)
 
         try database.clearSearchHistory()
 
@@ -286,7 +298,9 @@ final class DatabaseTests: XCTestCase {
         try database.backfillSearchHistoryPreviews([preview])
 
         XCTAssertEqual(try database.loadSearchHistory(), originalOrder)
-        XCTAssertEqual(try database.loadSearchHistoryPreviews(limit: 3), [preview])
+        let storedPreviews = try database.loadSearchHistoryPreviews(limit: 3)
+        XCTAssertEqual(storedPreviews.map(\.withoutSearchDate), [preview])
+        XCTAssertNotNil(storedPreviews.first?.searchedAt)
     }
 
     func testSearchHistoryScoreMigrationCompletesPartialPreviewUpgrade() throws {
@@ -319,7 +333,9 @@ final class DatabaseTests: XCTestCase {
 
         try database.addSearchHistory(preview.query, preview: preview)
 
-        XCTAssertEqual(try database.loadSearchHistoryPreviews(limit: 3), [preview])
+        let storedPreviews = try database.loadSearchHistoryPreviews(limit: 3)
+        XCTAssertEqual(storedPreviews.map(\.withoutSearchDate), [preview])
+        XCTAssertNotNil(storedPreviews.first?.searchedAt)
     }
 
     func testDuplicateSearchReplacesPreviewAndRemovalDeletesIt() throws {
@@ -356,7 +372,9 @@ final class DatabaseTests: XCTestCase {
         try database.addSearchHistory(replacement.query, preview: replacement)
 
         XCTAssertEqual(try database.loadSearchHistory(), ["california"])
-        XCTAssertEqual(try database.loadSearchHistoryPreviews(limit: 3), [replacement])
+        let storedPreviews = try database.loadSearchHistoryPreviews(limit: 3)
+        XCTAssertEqual(storedPreviews.map(\.withoutSearchDate), [replacement])
+        XCTAssertNotNil(storedPreviews.first?.searchedAt)
 
         try database.removeSearchHistory(at: 0)
 
@@ -405,6 +423,7 @@ final class DatabaseTests: XCTestCase {
         }
 
         XCTAssertTrue(try database.onThisDayPhotos().isEmpty)
+        XCTAssertNil(try database.onThisDaySummary())
         XCTAssertNotEqual(try database.fetchRandomPhoto(sharp: true)?.id, "outside")
     }
 
@@ -428,6 +447,13 @@ final class DatabaseTests: XCTestCase {
         distinct.creationDate = memoryDate
         distinct.embedding = floatVector(second: 1).toFloat16Data()
         distinct.sharpnessScore = 90
+        var olderDistinct = makePhoto(localIdentifier: "older-distinct")
+        olderDistinct.id = "older-distinct"
+        olderDistinct.creationDate = try XCTUnwrap(
+            Calendar.current.date(byAdding: .year, value: -2, to: Date())
+        )
+        olderDistinct.embedding = floatVector(first: 0.7, second: 0.7).toFloat16Data()
+        olderDistinct.sharpnessScore = 90
         var screenshot = makePhoto(localIdentifier: "screenshot")
         screenshot.id = "screenshot"
         screenshot.creationDate = memoryDate
@@ -440,7 +466,7 @@ final class DatabaseTests: XCTestCase {
         document.sharpnessScore = 90
 
         try database.insertPhotos(
-            [duplicateOne, duplicateTwo, distinct, screenshot, document],
+            [duplicateOne, duplicateTwo, distinct, olderDistinct, screenshot, document],
             completingRequiredRebuild: false
         )
 
@@ -450,14 +476,29 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(retainedIDs, ["duplicate-1", "distinct"])
 
         let onThisDayIDs = Set(try database.onThisDayPhotos().flatMap { $0.photos.map(\.id) })
-        XCTAssertEqual(onThisDayIDs.count, 2)
+        XCTAssertEqual(onThisDayIDs.count, 3)
         XCTAssertTrue(onThisDayIDs.contains("distinct"))
+        XCTAssertTrue(onThisDayIDs.contains("older-distinct"))
         XCTAssertEqual(onThisDayIDs.intersection(["duplicate-1", "duplicate-2"]).count, 1)
         XCTAssertFalse(onThisDayIDs.contains("screenshot"))
         XCTAssertFalse(onThisDayIDs.contains("document"))
 
+        let summary = try XCTUnwrap(database.onThisDaySummary())
+        XCTAssertTrue(onThisDayIDs.contains(summary.heroPhoto.id))
+        XCTAssertEqual(
+            summary.mostRecentYear,
+            Calendar.current.component(.year, from: memoryDate)
+        )
+        XCTAssertEqual(summary.yearCount, 2)
+        XCTAssertEqual(summary.photoCount, 3)
+
         let randomID = try database.fetchRandomPhoto(sharp: true)?.id
-        XCTAssertTrue(randomID == "duplicate-1" || randomID == "duplicate-2" || randomID == "distinct")
+        XCTAssertTrue(
+            randomID == "duplicate-1"
+                || randomID == "duplicate-2"
+                || randomID == "distinct"
+                || randomID == "older-distinct"
+        )
     }
 
     func testMemoryClassificationMigrationBackfillsExistingRowsWithoutDeletingThem() throws {

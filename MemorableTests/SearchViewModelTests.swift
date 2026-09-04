@@ -12,6 +12,61 @@ final class SearchViewModelTests: XCTestCase {
         case failure
     }
 
+    func testSearchHomeLayoutPlacesRecentSearchesFirstWhenMemoryIsAbsent() {
+        XCTAssertEqual(
+            SearchHomeLayoutPolicy.primarySections(
+                isTodayMemoryResolved: true,
+                hasTodayMemory: false,
+                hasRecentSearches: true
+            ),
+            [.recentSearches]
+        )
+        XCTAssertEqual(
+            SearchHomeLayoutPolicy.primarySections(
+                isTodayMemoryResolved: true,
+                hasTodayMemory: true,
+                hasRecentSearches: true
+            ),
+            [.todayMemory, .recentSearches]
+        )
+        XCTAssertEqual(
+            SearchHomeLayoutPolicy.primarySections(
+                isTodayMemoryResolved: false,
+                hasTodayMemory: false,
+                hasRecentSearches: true
+            ),
+            [.todayMemoryLoading, .recentSearches]
+        )
+    }
+
+    func testTodayMemoryRefreshStateCoalescesRequestsAndDefersBlockedWork() {
+        var state = TodayMemoryRefreshState()
+
+        XCTAssertFalse(state.request(canStart: false))
+        XCTAssertTrue(state.needsRefresh)
+        XCTAssertTrue(state.request(canStart: true))
+        XCTAssertTrue(state.isLoading)
+        XCTAssertFalse(state.request(canStart: true))
+        XCTAssertTrue(state.needsRefresh)
+        XCTAssertTrue(state.finish(wasCancelled: false))
+        XCTAssertFalse(state.isLoading)
+        XCTAssertTrue(state.request(canStart: true))
+    }
+
+    func testTodayMemoryRefreshStateCancellationKeepsRefreshPending() {
+        var state = TodayMemoryRefreshState()
+
+        XCTAssertTrue(state.request(canStart: true))
+        XCTAssertTrue(state.finish(wasCancelled: true))
+        XCTAssertTrue(state.needsRefresh)
+        XCTAssertFalse(state.isLoading)
+
+        XCTAssertTrue(state.request(canStart: true))
+        state.cancel()
+        XCTAssertTrue(state.needsRefresh)
+        XCTAssertFalse(state.isLoading)
+    }
+
     @MainActor
     func testEditingTextDoesNotCancelSubmittedSearch() async throws {
         let searcher = ControlledSearcher()
@@ -116,7 +171,7 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertEqual(model.recentSearchPreviews, [currentPreview])
     }
 
-    func testRecentSearchHomePolicyLimitsHistoryAndPreservesMissingPreviewFallbacks() {
+    func testRecentSearchHomePolicyShowsCompleteHistoryAndPreservesMissingPreviewFallbacks() {
         let secondPreview = RecentSearchPreview(
             query: "Dogs at the beach",
             result: Self.result(id: "dogs"),
@@ -128,11 +183,15 @@ final class SearchViewModelTests: XCTestCase {
             previews: [secondPreview]
         )
 
-        XCTAssertEqual(items.map(\.query), ["California 2022", "dogs at the beach", "family cooking"])
-        XCTAssertEqual(items.map(\.historyIndex), [0, 1, 2])
+        XCTAssertEqual(
+            items.map(\.query),
+            ["California 2022", "dogs at the beach", "family cooking", "fourth"]
+        )
+        XCTAssertEqual(items.map(\.historyIndex), [0, 1, 2, 3])
         XCTAssertNil(items[0].preview)
         XCTAssertEqual(items[1].preview?.result.id, "dogs")
         XCTAssertNil(items[2].preview)
+        XCTAssertNil(items[3].preview)
     }
 
     @MainActor
