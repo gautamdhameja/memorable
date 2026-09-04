@@ -212,6 +212,42 @@ extension AppDatabase {
         }
     }
 
+    func backfillSearchHistoryPreviews(_ previews: [RecentSearchPreview]) throws {
+        guard !previews.isEmpty else { return }
+        try dbQueue.write { db in
+            for preview in previews {
+                try db.execute(
+                    sql: """
+                        UPDATE search_history
+                        SET previewResultID = :previewResultID,
+                            previewScore = :previewScore,
+                            previewLocalIdentifier = :previewLocalIdentifier,
+                            previewCreationDate = :previewCreationDate,
+                            previewIsVideo = :previewIsVideo,
+                            previewBestFramePosition = :previewBestFramePosition,
+                            previewSourceId = :previewSourceId,
+                            previewFilePath = :previewFilePath,
+                            previewResultCount = :previewResultCount
+                        WHERE LOWER(query) = LOWER(:query)
+                          AND (previewResultID IS NULL OR previewLocalIdentifier IS NULL)
+                        """,
+                    arguments: [
+                        "query": preview.query,
+                        "previewResultID": preview.result.id,
+                        "previewScore": preview.result.score,
+                        "previewLocalIdentifier": preview.result.localIdentifier,
+                        "previewCreationDate": preview.result.creationDate,
+                        "previewIsVideo": preview.result.isVideo,
+                        "previewBestFramePosition": preview.result.bestFramePosition,
+                        "previewSourceId": preview.result.sourceId,
+                        "previewFilePath": preview.result.filePath,
+                        "previewResultCount": preview.resultCount,
+                    ]
+                )
+            }
+        }
+    }
+
     func loadSearchHistory() throws -> [String] {
         try dbQueue.read { db in
             try String.fetchAll(db, sql: "SELECT query FROM search_history ORDER BY searchedAt DESC LIMIT 20")

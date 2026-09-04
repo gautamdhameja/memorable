@@ -54,11 +54,19 @@ struct SearchView: View {
             isSemanticSearchReady: { semanticRuntime.readiness.isSemanticSearchReady },
             isIndexReady: { indexingService.isReady },
             isIndexLoaded: { searchEngine.isIndexLoaded },
+            isMaintenanceWorkIdle: { !indexingService.progress.isRunning },
             prepareForSearch: { try await semanticRuntime.prepareForSearch() },
             search: { query in
                 try await searchEngine.search(
                     query: query,
                     featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro)
+                )
+            },
+            searchForHistoryPreview: { query in
+                try await searchEngine.search(
+                    query: query,
+                    featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro),
+                    recordsUserTiming: false
                 )
             },
             detectScreenshotIDs: { searchResults in
@@ -138,6 +146,7 @@ struct SearchView: View {
                     resultCount: $2
                 )
             },
+            backfillHistoryPreviews: { SearchHistory.backfill(previews: $0) },
             loadHistory: { SearchHistory.load() },
             loadHistoryPreviews: { SearchHistory.loadPreviews() },
             clearHistory: { SearchHistory.clear() },
@@ -340,6 +349,7 @@ struct SearchView: View {
                     data.history,
                     previews: data.previews
                 )
+                viewModel.startRecentSearchPreviewBackfill()
 
                 let count = await libraryCount
                 guard !Task.isCancelled else { return }
@@ -349,6 +359,7 @@ struct SearchView: View {
                 placeholderTimer?.cancel()
                 cancelFindSimilar()
                 cancelPendingVideoPlayerPresentation()
+                viewModel.cancelRecentSearchPreviewBackfill()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                 cancelFindSimilar()
@@ -381,6 +392,17 @@ struct SearchView: View {
                 #endif
                 if indexingService.isReady {
                     startPlaceholderRotation()
+                    viewModel.startRecentSearchPreviewBackfill()
+                }
+            }
+            .onChange(of: indexingService.progress.isRunning) { _, isRunning in
+                if !isRunning {
+                    viewModel.startRecentSearchPreviewBackfill()
+                }
+            }
+            .onChange(of: semanticRuntime.readiness.isSemanticSearchReady) { _, isReady in
+                if isReady {
+                    viewModel.startRecentSearchPreviewBackfill()
                 }
             }
             .onChange(of: indexingService.indexVersion) { oldValue, newValue in
@@ -417,6 +439,9 @@ struct SearchView: View {
                     }
 
                     viewModel.validateVisibleResults(reason: "foreground return")
+                    viewModel.startRecentSearchPreviewBackfill()
+                } else {
+                    viewModel.cancelRecentSearchPreviewBackfill()
                 }
             }
         }

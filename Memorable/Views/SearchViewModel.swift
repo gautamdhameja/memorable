@@ -32,11 +32,14 @@ final class SearchViewModel: ObservableObject {
         let isSemanticSearchReady: () -> Bool
         let isIndexReady: () -> Bool
         let isIndexLoaded: () -> Bool
+        let isMaintenanceWorkIdle: () -> Bool
         let prepareForSearch: () async throws -> Void
         let search: (String) async throws -> SearchResponse
+        let searchForHistoryPreview: (String) async throws -> SearchResponse
         let detectScreenshotIDs: ([SearchResult]) async -> Set<String>
         let validResultIDs: ([SearchResult]) async -> Set<String>
         let addHistory: (String, SearchResult, Int) -> Void
+        let backfillHistoryPreviews: ([RecentSearchPreview]) -> Bool
         let loadHistory: () -> [String]
         let loadHistoryPreviews: () -> [RecentSearchPreview]
         let clearHistory: () -> Void
@@ -75,6 +78,9 @@ final class SearchViewModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var visibleResultValidationTask: Task<Void, Never>?
     private var screenshotDetectionTask: Task<Void, Never>?
+    private var recentSearchPreviewBackfillTask: Task<Void, Never>?
+    private var recentSearchPreviewBackfillSequence = 0
+    private var recentSearchPreviewNoResultQueries = Set<String>()
 
     init(dependencies: Dependencies) {
         self.dependencies = dependencies
@@ -103,6 +109,9 @@ final class SearchViewModel: ObservableObject {
 
     func setQueryText(_ value: String) {
         queryText = QueryInputPolicy.bounded(value)
+        if !normalizedQuery.isEmpty {
+            cancelRecentSearchPreviewBackfill()
+        }
         guard normalizedQuery.isEmpty else { return }
 
         #if DEBUG
@@ -123,6 +132,7 @@ final class SearchViewModel: ObservableObject {
         isSearching = false
         activeSearchID = nil
         searchTask = nil
+        startRecentSearchPreviewBackfill()
     }
 
     func setSortMode(rawValue: String) {
@@ -221,6 +231,7 @@ final class SearchViewModel: ObservableObject {
         searchTask?.cancel()
         visibleResultValidationTask?.cancel()
         screenshotDetectionTask?.cancel()
+        cancelRecentSearchPreviewBackfill()
         searchTask = nil
         visibleResultValidationTask = nil
         screenshotDetectionTask = nil
@@ -258,6 +269,7 @@ final class SearchViewModel: ObservableObject {
         let query = normalizedQuery
         guard !query.isEmpty else { return }
 
+        cancelRecentSearchPreviewBackfill()
         cancelActiveSearch(reason: "new search submitted")
         validationSequence += 1
         visibleResultValidationTask?.cancel()
@@ -326,6 +338,84 @@ final class SearchViewModel: ObservableObject {
 
     func waitForCurrentSearch() async {
         await searchTask?.value
+    }
+
+    func startRecentSearchPreviewBackfill() {
+        guard recentSearchPreviewBackfillTask == nil,
+              normalizedQuery.isEmpty,
+              isSearchHistoryLoaded,
+              dependencies.isSemanticSearchReady(),
+              dependencies.isIndexReady(),
+              dependencies.isMaintenanceWorkIdle() else { return }
+
+        let missingQueries = missingRecentSearchPreviewQueries().filter {
+            !recentSearchPreviewNoResultQueries.contains($0)
+        }
+        guard !missingQueries.isEmpty else { return }
+
+        recentSearchPreviewBackfillSequence += 1
+        let backfillID = recentSearchPreviewBackfillSequence
+        recentSearchPreviewBackfillTask = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            await backfillMissingRecentSearchPreviews(missingQueries, backfillID: backfillID)
+        }
+    }
+
+    func waitForRecentSearchPreviewBackfill() async {
+        await recentSearchPreviewBackfillTask?.value
+    }
+
+    func cancelRecentSearchPreviewBackfill() {
+        // Retain the handle until the task's defer clears it so a
+        // non-cooperative search cannot overlap a replacement backfill.
+        recentSearchPreviewBackfillTask?.cancel()
+    }
+
+    private func missingRecentSearchPreviewQueries() -> [String] {
+        RecentSearchHomePolicy.items(
+            history: searchHistory,
+            previews: recentSearchPreviews
+        ).compactMap { item in
+            item.preview == nil ? item.query : nil
+        }
+    }
+
+    private func backfillMissingRecentSearchPreviews(
+        _ missingQueries: [String],
+        backfillID: Int
+    ) async {
+        defer {
+            if recentSearchPreviewBackfillSequence == backfillID {
+                recentSearchPreviewBackfillTask = nil
+            }
+        }
+        var previews: [RecentSearchPreview] = []
+        previews.reserveCapacity(missingQueries.count)
+        for query in missingQueries {
+            guard !Task.isCancelled, normalizedQuery.isEmpty else { return }
+            do {
+                let response = try await dependencies.searchForHistoryPreview(query)
+                guard !Task.isCancelled, normalizedQuery.isEmpty else { return }
+                guard let previewResult = response.results.first else {
+                    recentSearchPreviewNoResultQueries.insert(query)
+                    continue
+                }
+                previews.append(RecentSearchPreview(
+                    query: query,
+                    result: previewResult,
+                    resultCount: response.results.count
+                ))
+            } catch is CancellationError {
+                return
+            } catch {
+                logger.error("Failed to backfill recent search preview: \(error.safeDiagnosticCode)")
+            }
+        }
+        guard !Task.isCancelled,
+              normalizedQuery.isEmpty,
+              recentSearchPreviewBackfillSequence == backfillID else { return }
+        guard dependencies.backfillHistoryPreviews(previews) else { return }
+        setSearchHistory(dependencies.loadHistory())
     }
 
     func waitForVisibleResultValidation() async {

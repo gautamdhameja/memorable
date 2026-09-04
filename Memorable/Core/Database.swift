@@ -556,6 +556,7 @@ protocol DatabaseProtocol: Sendable {
     // Search History
     func addSearchHistory(_ query: String) throws
     func addSearchHistory(_ query: String, preview: RecentSearchPreview?) throws
+    func backfillSearchHistoryPreviews(_ previews: [RecentSearchPreview]) throws
     func loadSearchHistory() throws -> [String]
     func loadSearchHistoryPreviews(limit: Int) throws -> [RecentSearchPreview]
     func clearSearchHistory() throws

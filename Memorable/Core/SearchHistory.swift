@@ -85,6 +85,17 @@ class SearchHistory {
         }
     }
 
+    @discardableResult
+    static func backfill(previews: [RecentSearchPreview]) -> Bool {
+        do {
+            try db.backfillSearchHistoryPreviews(previews)
+            return true
+        } catch {
+            logger.error("Failed to backfill search history preview: \(error.safeDiagnosticCode)")
+            return false
+        }
+    }
+
     static func clear() {
         do {
             try db.clearSearchHistory()

@@ -136,6 +136,92 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testBackfillsVisibleLegacySearchPreviewsWithoutPublishingSearchResults() async {
+        var storedPreviews: [RecentSearchPreview] = []
+        var backfilledQueries: [String] = []
+        let model = makeModel(
+            search: { query in
+                Self.response(ids: ["preview-\(query)"])
+            },
+            loadHistory: { ["newest", "middle", "oldest", "hidden"] },
+            loadHistoryPreviews: { storedPreviews },
+            backfillHistoryPreviews: { previews in
+                backfilledQueries.append(contentsOf: previews.map(\.query))
+                storedPreviews.append(contentsOf: previews)
+                return true
+            }
+        )
+        model.setSearchHistory(["newest", "middle", "oldest", "hidden"])
+
+        model.startRecentSearchPreviewBackfill()
+        await model.waitForRecentSearchPreviewBackfill()
+
+        XCTAssertEqual(backfilledQueries, ["newest", "middle", "oldest"])
+        XCTAssertEqual(model.recentSearchPreviews.map(\.query), ["newest", "middle", "oldest"])
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertTrue(model.queryText.isEmpty)
+    }
+
+    @MainActor
+    func testTypingCancelsLegacyPreviewBackfillBeforeItCanPublish() async {
+        let searcher = ControlledSearcher()
+        var backfilledQueries: [String] = []
+        let model = makeModel(
+            search: { query in try await searcher.search(query: query) },
+            loadHistory: { ["legacy"] },
+            backfillHistoryPreviews: { previews in
+                backfilledQueries.append(contentsOf: previews.map(\.query))
+                return true
+            }
+        )
+        model.setSearchHistory(["legacy"])
+        model.startRecentSearchPreviewBackfill()
+        await searcher.waitUntilCalled(with: "legacy")
+
+        model.setQueryText("new search")
+        await searcher.complete(query: "legacy", with: Self.response(ids: ["late-preview"]))
+        await model.waitForRecentSearchPreviewBackfill()
+
+        XCTAssertTrue(backfilledQueries.isEmpty)
+        XCTAssertEqual(model.queryText, "new search")
+    }
+
+    @MainActor
+    func testPersistenceFailureLeavesLegacyPreviewEligibleForRetry() async {
+        var searchCount = 0
+        var persistenceCount = 0
+        var storedPreviews: [RecentSearchPreview] = []
+        let model = makeModel(
+            search: { _ in
+                XCTFail("Legacy preview repair must not use the user-search path")
+                return Self.response(ids: [])
+            },
+            searchForHistoryPreview: { _ in
+                searchCount += 1
+                return Self.response(ids: ["preview"])
+            },
+            loadHistory: { ["legacy"] },
+            loadHistoryPreviews: { storedPreviews },
+            backfillHistoryPreviews: { previews in
+                persistenceCount += 1
+                guard persistenceCount > 1 else { return false }
+                storedPreviews = previews
+                return true
+            }
+        )
+        model.setSearchHistory(["legacy"])
+
+        model.startRecentSearchPreviewBackfill()
+        await model.waitForRecentSearchPreviewBackfill()
+        model.startRecentSearchPreviewBackfill()
+        await model.waitForRecentSearchPreviewBackfill()
+
+        XCTAssertEqual(searchCount, 2)
+        XCTAssertEqual(persistenceCount, 2)
+        XCTAssertEqual(model.recentSearchPreviews.map(\.result.id), ["preview"])
+    }
+
+    @MainActor
     func testSearchPublishesAndClearingQueryRemovesRestrictionDisclosure() async {
         let restriction = SearchRestrictionSummary(features: [.location, .date])
         let model = makeModel(search: { _ in
@@ -393,11 +479,14 @@ final class SearchViewModelTests: XCTestCase {
             isSemanticSearchReady: { false },
             isIndexReady: { false },
             isIndexLoaded: { false },
+            isMaintenanceWorkIdle: { true },
             prepareForSearch: { throw ExpectedError.failure },
             search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
+            searchForHistoryPreview: { _ in XCTFail("Preview search should not run"); return Self.response(ids: []) },
             detectScreenshotIDs: { _ in [] },
             validResultIDs: { _ in [] },
             addHistory: { _, _, _ in },
+            backfillHistoryPreviews: { _ in true },
             loadHistory: { [] },
             loadHistoryPreviews: { [] },
             clearHistory: {},
@@ -422,11 +511,14 @@ final class SearchViewModelTests: XCTestCase {
             isSemanticSearchReady: { false },
             isIndexReady: { false },
             isIndexLoaded: { false },
+            isMaintenanceWorkIdle: { true },
             prepareForSearch: { throw UnknownError.failure },
             search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
+            searchForHistoryPreview: { _ in XCTFail("Preview search should not run"); return Self.response(ids: []) },
             detectScreenshotIDs: { _ in [] },
             validResultIDs: { _ in [] },
             addHistory: { _, _, _ in },
+            backfillHistoryPreviews: { _ in true },
             loadHistory: { [] },
             loadHistoryPreviews: { [] },
             clearHistory: {},
@@ -471,11 +563,14 @@ final class SearchViewModelTests: XCTestCase {
             isSemanticSearchReady: { false },
             isIndexReady: { false },
             isIndexLoaded: { false },
+            isMaintenanceWorkIdle: { true },
             prepareForSearch: {},
             search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
+            searchForHistoryPreview: { _ in XCTFail("Preview search should not run"); return Self.response(ids: []) },
             detectScreenshotIDs: { _ in [] },
             validResultIDs: { _ in [] },
             addHistory: { _, _, _ in },
+            backfillHistoryPreviews: { _ in true },
             loadHistory: { [] },
             loadHistoryPreviews: { [] },
             clearHistory: {},
@@ -497,22 +592,27 @@ final class SearchViewModelTests: XCTestCase {
     private func makeModel(
         prioritizeUserSearch: @escaping () -> Void = {},
         search: @escaping (String) async throws -> SearchResponse,
+        searchForHistoryPreview: ((String) async throws -> SearchResponse)? = nil,
         validate: @escaping ([SearchResult]) async -> Set<String> = { results in Set(results.map(\.id)) },
         detectScreenshots: @escaping ([SearchResult]) async -> Set<String> = { _ in [] },
         addHistory: @escaping (String, SearchResult, Int) -> Void = { _, _, _ in },
         loadHistory: @escaping () -> [String] = { [] },
-        loadHistoryPreviews: @escaping () -> [RecentSearchPreview] = { [] }
+        loadHistoryPreviews: @escaping () -> [RecentSearchPreview] = { [] },
+        backfillHistoryPreviews: @escaping ([RecentSearchPreview]) -> Bool = { _ in true }
     ) -> SearchViewModel {
         SearchViewModel(dependencies: .init(
             prioritizeUserSearch: prioritizeUserSearch,
             isSemanticSearchReady: { true },
             isIndexReady: { true },
             isIndexLoaded: { true },
+            isMaintenanceWorkIdle: { true },
             prepareForSearch: {},
             search: search,
+            searchForHistoryPreview: searchForHistoryPreview ?? search,
             detectScreenshotIDs: detectScreenshots,
             validResultIDs: validate,
             addHistory: addHistory,
+            backfillHistoryPreviews: backfillHistoryPreviews,
             loadHistory: loadHistory,
             loadHistoryPreviews: loadHistoryPreviews,
             clearHistory: {},

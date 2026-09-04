@@ -261,6 +261,34 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(columns.contains("previewScore"))
     }
 
+    func testBackfillingLegacySearchPreviewPreservesHistoryOrder() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.addSearchHistory("oldest")
+        try database.addSearchHistory("middle")
+        try database.addSearchHistory("newest")
+        let originalOrder = try database.loadSearchHistory()
+        let preview = RecentSearchPreview(
+            query: "middle",
+            result: SearchResult(
+                id: "photo-middle",
+                score: 0.83,
+                localIdentifier: "local-middle",
+                creationDate: nil,
+                isVideo: false,
+                bestFramePosition: nil
+            ),
+            resultCount: 9
+        )
+
+        try database.backfillSearchHistoryPreviews([preview])
+
+        XCTAssertEqual(try database.loadSearchHistory(), originalOrder)
+        XCTAssertEqual(try database.loadSearchHistoryPreviews(limit: 3), [preview])
+    }
+
     func testSearchHistoryScoreMigrationCompletesPartialPreviewUpgrade() throws {
         let queue = try DatabaseQueue()
         try AppDatabase.migrator.migrate(
