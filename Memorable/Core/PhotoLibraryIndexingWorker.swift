@@ -29,6 +29,23 @@ enum VideoPersistenceOperation {
     }
 }
 
+/// Cancellation can roll back a transaction, but cannot hide a committed
+/// replacement from the caller responsible for invalidating search caches.
+enum IndexedMediaReplacementOperation {
+    static func run(_ operation: @escaping @Sendable () throws -> Void) async throws {
+        try Task.checkCancellation()
+        let task = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            try operation()
+        }
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+}
+
 private struct PhotoAssetBatchCursor {
     private let assets: PHFetchResult<PHAsset>
     private let batchSize: Int
@@ -112,11 +129,14 @@ final class PhotoLibraryIndexingWorker {
         return await persist(photos)
     }
 
+    @MainActor
     final class Session {
         let videoAssets: PHFetchResult<PHAsset>
         let isPro: Bool
         let startedAt: CFAbsoluteTime
         let hasMediaCandidates: Bool
+        let indexedAt: Date
+        let forcedVideoRefreshIDs: Set<String>
         var indexedMediaCount: Int
         var hitFreeLimit: Bool
         var wasInterrupted = false
@@ -127,7 +147,9 @@ final class PhotoLibraryIndexingWorker {
             startedAt: CFAbsoluteTime,
             hasMediaCandidates: Bool,
             indexedMediaCount: Int,
-            hitFreeLimit: Bool = false
+            hitFreeLimit: Bool = false,
+            indexedAt: Date = Date(),
+            forcedVideoRefreshIDs: Set<String> = []
         ) {
             self.videoAssets = videoAssets
             self.isPro = isPro
@@ -135,6 +157,8 @@ final class PhotoLibraryIndexingWorker {
             self.hasMediaCandidates = hasMediaCandidates
             self.indexedMediaCount = indexedMediaCount
             self.hitFreeLimit = hitFreeLimit
+            self.indexedAt = indexedAt
+            self.forcedVideoRefreshIDs = forcedVideoRefreshIDs
         }
     }
 
@@ -147,6 +171,7 @@ final class PhotoLibraryIndexingWorker {
         let setHitFreeLimit: (Bool) -> Void
         let shouldStartNextBatch: () -> Bool
         let reloadSearchIndex: () async -> Bool
+        let didReplaceMedia: (String) -> Void
     }
 
     private struct LoadedPhotoBatch {
@@ -171,7 +196,11 @@ final class PhotoLibraryIndexingWorker {
         self.callbacks = callbacks
     }
 
-    func indexPhotos() async -> Session {
+    func indexPhotos(
+        forcedPhotoRefreshIDs: Set<String> = [],
+        forcedVideoRefreshIDs: Set<String> = []
+    ) async -> Session {
+        let indexedAt = Date()
         async let photoFetch = Task.detached(priority: .userInitiated) {
             PhotoLibrary.fetchMedia(ofType: .image)
         }.value
@@ -210,7 +239,9 @@ final class PhotoLibraryIndexingWorker {
             isPro: isPro,
             startedAt: startedAt,
             hasMediaCandidates: photoAssets.count > 0 || videoAssets.count > 0,
-            indexedMediaCount: indexedMediaCount
+            indexedMediaCount: indexedMediaCount,
+            indexedAt: indexedAt,
+            forcedVideoRefreshIDs: forcedVideoRefreshIDs
         )
 
         #if DEBUG
@@ -242,6 +273,7 @@ final class PhotoLibraryIndexingWorker {
         defer { nextLoadTask?.cancel() }
         var batch: [IndexedPhoto] = []
         var reservedAssetCount = 0
+        var replacementVersions: [String: IndexedMediaVersion] = [:]
         let prefetchEnabled = isPro && IndexingConfig.prefetchBatchCapacity > 0
 
         func makeBatch() async -> [PHAsset] {
@@ -251,20 +283,22 @@ final class PhotoLibraryIndexingWorker {
                 reservedAssetCount: reservedAssetCount,
                 isPro: isPro
             )
-            let selection = batchCursor.nextBatch(maxCount: remainingAllowed)
+            // Still visit existing rows when the free tier is full: refreshing
+            // one of its retained items does not consume another media slot.
+            let selection = batchCursor.nextBatch()
             guard !selection.isEmpty else { return [] }
             let identifiers = selection.map(\.localIdentifier)
             let screenshotIdentifiers = Set(selection.compactMap { asset in
                 asset.mediaSubtypes.contains(.photoScreenshot) ? asset.localIdentifier : nil
             })
-            let existing: Set<String>
+            let existing: [String: IndexedMediaVersion]
             do {
                 let db = database
                 let screenshots = screenshotIdentifiers
                 existing = try await Task.detached(priority: .utility) {
-                    let existing = try db.existingPhotoIdentifiers(in: identifiers)
+                    let existing = try db.indexedPhotoVersions(in: identifiers)
                     try db.markPhotoScreenshots(
-                        localIdentifiers: screenshots.intersection(existing)
+                        localIdentifiers: screenshots.intersection(existing.keys)
                     )
                     return existing
                 }.value
@@ -272,8 +306,29 @@ final class PhotoLibraryIndexingWorker {
                 logger.error("Failed to check indexed photo batch: \(error.safeDiagnosticCode)")
                 return []
             }
-            let assets = selection.filter { !existing.contains($0.localIdentifier) }
-            reservedAssetCount += assets.count
+            var newCount = 0
+            let assets = selection.filter { asset in
+                let version = existing[asset.localIdentifier]
+                let canAdd = remainingAllowed.map({ newCount < $0 }) ?? true
+                switch IndexedMediaFreshness.selection(
+                    indexed: version, modifiedAt: asset.modificationDate,
+                    forced: forcedPhotoRefreshIDs.contains(asset.localIdentifier), canAddMedia: canAdd
+                ) {
+                case .replace:
+                    replacementVersions[asset.localIdentifier] = version
+                    return true
+                case .skip:
+                    if version == nil && !canAdd {
+                        populatedSession.hitFreeLimit = true
+                        markIndexLimitReached(isPro: isPro)
+                    }
+                    return false
+                case .insert:
+                    newCount += 1
+                    return true
+                }
+            }
+            reservedAssetCount += newCount
             let skippedCount = selection.count - assets.count
             if skippedCount > 0 {
                 indexed += skippedCount
@@ -305,11 +360,6 @@ final class PhotoLibraryIndexingWorker {
                 populatedSession.wasInterrupted = true
                 break
             }
-            if !FreeTier.canIndexMore(indexedMediaCount: populatedSession.indexedMediaCount, isPro: isPro) {
-                populatedSession.hitFreeLimit = true
-                markIndexLimitReached(isPro: isPro)
-                break
-            }
 
             let loadTask: Task<LoadedPhotoBatch, Never>
             if let prefetchedTask = nextLoadTask {
@@ -334,7 +384,11 @@ final class PhotoLibraryIndexingWorker {
             guard !Task.isCancelled else { break }
             let batchAssets = loadedBatch.assets
             let loadedImages = loadedBatch.loadedImages
-            reservedAssetCount = max(0, reservedAssetCount - batchAssets.count)
+            let batchReplacements = replacementVersions.filter { key, _ in
+                batchAssets.contains { $0.localIdentifier == key }
+            }
+            for asset in batchAssets { replacementVersions.removeValue(forKey: asset.localIdentifier) }
+            reservedAssetCount = max(0, reservedAssetCount - (batchAssets.count - batchReplacements.count))
 
             guard !loadedImages.isEmpty else {
                 indexed += batchAssets.count
@@ -350,6 +404,11 @@ final class PhotoLibraryIndexingWorker {
 
                 for (i, loadedImage) in loadedImages.enumerated() {
                     guard i < embeddings.count else { break }
+                    if let replacement = batchReplacements[loadedImage.asset.localIdentifier] {
+                        await replacePhoto(asset: loadedImage.asset, embedding: embeddings[i],
+                                           version: replacement, indexedAt: indexedAt)
+                        continue
+                    }
                     guard FreeTier.canIndexMore(
                         indexedMediaCount: populatedSession.indexedMediaCount + batch.count,
                         isPro: isPro
@@ -359,7 +418,7 @@ final class PhotoLibraryIndexingWorker {
                         break
                     }
                     let asset = loadedImage.asset
-                    batch.append(makeIndexedPhoto(asset: asset, embedding: embeddings[i]))
+                    batch.append(makeIndexedPhoto(asset: asset, embedding: embeddings[i], indexedAt: indexedAt))
                 }
             } catch is CancellationError {
                 break
@@ -369,7 +428,8 @@ final class PhotoLibraryIndexingWorker {
                     guard Self.shouldContinuePhotoFallback(isCancelled: Task.isCancelled) else {
                         break
                     }
-                    guard FreeTier.canIndexMore(
+                    let replacement = batchReplacements[loadedImage.asset.localIdentifier]
+                    guard replacement != nil || FreeTier.canIndexMore(
                         indexedMediaCount: populatedSession.indexedMediaCount + batch.count,
                         isPro: isPro
                     ) else {
@@ -383,7 +443,12 @@ final class PhotoLibraryIndexingWorker {
                             image: loadedImage.image
                         )
                         try Task.checkCancellation()
-                        batch.append(makeIndexedPhoto(asset: loadedImage.asset, embedding: embedding))
+                        if let replacement {
+                            await replacePhoto(asset: loadedImage.asset, embedding: embedding,
+                                               version: replacement, indexedAt: indexedAt)
+                        } else {
+                            batch.append(makeIndexedPhoto(asset: loadedImage.asset, embedding: embedding, indexedAt: indexedAt))
+                        }
                     } catch is CancellationError {
                         break
                     } catch {
@@ -420,10 +485,6 @@ final class PhotoLibraryIndexingWorker {
                 ) {
                     populatedSession.hitFreeLimit = true
                     markIndexLimitReached(isPro: isPro)
-                    indexed += batchAssets.count
-                    currentProgress.completed = indexed
-                    progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)
-                    break
                 }
             }
 
@@ -471,7 +532,7 @@ final class PhotoLibraryIndexingWorker {
         var indexed = 0
         var currentProgress = callbacks.currentProgress()
         var progressPublisher = IndexingProgressPublisher()
-        if session.videoAssets.count > 0 && !Task.isCancelled && !session.hitFreeLimit {
+        if session.videoAssets.count > 0 && !Task.isCancelled {
             currentProgress = IndexingProgress(
                 total: session.videoAssets.count,
                 completed: indexed,
@@ -485,7 +546,7 @@ final class PhotoLibraryIndexingWorker {
             progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)
         }
 
-        var existingVideos: Set<String> = []
+        var existingVideos: [String: IndexedMediaVersion] = [:]
         for index in 0..<session.videoAssets.count {
             if Task.isCancelled { break }
             guard !Self.shouldInterruptBeforeNextBatch(
@@ -507,7 +568,7 @@ final class PhotoLibraryIndexingWorker {
                 do {
                     let db = database
                     existingVideos = try await Task.detached(priority: .utility) {
-                        try db.existingVideoIdentifiers(in: identifiers)
+                        try db.indexedVideoVersions(in: identifiers)
                     }.value
                 } catch {
                     logger.error("Failed to check indexed video batch: \(error.safeDiagnosticCode)")
@@ -515,24 +576,28 @@ final class PhotoLibraryIndexingWorker {
                 }
             }
             let asset = session.videoAssets.object(at: index)
-            if existingVideos.contains(asset.localIdentifier) {
+            let existingVersion = existingVideos[asset.localIdentifier]
+            let canAdd = FreeTier.canIndexMore(indexedMediaCount: session.indexedMediaCount, isPro: session.isPro)
+            if IndexedMediaFreshness.selection(
+                indexed: existingVersion, modifiedAt: asset.modificationDate,
+                forced: session.forcedVideoRefreshIDs.contains(asset.localIdentifier), canAddMedia: canAdd
+            ) == .skip {
+                if existingVersion == nil && !canAdd {
+                    session.hitFreeLimit = true
+                    markIndexLimitReached(isPro: session.isPro)
+                }
                 indexed += 1
                 currentProgress.completed = indexed
                 progressPublisher.publish(currentProgress, using: callbacks.setProgress)
                 continue
             }
-            if !FreeTier.canIndexMore(indexedMediaCount: session.indexedMediaCount, isPro: session.isPro) {
-                session.hitFreeLimit = true
-                markIndexLimitReached(isPro: session.isPro)
-                break
-            }
-            let outcome = await indexVideo(asset: asset)
+            let outcome = await indexVideo(asset: asset, replacing: existingVersion, indexedAt: session.indexedAt)
             if outcome.completedRequiredRebuild {
                 callbacks.completeRequiredRebuild()
             }
             session.indexedMediaCount = Self.updatedMediaCount(
                 current: session.indexedMediaCount,
-                videoPersisted: outcome.persisted
+                videoPersisted: outcome.persisted && existingVersion == nil
             )
             indexed += 1
             currentProgress.completed = indexed
@@ -560,7 +625,7 @@ final class PhotoLibraryIndexingWorker {
         #endif
     }
 
-    private func makeIndexedPhoto(asset: PHAsset, embedding: [Float]) -> IndexedPhoto {
+    private func makeIndexedPhoto(asset: PHAsset, embedding: [Float], indexedAt: Date) -> IndexedPhoto {
         IndexedPhoto(
             id: UUID().uuidString,
             localIdentifier: asset.localIdentifier,
@@ -570,13 +635,30 @@ final class PhotoLibraryIndexingWorker {
             pixelWidth: asset.pixelWidth,
             pixelHeight: asset.pixelHeight,
             embedding: embedding.toFloat16Data(),
-            indexedAt: Date(),
+            indexedAt: indexedAt,
             isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot)
                 || MemoryContentPolicy.isLikelyScreenshotDimensions(
                     width: asset.pixelWidth,
                     height: asset.pixelHeight
                 )
         )
+    }
+
+    private func replacePhoto(
+        asset: PHAsset, embedding: [Float], version: IndexedMediaVersion, indexedAt: Date
+    ) async {
+        var photo = makeIndexedPhoto(asset: asset, embedding: embedding, indexedAt: indexedAt)
+        photo.id = version.id
+        let replacement = photo
+        let db = database
+        do {
+            try await IndexedMediaReplacementOperation.run { try db.replacePhoto(replacement) }
+            callbacks.didReplaceMedia(asset.localIdentifier)
+        } catch is CancellationError {
+            return
+        } catch {
+            logger.error("Failed to refresh indexed photo: \(error.safeDiagnosticCode)")
+        }
     }
 
     private func markIndexLimitReached(isPro: Bool) {
@@ -683,7 +765,9 @@ final class PhotoLibraryIndexingWorker {
     }
 
     /// Separates successful persistence from the optional rebuild-state transition.
-    private func indexVideo(asset: PHAsset) async -> VideoIndexingOutcome {
+    private func indexVideo(
+        asset: PHAsset, replacing version: IndexedMediaVersion?, indexedAt: Date
+    ) async -> VideoIndexingOutcome {
         let durationSeconds = asset.duration
         guard durationSeconds > 0 else { return .notPersisted }
 
@@ -695,7 +779,7 @@ final class PhotoLibraryIndexingWorker {
         }
         guard !Task.isCancelled, !frames.isEmpty else { return .notPersisted }
 
-        let videoId = UUID().uuidString
+        let videoId = version?.id ?? UUID().uuidString
         let video = IndexedVideo(
             id: videoId,
             localIdentifier: asset.localIdentifier,
@@ -706,7 +790,7 @@ final class PhotoLibraryIndexingWorker {
             pixelWidth: asset.pixelWidth,
             pixelHeight: asset.pixelHeight,
             frameCount: frames.count,
-            indexedAt: Date()
+            indexedAt: indexedAt
         )
 
         do {
@@ -721,13 +805,20 @@ final class PhotoLibraryIndexingWorker {
                     videoId: videoId,
                     framePosition: frame.position,
                     embedding: embeddings[i].toFloat16Data(),
-                    indexedAt: Date()
+                    indexedAt: indexedAt
                 ))
             }
             try Task.checkCancellation()
             let db = database
             let shouldCompleteRequiredRebuild = callbacks.rebuildRequired()
             let persistedFrames = frameRecords
+            if version != nil {
+                try await IndexedMediaReplacementOperation.run {
+                    try db.replaceVideo(video, frames: persistedFrames)
+                }
+                callbacks.didReplaceMedia(asset.localIdentifier)
+                return .persisted(completedRequiredRebuild: false)
+            }
             let completedRequiredRebuild = try await VideoPersistenceOperation.run {
                 return try db.insertVideo(
                     video,

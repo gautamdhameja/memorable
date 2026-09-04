@@ -88,6 +88,72 @@ extension AppDatabase {
         )
     }
 
+    func indexedPhotoVersions(in localIdentifiers: [String]) throws -> [String: IndexedMediaVersion] {
+        try indexedMediaVersions(localIdentifiers, table: "indexed_photos", column: "localIdentifier")
+    }
+
+    func indexedVideoVersions(in localIdentifiers: [String]) throws -> [String: IndexedMediaVersion] {
+        try indexedMediaVersions(localIdentifiers, table: "indexed_videos", column: "localIdentifier")
+    }
+
+    func indexedFolderVersions(in filePaths: [String], sourceId: String) throws -> [String: IndexedMediaVersion] {
+        try indexedMediaVersions(filePaths, table: "indexed_photos", column: "filePath", sourceId: sourceId)
+    }
+
+    private func indexedMediaVersions(
+        _ values: [String], table: String, column: String, sourceId: String? = nil
+    ) throws -> [String: IndexedMediaVersion] {
+        guard !values.isEmpty else { return [:] }
+        return try dbQueue.read { db in
+            var versions: [String: IndexedMediaVersion] = [:]
+            for chunk in values.chunked(into: 899) {
+                try Task.checkCancellation()
+                let placeholders = chunk.map { _ in "?" }.joined(separator: ",")
+                let sourceClause = sourceId == nil ? "" : " AND sourceId = ?"
+                let arguments = chunk + (sourceId.map { [$0] } ?? [])
+                for row in try Row.fetchAll(db, sql: """
+                    SELECT id, \(column) AS sourceKey, indexedAt FROM \(table)
+                    WHERE \(column) IN (\(placeholders))\(sourceClause)
+                    """, arguments: StatementArguments(arguments)) {
+                    versions[row["sourceKey"] as String] = IndexedMediaVersion(
+                        id: row["id"], indexedAt: row["indexedAt"]
+                    )
+                }
+            }
+            return versions
+        }
+    }
+
+    /// A refresh cannot insert a row removed by another operation. Keep the
+    /// stable identity and reset every derived value in the same transaction.
+    func replacePhoto(_ replacement: IndexedPhoto) throws {
+        try requireIndexingWrites()
+        var photo = try Self.sanitizedForPersistence(replacement)
+        photo.ocrText = nil
+        photo.sharpnessScore = nil
+        photo.sceneLabels = nil
+        photo.isDocumentImage = false
+        photo.enrichmentComplete = false
+        photo.locationCity = nil
+        photo.locationState = nil
+        photo.locationCountry = nil
+        photo.locationName = nil
+        try dbQueue.write { db in
+            try Task.checkCancellation()
+            guard let current = try IndexedPhoto.fetchOne(db, key: photo.id),
+                  current.localIdentifier == photo.localIdentifier,
+                  current.sourceId == photo.sourceId else {
+                throw DatabaseCapabilityError.unavailable
+            }
+            try photo.update(db)
+            try db.execute(sql: """
+                UPDATE indexed_photos SET enrichmentAttemptedAt = NULL, locationRetryAfter = NULL
+                WHERE id = ?
+                """, arguments: [photo.id])
+            try Task.checkCancellation()
+        }
+    }
+
     func markPhotoScreenshots(localIdentifiers: Set<String>) throws {
         guard !localIdentifiers.isEmpty else { return }
         try dbQueue.write { db in
@@ -187,9 +253,9 @@ extension AppDatabase {
                         (SELECT id FROM indexed_photos ORDER BY rowid DESC LIMIT 1) AS latestPhotoID,
                         (SELECT id FROM indexed_videos ORDER BY rowid DESC LIMIT 1) AS latestVideoID,
                         (SELECT id FROM indexed_video_frames ORDER BY rowid DESC LIMIT 1) AS latestVideoFrameID,
-                        (SELECT indexedAt FROM indexed_photos ORDER BY rowid DESC LIMIT 1) AS latestPhotoIndexedAt,
-                        (SELECT indexedAt FROM indexed_videos ORDER BY rowid DESC LIMIT 1) AS latestVideoIndexedAt,
-                        (SELECT indexedAt FROM indexed_video_frames ORDER BY rowid DESC LIMIT 1) AS latestVideoFrameIndexedAt
+                        (SELECT MAX(indexedAt) FROM indexed_photos) AS latestPhotoIndexedAt,
+                        (SELECT MAX(indexedAt) FROM indexed_videos) AS latestVideoIndexedAt,
+                        (SELECT MAX(indexedAt) FROM indexed_video_frames) AS latestVideoFrameIndexedAt
                 """
             ) else {
                 throw DatabaseCapabilityError.unavailable

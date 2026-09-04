@@ -363,8 +363,9 @@ final class TemporalParserTests: XCTestCase {
         XCTAssertTrue(hints.textQuery.contains("vacation"))
         XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), 2023)
         XCTAssertEqual(cal.component(.month, from: hints.dateRange!.start), 1)
-        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.end), 2023)
-        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.end), 12)
+        XCTAssertEqual(cal.component(.year, from: hints.dateRange!.end), 2024)
+        XCTAssertEqual(cal.component(.month, from: hints.dateRange!.end), 1)
+        XCTAssertTrue(hints.dateRange!.endIsExclusive)
     }
 
     func testBareYear2024() {
@@ -373,10 +374,109 @@ final class TemporalParserTests: XCTestCase {
         XCTAssertEqual(cal.component(.year, from: hints.dateRange!.start), 2024)
     }
 
-    func testYearBelowRangeNotMatched() {
+    func testHistoricalYearIsSupported() {
         let hints = QueryParserFallback.parse(query: "photos 1999")
-        // "1999" doesn't match the /\b(20\d{2})\b/ pattern
-        XCTAssertNil(hints.dateRange)
+        XCTAssertEqual(hints.dateRange.map { cal.component(.year, from: $0.start) }, 1999)
+    }
+
+    func testExplicitDatesPrecedeMonthAndYearFragments() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 4))!
+        let examples: [(String, Int, Int, Int)] = [
+            ("january 15 2022", 2022, 1, 15),
+            ("jan. 15th, 2010", 2010, 1, 15),
+            ("15 january 2010", 2010, 1, 15),
+            ("2022-03-14", 2022, 3, 14),
+            ("2035-02-28", 2035, 2, 28),
+        ]
+        for (query, year, month, day) in examples {
+            let hints = QueryParserFallback.parse(query: "dog \(query)", now: now, calendar: calendar)
+            let range = try XCTUnwrap(hints.dateRange, query)
+            let expected = calendar.date(from: DateComponents(year: year, month: month, day: day))!
+            XCTAssertEqual(range.start, expected, query)
+            XCTAssertEqual(range.end, calendar.date(byAdding: .day, value: 1, to: expected), query)
+            XCTAssertEqual(hints.textQuery, "dog", query)
+        }
+        XCTAssertNil(QueryParserFallback.parse(query: "2022-02-30", now: now, calendar: calendar).dateRange)
+    }
+
+    func testExplicitMonthSeasonAndHolidayAcceptOldAndFutureYears() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 4))!
+        for year in [1999, 2010, 2035] {
+            for (phrase, month) in [
+                ("january", 1), ("summer", 6), ("christmas", 12),
+                ("christmas day", 12), ("halloween", 10), ("thanksgiving", 11),
+                ("valentines day", 2), ("easter", 3), ("new years eve", 12),
+            ] {
+                let hints = QueryParserFallback.parse(query: "dog \(phrase) \(year)", now: now, calendar: calendar)
+                let range = try XCTUnwrap(hints.dateRange)
+                XCTAssertEqual(calendar.component(.year, from: range.start), year)
+                XCTAssertEqual(calendar.component(.month, from: range.start), month)
+                XCTAssertEqual(hints.textQuery, "dog")
+            }
+        }
+    }
+
+    func testWeekendUsesSaturdayAndSundayInBothWeekCalendars() throws {
+        for firstWeekday in [1, 2] {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            calendar.firstWeekday = firstWeekday
+            let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 4, hour: 12))!
+            let range = try XCTUnwrap(QueryParserFallback.parse(
+                query: "last weekend", now: now, calendar: calendar
+            ).dateRange)
+            XCTAssertEqual(range.start, calendar.date(from: DateComponents(year: 2026, month: 8, day: 29)))
+            XCTAssertEqual(range.end, calendar.date(from: DateComponents(year: 2026, month: 8, day: 31)))
+            XCTAssertTrue(range.endIsExclusive)
+
+            let sunday = calendar.date(from: DateComponents(year: 2026, month: 9, day: 6, hour: 12))!
+            let currentWeek = try XCTUnwrap(QueryParserFallback.parse(
+                query: "this week", now: sunday, calendar: calendar
+            ).dateRange)
+            XCTAssertLessThan(currentWeek.start, currentWeek.end)
+            XCTAssertEqual(calendar.component(.weekday, from: currentWeek.start), firstWeekday)
+        }
+    }
+
+    func testNewYearUsesMonthAndDayAtJanuaryBoundary() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        for (month, day, expectedNewYear, expectedEveYear) in [
+            (1, 1, 2024, 2024), (1, 2, 2024, 2025), (1, 3, 2025, 2025),
+            (2, 1, 2025, 2025), (9, 1, 2025, 2025), (9, 2, 2025, 2025),
+        ] {
+            let now = calendar.date(from: DateComponents(year: 2026, month: month, day: day))!
+            for (phrase, expectedYear) in [("new year", expectedNewYear), ("new years eve", expectedEveYear)] {
+                let range = try XCTUnwrap(QueryParserFallback.parse(query: phrase, now: now, calendar: calendar).dateRange)
+                XCTAssertEqual(calendar.component(.year, from: range.start), expectedYear, "\(phrase), \(month)/\(day)")
+            }
+        }
+    }
+
+    func testEarlierThisYearNeverInvertsItsRangeInFirstQuarter() throws {
+        let calendar = Calendar(identifier: .gregorian)
+        for month in 1...3 {
+            let now = calendar.date(from: DateComponents(year: 2026, month: month, day: 15))!
+            let range = try XCTUnwrap(QueryParserFallback.parse(query: "earlier this year", now: now, calendar: calendar).dateRange)
+            XCTAssertEqual(range.start, calendar.date(from: DateComponents(year: 2026, month: 1, day: 1)))
+            XCTAssertEqual(range.end, now)
+        }
+    }
+
+    func testCalendarDateRangeExcludesNextMidnightWithoutLosingFractionalSeconds() throws {
+        let calendar = Calendar(identifier: .gregorian)
+        for query in ["2022", "january 2022", "2022-01-15"] {
+            let range = try XCTUnwrap(QueryParserFallback.parse(query: query, calendar: calendar).dateRange)
+            XCTAssertTrue(range.contains(range.start))
+            XCTAssertTrue(range.contains(range.end.addingTimeInterval(-0.25)))
+            XCTAssertFalse(range.contains(range.end))
+        }
+        let instant = Date(timeIntervalSince1970: 123)
+        XCTAssertTrue(DateRange(start: instant, end: instant).contains(instant))
     }
 
     // MARK: - Longest Match Priority

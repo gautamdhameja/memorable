@@ -451,6 +451,31 @@ final class RecoverableDatabaseQueue: @unchecked Sendable {
     }
 }
 
+struct IndexedMediaVersion: Equatable, Sendable {
+    let id: String
+    let indexedAt: Date
+}
+
+enum IndexedMediaFreshness {
+    enum Selection: Equatable {
+        case skip
+        case insert
+        case replace
+    }
+
+    static func needsRefresh(modifiedAt: Date?, indexedAt: Date) -> Bool {
+        modifiedAt.map { $0 > indexedAt } ?? false
+    }
+
+    static func selection(
+        indexed: IndexedMediaVersion?, modifiedAt: Date?, forced: Bool, canAddMedia: Bool
+    ) -> Selection {
+        guard let indexed else { return canAddMedia ? .insert : .skip }
+        return forced || needsRefresh(modifiedAt: modifiedAt, indexedAt: indexed.indexedAt)
+            ? .replace : .skip
+    }
+}
+
 protocol DatabaseProtocol: Sendable {
     var allowsIndexingWrites: Bool { get }
     // Photos
@@ -463,6 +488,9 @@ protocol DatabaseProtocol: Sendable {
     ) throws -> Bool
     func isIndexed(localIdentifier: String) throws -> Bool
     func existingPhotoIdentifiers(in localIdentifiers: [String]) throws -> Set<String>
+    func indexedPhotoVersions(in localIdentifiers: [String]) throws -> [String: IndexedMediaVersion]
+    func indexedFolderVersions(in filePaths: [String], sourceId: String) throws -> [String: IndexedMediaVersion]
+    func replacePhoto(_ photo: IndexedPhoto) throws
     func markPhotoScreenshots(localIdentifiers: Set<String>) throws
     func allIndexedIdentifiers() throws -> Set<String>
     func loadIndexedPhotoIdentifierPage(after: String?, limit: Int) throws -> [String]
@@ -507,6 +535,8 @@ protocol DatabaseProtocol: Sendable {
     ) throws -> Bool
     func isVideoIndexed(localIdentifier: String) throws -> Bool
     func existingVideoIdentifiers(in localIdentifiers: [String]) throws -> Set<String>
+    func indexedVideoVersions(in localIdentifiers: [String]) throws -> [String: IndexedMediaVersion]
+    func replaceVideo(_ video: IndexedVideo, frames: [IndexedVideoFrame]) throws
     func videoIndexedCount() throws -> Int
     /// Loads the deterministic, newest searchable video-frame window, bounded
     /// by `SearchIndexLimits.maximumVideoFrameRows`.
@@ -589,6 +619,32 @@ enum FolderSourceDeletionError: LocalizedError, Equatable {
 }
 
 extension DatabaseProtocol {
+    func indexedPhotoVersions(in localIdentifiers: [String]) throws -> [String: IndexedMediaVersion] {
+        Dictionary(uniqueKeysWithValues: try existingPhotoIdentifiers(in: localIdentifiers).map {
+            ($0, IndexedMediaVersion(id: $0, indexedAt: .distantFuture))
+        })
+    }
+
+    func indexedVideoVersions(in localIdentifiers: [String]) throws -> [String: IndexedMediaVersion] {
+        Dictionary(uniqueKeysWithValues: try existingVideoIdentifiers(in: localIdentifiers).map {
+            ($0, IndexedMediaVersion(id: $0, indexedAt: .distantFuture))
+        })
+    }
+
+    func indexedFolderVersions(in filePaths: [String], sourceId: String) throws -> [String: IndexedMediaVersion] {
+        Dictionary(uniqueKeysWithValues: try existingFilePaths(in: filePaths, sourceId: sourceId).map {
+            ($0, IndexedMediaVersion(id: $0, indexedAt: .distantFuture))
+        })
+    }
+
+    func replacePhoto(_ photo: IndexedPhoto) throws {
+        throw DatabaseCapabilityError.unavailable
+    }
+
+    func replaceVideo(_ video: IndexedVideo, frames: [IndexedVideoFrame]) throws {
+        throw DatabaseCapabilityError.unavailable
+    }
+
     func onThisDaySummary() throws -> OnThisDaySummary? {
         let groups = try onThisDayPhotos().filter { !$0.photos.isEmpty }
         guard let mostRecentGroup = groups.max(by: { $0.year < $1.year }),

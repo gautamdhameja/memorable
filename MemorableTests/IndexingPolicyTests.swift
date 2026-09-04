@@ -6,6 +6,87 @@ import os
 @testable import Memorable
 
 final class IndexingPolicyTests: XCTestCase {
+    func testCompletenessComparesIdentityAndModificationDates() {
+        let indexedAt = Date(timeIntervalSince1970: 100)
+        let indexed = ["old": IndexedMediaVersion(id: "stable", indexedAt: indexedAt)]
+        XCTAssertFalse(PhotoLibraryChangeReconciler.needsIndexing(
+            assets: [.init(localIdentifier: "old", modifiedAt: indexedAt)], indexed: indexed
+        ))
+        // Same count, different asset: a closed-app delete/add must resume.
+        XCTAssertTrue(PhotoLibraryChangeReconciler.needsIndexing(
+            assets: [.init(localIdentifier: "replacement", modifiedAt: indexedAt)], indexed: indexed
+        ))
+        XCTAssertTrue(PhotoLibraryChangeReconciler.needsIndexing(
+            assets: [.init(localIdentifier: "old", modifiedAt: indexedAt.addingTimeInterval(1))], indexed: indexed
+        ))
+        XCTAssertFalse(PhotoLibraryChangeReconciler.needsIndexing(
+            assets: [.init(localIdentifier: "old", modifiedAt: nil)], indexed: indexed
+        ))
+    }
+
+    func testFullFreeTierCanRefreshRetainedMediaWithoutAddingItems() {
+        let indexedAt = Date(timeIntervalSince1970: 100)
+        let indexed = IndexedMediaVersion(id: "retained", indexedAt: indexedAt)
+        let canAdd = FreeTier.canIndexMore(indexedMediaCount: FreeTier.maxIndexedMedia, isPro: false)
+        XCTAssertFalse(canAdd)
+        XCTAssertEqual(IndexedMediaFreshness.selection(
+            indexed: indexed, modifiedAt: indexedAt.addingTimeInterval(1), forced: false, canAddMedia: canAdd
+        ), .replace)
+        XCTAssertEqual(IndexedMediaFreshness.selection(
+            indexed: indexed, modifiedAt: nil, forced: true, canAddMedia: canAdd
+        ), .replace)
+        XCTAssertEqual(IndexedMediaFreshness.selection(
+            indexed: indexed, modifiedAt: indexedAt, forced: false, canAddMedia: canAdd
+        ), .skip)
+        XCTAssertEqual(IndexedMediaFreshness.selection(
+            indexed: nil, modifiedAt: indexedAt, forced: true, canAddMedia: canAdd
+        ), .skip)
+    }
+
+    func testEditsDuringIndexingRemainNewerThanPassStart() {
+        let passStartedAt = Date(timeIntervalSince1970: 100)
+        let editedWhileEncoding = passStartedAt.addingTimeInterval(1)
+        XCTAssertTrue(IndexedMediaFreshness.needsRefresh(
+            modifiedAt: editedWhileEncoding, indexedAt: passStartedAt
+        ))
+    }
+
+    func testChangedPhotoEventsSurviveCoalescingAndRespectRemoval() throws {
+        var event = PhotoLibraryChangeEvent(changedPhotoIDs: ["edited", "removed"], changedVideoIDs: ["video"])
+        XCTAssertTrue(event.hasWork)
+        event.merge(PhotoLibraryChangeEvent(removedPhotoIDs: ["removed"], changedPhotoIDs: ["second"]))
+        event.merge(PhotoLibraryChangeEvent(changedPhotoIDs: ["removed"]))
+        XCTAssertEqual(event.changedPhotoIDs, ["edited", "second"])
+        XCTAssertEqual(event.changedVideoIDs, ["video"])
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        let result = try PhotoLibraryChangeReconciler.reconcile(event, database: database, authorizationStatus: .limited)
+        XCTAssertTrue(result.hasNewMedia)
+        XCTAssertEqual(result.changedPhotoIDs, event.changedPhotoIDs)
+        XCTAssertEqual(result.changedVideoIDs, ["video"])
+        XCTAssertTrue(result.orphanedPhotoIDs.isEmpty)
+    }
+
+    func testCommittedReplacementRemainsObservableAfterCancellation() async throws {
+        let entered = expectation(description: "replacement entered")
+        let release = DispatchSemaphore(value: 0)
+        let state = OSAllocatedUnfairLock(initialState: (committed: false, observed: false))
+        let task = Task {
+            try await IndexedMediaReplacementOperation.run {
+                entered.fulfill()
+                release.wait()
+                state.withLock { $0.committed = true }
+            }
+            state.withLock { $0.observed = true }
+        }
+        await fulfillment(of: [entered], timeout: 5)
+        task.cancel()
+        release.signal()
+        try await task.value
+        XCTAssertTrue(state.withLock { $0.committed })
+        XCTAssertTrue(state.withLock { $0.observed })
+    }
+
     func testBackgroundIndexingIdentifiersStayBundleScoped() {
         let bundleIdentifier = "com.example.memorable"
         let runID = UUID(uuidString: "00000000-0000-0000-0000-000000000123")!

@@ -84,6 +84,9 @@ class IndexingService: ObservableObject {
     private var photoChangeCheckTask: Task<Void, Never>?
     private var photoChangeScanState = PhotoChangeScanState()
     private var pendingPhotoLibraryChange = PhotoLibraryChangeEvent()
+    private var pendingPhotoRefreshIDs: Set<String> = []
+    private var pendingVideoRefreshIDs: Set<String> = []
+    private var hasInvalidatedMediaReplacements = false
     private var proRevocationTask: Task<Void, Never>?
     private var activeProReconciliationID: UUID?
     private var storageMutationTask: Task<Void, Error>?
@@ -146,6 +149,9 @@ class IndexingService: ObservableObject {
             },
             reloadSearchIndex: { [weak self] in
                 await self?.reloadSearchIndexFromLibraryWorker() == true
+            },
+            didReplaceMedia: { [weak self] identifier in
+                self?.didReplaceIndexedMedia(identifier)
             }
         )
     )
@@ -158,7 +164,10 @@ class IndexingService: ObservableObject {
             searchableCount: { [weak self] in self?.searchEngine.totalSize ?? 0 },
             setProgress: { [weak self] in self?.progress = $0 },
             reportError: { [weak self] in self?.folderIndexingError = $0 },
-            reloadSearchIndex: { [weak self] in await self?.reloadSearchIndex() == true }
+            reloadSearchIndex: { [weak self] in await self?.reloadSearchIndex() == true },
+            didReplaceMedia: { [weak self] identifier in
+                self?.didReplaceIndexedMedia(identifier)
+            }
         )
     )
 
@@ -831,7 +840,6 @@ class IndexingService: ObservableObject {
         thermalResumeIntent = intent
         hideValidatedSearchSuggestions()
         let workflowID = UUID()
-        let shouldResumeGeocoding = jobQueue.contains(.geocodeMedia)
         jobQueue.enqueue(IndexingJob(
             workflowID: workflowID,
             kind: .indexFolder,
@@ -850,15 +858,14 @@ class IndexingService: ObservableObject {
                     self.endBackgroundTask()
                 }
                 let outcome = await self.folderWorker.index(url: url, name: name)
+                await self.reloadCommittedMediaReplacementsIfNeeded()
                 guard outcome.didComplete, !Task.isCancelled else { return outcome }
                 self.enqueueSurpriseQueryValidation(
                     workflowID: workflowID,
                     replacingCancelledJob: true
                 )
                 self.enqueueEnrichment(workflowID: workflowID)
-                if shouldResumeGeocoding {
-                    self.enqueueGeocoding(workflowID: workflowID)
-                }
+                self.enqueueGeocoding(workflowID: workflowID)
                 return .completed
             }
         })
@@ -897,11 +904,14 @@ class IndexingService: ObservableObject {
                 self.beginBackgroundTask()
                 defer { self.endBackgroundTask() }
                 let outcome = await self.folderWorker.reindex(source: source)
+                await self.reloadCommittedMediaReplacementsIfNeeded()
                 guard outcome.didComplete, !Task.isCancelled else { return outcome }
                 self.enqueueSurpriseQueryValidation(
                     workflowID: workflowID,
                     replacingCancelledJob: true
                 )
+                self.enqueueEnrichment(workflowID: workflowID)
+                self.enqueueGeocoding(workflowID: workflowID)
                 return .completed
             }
         })
@@ -1250,6 +1260,9 @@ class IndexingService: ObservableObject {
 
     private func checkForPhotoLibraryChange(_ event: PhotoLibraryChangeEvent) {
         guard event.hasWork else { return }
+        if event.requiresFullReconciliation || !event.changedPhotoIDs.isEmpty || !event.changedVideoIDs.isEmpty {
+            PhotoLibrary.clearAssetCache()
+        }
         pendingPhotoLibraryChange.merge(event)
         guard photoChangeScanState.requestScan(isIndexing: progress.isRunning) else { return }
         startPhotoChangeScan()
@@ -1282,6 +1295,10 @@ class IndexingService: ObservableObject {
                     scanTask.cancel()
                 }
                 guard !Task.isCancelled else { return }
+                self.pendingPhotoRefreshIDs.formUnion(result.changedPhotoIDs)
+                self.pendingVideoRefreshIDs.formUnion(result.changedVideoIDs)
+                self.pendingPhotoRefreshIDs.subtract(event.removedPhotoIDs)
+                self.pendingVideoRefreshIDs.subtract(event.removedVideoIDs)
                 if result.hasNewMedia {
                     newPhotosAvailable = true
                 }
@@ -1326,6 +1343,7 @@ class IndexingService: ObservableObject {
             }
             isReady = didLoad
             if didLoad {
+                hasInvalidatedMediaReplacements = false
                 hasKnownExistingIndex = true
                 indexVersion += 1
                 progress.searchableCount = searchEngine.totalSize
@@ -1356,6 +1374,27 @@ class IndexingService: ObservableObject {
         case noIndex
         case complete
         case resume
+    }
+
+    private func didReplaceIndexedMedia(_ identifier: String) {
+        PhotoLibrary.clearAssetCache()
+        pendingPhotoRefreshIDs.remove(identifier)
+        pendingVideoRefreshIDs.remove(identifier)
+        hideValidatedSearchSuggestions()
+        SurpriseQueries.clearValidated()
+        hasInvalidatedMediaReplacements = true
+        hasDeferredSearchIndexReload = true
+        searchEngine.dropIndex()
+        isReady = false
+        onIndexUnavailable?()
+    }
+
+    private func reloadCommittedMediaReplacementsIfNeeded() async {
+        guard hasInvalidatedMediaReplacements, isApplicationActive,
+              !searchEngine.isMemoryPressureSuspended else { return }
+        if await reloadSearchIndexInFreshTask() {
+            hasDeferredSearchIndexReload = false
+        }
     }
 
     private func enqueueLibraryIndexing(
@@ -1420,7 +1459,11 @@ class IndexingService: ObservableObject {
             }
 
             self.beginBackgroundTask()
-            self.librarySession = await self.libraryWorker.indexPhotos()
+            self.librarySession = await self.libraryWorker.indexPhotos(
+                forcedPhotoRefreshIDs: self.pendingPhotoRefreshIDs,
+                forcedVideoRefreshIDs: self.pendingVideoRefreshIDs
+            )
+            await self.reloadCommittedMediaReplacementsIfNeeded()
             if self.librarySession?.wasInterrupted == true {
                 self.librarySession = nil
                 self.interruptInitialIndexingForSystemExpiration()
@@ -1453,6 +1496,7 @@ class IndexingService: ObservableObject {
                 self.endBackgroundTask()
             }
             await self.libraryWorker.indexVideos(session: session)
+            await self.reloadCommittedMediaReplacementsIfNeeded()
             if session.wasInterrupted {
                 self.interruptInitialIndexingForSystemExpiration()
                 return .cancelled
@@ -1702,6 +1746,7 @@ class IndexingService: ObservableObject {
                         source: source,
                         reloadSearchIndex: false
                     )
+                    await self.reloadCommittedMediaReplacementsIfNeeded()
                     if outcome.didComplete {
                         didCompleteSource = true
                         continue
@@ -1945,7 +1990,21 @@ class IndexingService: ObservableObject {
         let unindexedCount = totalInLibrary - totalIndexed
 
         if unindexedCount <= 0 {
-            return .complete
+            if !pendingPhotoRefreshIDs.isEmpty || !pendingVideoRefreshIDs.isEmpty {
+                return .resume
+            }
+            do {
+                let db = database
+                let needsIndexing = try await CancellableDetachedOperation.run {
+                    try PhotoLibraryChangeReconciler.hasUnindexedOrModifiedMedia(database: db)
+                }
+                return needsIndexing ? .resume : .complete
+            } catch is CancellationError {
+                return .noIndex
+            } catch {
+                logger.error("Failed to reconcile indexed asset versions: \(error.safeDiagnosticCode)")
+                return .noIndex
+            }
         }
 
         #if DEBUG

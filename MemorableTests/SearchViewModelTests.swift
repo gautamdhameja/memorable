@@ -87,6 +87,128 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSlowSimilarityCannotOverwriteNewerTextSearch() async {
+        let searcher = ControlledSearcher()
+        let similarityReturned = expectation(description: "obsolete similarity returned")
+        let model = makeModel(search: { _ in Self.response(ids: ["text-result"]) })
+        model.setQueryText("initial")
+        model.submitSimilaritySearch {
+            defer { similarityReturned.fulfill() }
+            return (try? await searcher.search(query: "similar"))?.results ?? []
+        }
+        await searcher.waitUntilCalled(with: "similar")
+
+        model.setQueryText("new text")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        await searcher.complete(query: "similar", with: response(id: "obsolete-similar"))
+        await fulfillment(of: [similarityReturned], timeout: 1)
+
+        XCTAssertEqual(model.queryText, "new text")
+        XCTAssertEqual(model.results.map(\.id), ["text-result"])
+        XCTAssertEqual(model.lastSearchedQuery, "new text")
+    }
+
+    @MainActor
+    func testSlowTextSearchCannotOverwriteNewerSimilarity() async {
+        let searcher = ControlledSearcher()
+        let textReturned = expectation(description: "obsolete text returned")
+        let model = makeModel(search: { query in
+            defer { textReturned.fulfill() }
+            return try await searcher.search(query: query)
+        })
+        model.setQueryText("old text")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "old text")
+
+        model.submitSimilaritySearch { [Self.result(id: "similar-result")] }
+        await model.waitForCurrentSearch()
+        await searcher.complete(query: "old text", with: response(id: "obsolete-text"))
+        await fulfillment(of: [textReturned], timeout: 1)
+
+        XCTAssertEqual(model.queryText, "Similar to selected photo")
+        XCTAssertEqual(model.results.map(\.id), ["similar-result"])
+        XCTAssertEqual(model.lastSearchedQuery, "Similar to selected photo")
+        XCTAssertFalse(model.isSearching)
+    }
+
+    @MainActor
+    func testClearRevocationAndMemoryPressureRejectPendingSimilarity() async {
+        let invalidations: [(String, (SearchViewModel) -> Void)] = [
+            ("clear", { $0.setQueryText("") }),
+            ("revocation", { $0.handleProEntitlementRevoked() }),
+            ("memory pressure", { $0.handleMemoryPressure() }),
+        ]
+        for (reason, invalidate) in invalidations {
+            let searcher = ControlledSearcher()
+            let returned = expectation(description: "similarity returned after \(reason)")
+            let model = makeModel(search: { _ in Self.response(ids: []) })
+            model.setQueryText("initial")
+            model.submitSimilaritySearch {
+                defer { returned.fulfill() }
+                return (try? await searcher.search(query: "similar"))?.results ?? []
+            }
+            await searcher.waitUntilCalled(with: "similar")
+            invalidate(model)
+            await searcher.complete(query: "similar", with: response(id: "obsolete"))
+            await fulfillment(of: [returned], timeout: 1)
+
+            XCTAssertTrue(model.results.isEmpty, reason)
+            XCTAssertTrue(model.lastResults.isEmpty, reason)
+            XCTAssertNil(model.activeSearchID, reason)
+            XCTAssertFalse(model.isSearching, reason)
+            if reason == "clear" { XCTAssertTrue(model.queryText.isEmpty) }
+        }
+    }
+
+    @MainActor
+    func testSimilarityPublishesFreshFilterAndScreenshotState() async {
+        let model = makeModel(
+            search: { _ in
+                SearchResponse(
+                    results: [Self.result(id: "old-screen")],
+                    fallbackResults: [Self.result(id: "old-fallback")],
+                    filtersApplied: FilterSummary(dateDescription: "2022", locationDescription: "Berlin", visualQuery: "dog"),
+                    restrictionSummary: SearchRestrictionSummary(features: [.date])
+                )
+            },
+            detectScreenshots: { results in
+                Set(results.filter { $0.id.hasSuffix("screen") }.map(\.id))
+            }
+        )
+        model.setQueryText("old query")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        await model.waitForScreenshotDetection()
+        model.setMediaFilter(.screenshots)
+        model.showAllResults(count: 300)
+
+        model.submitSimilaritySearch {
+            [Self.result(id: "new-screen"), Self.result(id: "new-photo")]
+        }
+        await model.waitForCurrentSearch()
+        await model.waitForScreenshotDetection()
+
+        XCTAssertNil(model.filterSummary)
+        XCTAssertNil(model.restrictionSummary)
+        XCTAssertNil(model.searchError)
+        XCTAssertTrue(model.fallbackResults.isEmpty)
+        XCTAssertEqual(model.mediaFilter, .all)
+        XCTAssertEqual(model.screenshotIDs, ["new-screen"])
+        XCTAssertEqual(model.visibleCount, SearchViewModel.initialVisibleCount)
+        XCTAssertEqual(model.lastResults.map(\.id), ["new-screen", "new-photo"])
+        model.setMediaFilter(.screenshots)
+        XCTAssertEqual(model.filteredResults(model.results).map(\.id), ["new-screen"])
+
+        model.submitSimilaritySearch { [] }
+        await model.waitForCurrentSearch()
+        await model.waitForScreenshotDetection()
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertTrue(model.lastResults.isEmpty)
+        XCTAssertTrue(model.screenshotIDs.isEmpty)
+    }
+
+    @MainActor
     func testPastedQueryIsBoundedBeforeItCanBeStoredOrSearched() {
         let model = makeModel(search: { _ in Self.response(ids: []) })
         let oversized = String(repeating: "x", count: QueryInputPolicy.maximumCharacterCount + 1_000)

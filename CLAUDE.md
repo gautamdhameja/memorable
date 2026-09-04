@@ -120,7 +120,8 @@ Complete the separate `RELEASE_MANUAL_CHECKLIST.md` before App Store submission.
 ## Dependencies
 
 - **GRDB.swift 7.x** -- SQLite database
-- **apple/swift-protobuf 1.28+** -- SentencePiece tokenizer model deserialization
+- **apple/swift-protobuf 1.28+** -- generated SentencePiece model types and compatibility validation
+- **Google SentencePiece 0.2.2** -- upstream native tokenizer via `Packages/SentencePiece`; rebuild with `scripts/build_sentencepiece.py`
 
 ## Architecture
 
@@ -154,7 +155,7 @@ Core/                          Views/
 ## Critical implementation details
 
 ### Tokenizer -- SentencePiece BPE with byte fallback
-The tokenizer loads a standard SentencePiece `.model` protobuf file (Gemma tokenizer, 256k vocab). It uses BPE with byte fallback -- unknown characters are encoded as UTF-8 byte tokens (`<0x00>`-`<0xFF>`), so every input is tokenizable. Text preprocessing: lowercase and collapse whitespace (punctuation is preserved as tokens, matching the model's training). No BOS token, EOS appended, padded with 0. First word has no `▁` prefix (`add_dummy_prefix=false`). Context length is 64 tokens. All vocab/score/special-token data is derived from the protobuf at init, not hardcoded.
+Google's unmodified SentencePiece library owns model decoding, normalization, BPE, and byte fallback. The narrow C ABI bridge only manages ownership, errors, and bounded token output. The Swift adapter lowercases and collapses Python-compatible whitespace, adds no BOS, appends EOS, and pads using the model's token IDs. The model supplies `add_dummy_prefix=false`; the context is 64 tokens. Native access is serialized under a lock. Do not reimplement the tokenizer algorithm or its cache in Swift. See `Packages/SentencePiece/README.md` for upstream pins, alternatives, and rebuild instructions.
 
 ### PHImageManager fires callbacks twice
 `requestImage` may call its handler multiple times (first degraded, then final). All `withCheckedContinuation` wrappers use a `hasResumed` flag to resume only once on the non-degraded callback. Without this, continuations resume on the nil/degraded first call and all thumbnails return nil.
@@ -247,7 +248,7 @@ Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.sw
 - Progressive photo index reloads happen at throttled checkpoints; very large libraries use a larger checkpoint interval to avoid excessive full-index rebuilds
 - Indexed-identifier lookups use bounded database pages and sets for O(1) skip checks.
 - `reserveCapacity` on embeddings array before loading
-- Tokenizer cache with 1000-entry eviction
+- Native SentencePiece tokenization (no duplicate Swift tokenizer cache)
 - Debounced search (500ms) to avoid encoding on every keystroke
 - DuplicateFinder runs on `Task.detached` to avoid blocking main thread
 - OnThisDay filters in SQL (month/day/year) instead of loading all rows

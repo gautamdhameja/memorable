@@ -428,6 +428,13 @@ class FolderScanner {
         } ?? nil
     }
 
+    /// Uses the same no-symlink, source-bounded descriptor checks as decoding.
+    static func fileModificationDate(_ imageURL: URL, within folderURL: URL) -> Date? {
+        withValidatedImageFileDescriptor(imageURL, within: folderURL) {
+            modificationDate(for: $0)
+        } ?? nil
+    }
+
     private static func validatedRelativeComponents(
         for imageURL: URL,
         within folderURL: URL

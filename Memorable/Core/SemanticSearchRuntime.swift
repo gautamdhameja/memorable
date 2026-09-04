@@ -154,11 +154,12 @@ final class SemanticSearchRuntime: ObservableObject {
                 pendingWarmupPriority = .userInitiatedSearch
                 phase = .warmingCore(promoted: true)
                 _ = try? await existingTask.value
-                while warmupGeneration == cancelledGeneration {
-                    try Task.checkCancellation()
-                    await Task.yield()
-                }
                 try Task.checkCancellation()
+                // Task completion includes its drain handling. A second
+                // memory warning may withdraw the pending replacement.
+                guard warmupGeneration != cancelledGeneration else {
+                    throw CancellationError()
+                }
                 if readiness.isSemanticSearchReady { return }
                 guard let replacementTask = warmupTask else {
                     throw CancellationError()
@@ -194,29 +195,25 @@ final class SemanticSearchRuntime: ObservableObject {
         logger.info("[SemanticSearchRuntime] startWarmup priority=\(String(describing: priority)) promoted=\(promoted)")
         #endif
 
-        let task = Task { [weak self] in
-            try Task.checkCancellation()
+        let task = Task<Void, Error> { [weak self] in
             guard let self else { return }
-            guard let warmupLoader else { return }
-            try Task.checkCancellation()
-            try await warmupLoader(priority)
-        }
-        warmupTask = task
-
-        Task { [weak self] in
             do {
-                try await task.value
-                if task.isCancelled {
-                    self?.finishCancelledWarmup(generation: generation)
-                } else {
-                    self?.finishWarmup(generation: generation)
+                try Task.checkCancellation()
+                if let warmupLoader {
+                    try await warmupLoader(priority)
                 }
-            } catch is CancellationError {
-                self?.finishCancelledWarmup(generation: generation)
+                try Task.checkCancellation()
+                finishWarmup(generation: generation)
             } catch {
-                self?.failWarmup(error, generation: generation)
+                if Task.isCancelled || error is CancellationError {
+                    finishCancelledWarmup(generation: generation)
+                } else {
+                    failWarmup(error, generation: generation)
+                }
+                throw error
             }
         }
+        warmupTask = task
 
         return task
     }

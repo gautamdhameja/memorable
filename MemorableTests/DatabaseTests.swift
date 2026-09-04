@@ -32,6 +32,133 @@ private final class FailingResetFileManager: FileManager, @unchecked Sendable {
 
 final class DatabaseTests: XCTestCase {
 
+    func testPhotoRefreshPreservesIdentityResetsEnrichmentAndChangesOlderRowRevision() throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        var photo = makePhoto(localIdentifier: "edited")
+        photo.indexedAt = Date(timeIntervalSince1970: 100)
+        photo.ocrText = "old text"
+        photo.sceneLabels = "old scene"
+        photo.enrichmentComplete = true
+        photo.locationCity = "old city"
+        try database.insertPhoto(photo)
+        try database.insertPhoto(makePhoto(localIdentifier: "newer-row"))
+        try database.dbQueue.write { db in
+            try db.execute(sql: """
+                UPDATE indexed_photos SET enrichmentAttemptedAt = ?, locationRetryAfter = ? WHERE id = ?
+                """, arguments: [Date(), Date(), photo.id])
+        }
+        let revision = try database.searchIndexContentRevision()
+        photo.embedding = floatVector(first: 0.5).toFloat16Data()
+        photo.creationDate = Date(timeIntervalSince1970: 400)
+        photo.indexedAt = Date(timeIntervalSince1970: 300)
+        try database.replacePhoto(photo)
+
+        let refreshed = try database.dbQueue.read { db in
+            try XCTUnwrap(IndexedPhoto.fetchOne(db, key: photo.id))
+        }
+        XCTAssertEqual(refreshed.id, photo.id)
+        XCTAssertEqual(refreshed.localIdentifier, photo.localIdentifier)
+        XCTAssertEqual(refreshed.embedding, photo.embedding)
+        XCTAssertEqual(refreshed.creationDate, photo.creationDate)
+        XCTAssertNil(refreshed.ocrText)
+        XCTAssertNil(refreshed.sceneLabels)
+        XCTAssertNil(refreshed.locationCity)
+        XCTAssertFalse(refreshed.enrichmentComplete)
+        let pending = try database.dbQueue.read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM indexed_photos WHERE id = ?
+                AND enrichmentAttemptedAt IS NULL AND locationRetryAfter IS NULL
+                """, arguments: [photo.id])
+        }
+        XCTAssertEqual(pending, 1)
+        XCTAssertEqual(try database.indexedCount(), 2)
+        XCTAssertNotEqual(try database.searchIndexContentRevision(), revision)
+        XCTAssertEqual(try database.indexedPhotoVersions(in: [photo.localIdentifier])[photo.localIdentifier],
+                       IndexedMediaVersion(id: photo.id, indexedAt: photo.indexedAt))
+    }
+
+    func testPhotoRefreshFailureRollsBackAndCannotResurrectDeletedRows() throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        let photo = makePhoto(localIdentifier: "edited")
+        try database.insertPhoto(photo)
+        try database.dbQueue.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_refresh BEFORE UPDATE OF locationRetryAfter ON indexed_photos
+                BEGIN SELECT RAISE(ABORT, 'injected refresh failure'); END
+                """)
+        }
+        var replacement = photo
+        replacement.embedding = floatVector(first: 0.5).toFloat16Data()
+        XCTAssertThrowsError(try database.replacePhoto(replacement))
+        let retained = try database.dbQueue.read { db in
+            try XCTUnwrap(IndexedPhoto.fetchOne(db, key: photo.id))
+        }
+        XCTAssertEqual(retained.embedding, photo.embedding)
+        try database.deletePhoto(localIdentifier: photo.localIdentifier)
+        XCTAssertThrowsError(try database.replacePhoto(replacement))
+        XCTAssertEqual(try database.indexedCount(), 0)
+    }
+
+    func testVideoRefreshAtomicallyReplacesFramesAndRetainsMediaIdentity() throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        var video = makeVideo(localIdentifier: "edited-video")
+        video.locationCity = "old city"
+        let oldFrame = makeFrame(videoId: video.id, position: 0.25)
+        try database.insertVideo(video, [oldFrame], completingRequiredRebuild: false)
+        let before = try database.searchIndexContentRevision()
+        video.duration = 20
+        video.indexedAt = Date(timeIntervalSince1970: 300)
+        let newFrames = [makeFrame(videoId: video.id, position: 0.5), makeFrame(videoId: video.id, position: 0.75)]
+        try database.replaceVideo(video, frames: newFrames)
+        let refreshed = try database.dbQueue.read { db in
+            try XCTUnwrap(IndexedVideo.fetchOne(db, key: video.id))
+        }
+        let frames = try database.dbQueue.read { db in try IndexedVideoFrame.fetchAll(db) }
+        XCTAssertEqual(refreshed.id, video.id)
+        XCTAssertEqual(refreshed.duration, 20)
+        XCTAssertEqual(refreshed.frameCount, 2)
+        XCTAssertNil(refreshed.locationCity)
+        XCTAssertEqual(Set(frames.map(\.id)), Set(newFrames.map(\.id)))
+        XCTAssertEqual(try database.videoIndexedCount(), 1)
+        XCTAssertNotEqual(try database.searchIndexContentRevision(), before)
+    }
+
+    func testVideoRefreshFailureRetainsPreviousMetadataAndFrames() throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        let video = makeVideo(localIdentifier: "edited-video")
+        let oldFrame = makeFrame(videoId: video.id, position: 0.25)
+        try database.insertVideo(video, [oldFrame], completingRequiredRebuild: false)
+        try database.dbQueue.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_frame BEFORE INSERT ON indexed_video_frames
+                BEGIN SELECT RAISE(ABORT, 'injected frame failure'); END
+                """)
+        }
+        var replacement = video
+        replacement.duration = 20
+        XCTAssertThrowsError(try database.replaceVideo(replacement, frames: [makeFrame(videoId: video.id, position: 0.75)]))
+        let retained = try database.dbQueue.read { db in try XCTUnwrap(IndexedVideo.fetchOne(db, key: video.id)) }
+        let frames = try database.dbQueue.read { db in try IndexedVideoFrame.fetchAll(db) }
+        XCTAssertEqual(retained.duration, video.duration)
+        XCTAssertEqual(frames.map(\.id), [oldFrame.id])
+    }
+
+    func testVersionLookupsAreChunkedAndFolderScoped() throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        let photo = makePhoto(localIdentifier: "photo-1000", sourceId: "folder-a", filePath: "/folder/a.jpg")
+        try database.insertPhoto(photo)
+        let versions = try database.indexedPhotoVersions(in: (0..<1200).map { "photo-\($0)" })
+        XCTAssertEqual(versions.count, 1)
+        XCTAssertEqual(versions[photo.localIdentifier]?.id, photo.id)
+        XCTAssertEqual(try database.indexedFolderVersions(in: ["/folder/a.jpg"], sourceId: "folder-a")["/folder/a.jpg"]?.id, photo.id)
+        XCTAssertTrue(try database.indexedFolderVersions(in: ["/folder/a.jpg"], sourceId: "folder-b").isEmpty)
+    }
+
     func testDeferredPersistentStoreResetDeletesStoreAndFolderAccessArtifacts() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

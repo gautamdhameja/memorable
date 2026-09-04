@@ -76,6 +76,7 @@ final class SearchViewModel: ObservableObject {
     private var validationSequence = 0
     private var screenshotSequence = 0
     private var searchTask: Task<Void, Never>?
+    private var isSimilaritySearch = false
     private var visibleResultValidationTask: Task<Void, Never>?
     private var screenshotDetectionTask: Task<Void, Never>?
     private var recentSearchPreviewBackfillTask: Task<Void, Never>?
@@ -255,10 +256,41 @@ final class SearchViewModel: ObservableObject {
         isSearching = false
     }
 
-    func applySimilarResults(_ similarResults: [SearchResult]) {
-        results = similarResults
-        queryText = "Similar to selected photo"
-        lastSearchedQuery = queryText
+    /// Similarity and text requests share the same generation and task so
+    /// clearing, a newer request, or entitlement revocation invalidates both.
+    func submitSimilaritySearch(operation: @escaping () async -> [SearchResult]) {
+        let searchID = beginSearch(isSimilarity: true)
+        let startTime = dependencies.now()
+        searchTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if activeSearchID == searchID {
+                    isSearching = false
+                    activeSearchID = nil
+                    searchTask = nil
+                }
+            }
+            let similar = await operation()
+            guard !Task.isCancelled, activeSearchID == searchID else { return }
+            queryText = "Similar to selected photo"
+            results = similar
+            lastSearchedQuery = queryText
+            fallbackResults = []
+            filterSummary = nil
+            restrictionSummary = nil
+            searchError = nil
+            mediaFilter = .all
+            screenshotIDs = []
+            lastQuery = queryText
+            lastResults = similar
+            searchTimeMs = Int((dependencies.now() - startTime) * 1_000)
+            startScreenshotDetection(for: similar)
+        }
+    }
+
+    func cancelSimilaritySearch() {
+        guard isSimilaritySearch else { return }
+        cancelActiveSearch(reason: "similarity dismissed")
     }
 
     func useFallbackResultsForViewer() {
@@ -269,6 +301,21 @@ final class SearchViewModel: ObservableObject {
         let query = normalizedQuery
         guard !query.isEmpty else { return }
 
+        let searchID = beginSearch(isSimilarity: false)
+        let startTime = dependencies.now()
+
+        searchTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runSearch(
+                query: query,
+                searchID: searchID,
+                saveToHistory: saveToHistory,
+                startTime: startTime
+            )
+        }
+    }
+
+    private func beginSearch(isSimilarity: Bool) -> Int {
         cancelRecentSearchPreviewBackfill()
         cancelActiveSearch(reason: "new search submitted")
         validationSequence += 1
@@ -281,17 +328,8 @@ final class SearchViewModel: ObservableObject {
         searchSequence += 1
         let searchID = searchSequence
         activeSearchID = searchID
-        let startTime = dependencies.now()
-
-        searchTask = Task { [weak self] in
-            guard let self else { return }
-            await self.runSearch(
-                query: query,
-                searchID: searchID,
-                saveToHistory: saveToHistory,
-                startTime: startTime
-            )
-        }
+        isSimilaritySearch = isSimilarity
+        return searchID
     }
 
     func validateVisibleResults(reason: String) {
@@ -525,6 +563,10 @@ final class SearchViewModel: ObservableObject {
             #endif
             return
         }
+        searchSequence += 1
+        activeSearchID = nil
+        searchTask = nil
+        isSearching = false
         task.cancel()
     }
 

@@ -307,6 +307,51 @@ extension AppDatabase {
         _ frames: [IndexedVideoFrame],
         completingRequiredRebuild: Bool
     ) throws -> Bool {
+        let video = try Self.sanitizedVideo(video, frames: frames)
+        try requireIndexingWrites()
+        return try dbQueue.write { db in
+            var completesRequiredRebuild = false
+            if completingRequiredRebuild {
+                completesRequiredRebuild = try Self.shouldCompleteRequiredRebuildOnNextEmbeddingWrite(
+                    in: db
+                )
+            }
+            try video.insert(db)
+            for frame in frames { try frame.insert(db) }
+            if completesRequiredRebuild {
+                try Self.clearIndexRebuildRequired(in: db)
+            }
+            return completesRequiredRebuild
+        }
+    }
+
+    func replaceVideo(_ replacement: IndexedVideo, frames: [IndexedVideoFrame]) throws {
+        try requireIndexingWrites()
+        var video = try Self.sanitizedVideo(replacement, frames: frames)
+        video.locationCity = nil
+        video.locationState = nil
+        video.locationCountry = nil
+        video.locationName = nil
+        try dbQueue.write { db in
+            try Task.checkCancellation()
+            guard let current = try IndexedVideo.fetchOne(db, key: video.id),
+                  current.localIdentifier == video.localIdentifier,
+                  current.sourceId == video.sourceId else {
+                throw DatabaseCapabilityError.unavailable
+            }
+            try video.update(db)
+            try db.execute(sql: "UPDATE indexed_videos SET locationRetryAfter = NULL WHERE id = ?",
+                           arguments: [video.id])
+            try db.execute(sql: "DELETE FROM indexed_video_frames WHERE videoId = ?",
+                           arguments: [video.id])
+            for frame in frames { try frame.insert(db) }
+            try Task.checkCancellation()
+        }
+    }
+
+    private static func sanitizedVideo(
+        _ video: IndexedVideo, frames: [IndexedVideoFrame]
+    ) throws -> IndexedVideo {
         guard (1...SearchIndexLimits.maximumVideoFramesPerMedia).contains(frames.count),
               frames.allSatisfy({
             $0.videoId == video.id
@@ -316,46 +361,32 @@ extension AppDatabase {
         }) else {
             throw SearchEngineError.corruptedIndex
         }
-        try requireIndexingWrites()
-        return try dbQueue.write { db in
-            var completesRequiredRebuild = false
-            if completingRequiredRebuild {
-                completesRequiredRebuild = try Self.shouldCompleteRequiredRebuildOnNextEmbeddingWrite(
-                    in: db
-                )
-            }
-            var video = video
-            video.frameCount = frames.count
-            if !LocationCoordinatePolicy.isValidOrAbsent(
-                latitude: video.latitude,
-                longitude: video.longitude
-            ) {
-                video.latitude = nil
-                video.longitude = nil
-            }
-            video.locationCity = PersistedMetadataTextPolicy.bounded(
-                video.locationCity,
-                maximumCharacters: PersistedMetadataTextPolicy.maximumLocationCharacters
-            )
-            video.locationState = PersistedMetadataTextPolicy.bounded(
-                video.locationState,
-                maximumCharacters: PersistedMetadataTextPolicy.maximumLocationCharacters
-            )
-            video.locationCountry = PersistedMetadataTextPolicy.bounded(
-                video.locationCountry,
-                maximumCharacters: PersistedMetadataTextPolicy.maximumLocationCharacters
-            )
-            video.locationName = PersistedMetadataTextPolicy.bounded(
-                video.locationName,
-                maximumCharacters: PersistedMetadataTextPolicy.maximumLocationCharacters
-            )
-            try video.insert(db)
-            for frame in frames { try frame.insert(db) }
-            if completesRequiredRebuild {
-                try Self.clearIndexRebuildRequired(in: db)
-            }
-            return completesRequiredRebuild
+        var video = video
+        video.frameCount = frames.count
+        if !LocationCoordinatePolicy.isValidOrAbsent(
+            latitude: video.latitude,
+            longitude: video.longitude
+        ) {
+            video.latitude = nil
+            video.longitude = nil
         }
+        video.locationCity = PersistedMetadataTextPolicy.bounded(
+            video.locationCity,
+            maximumCharacters: PersistedMetadataTextPolicy.maximumLocationCharacters
+        )
+        video.locationState = PersistedMetadataTextPolicy.bounded(
+            video.locationState,
+            maximumCharacters: PersistedMetadataTextPolicy.maximumLocationCharacters
+        )
+        video.locationCountry = PersistedMetadataTextPolicy.bounded(
+            video.locationCountry,
+            maximumCharacters: PersistedMetadataTextPolicy.maximumLocationCharacters
+        )
+        video.locationName = PersistedMetadataTextPolicy.bounded(
+            video.locationName,
+            maximumCharacters: PersistedMetadataTextPolicy.maximumLocationCharacters
+        )
+        return video
     }
 
     func reconcileFreeTier(_ limit: Int) throws -> FreeTierReconciliationResult {

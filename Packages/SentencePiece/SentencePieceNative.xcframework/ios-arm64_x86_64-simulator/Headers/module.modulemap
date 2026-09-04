@@ -1,0 +1,5 @@
+module SentencePieceNative {
+    header "SentencePieceNative.h"
+    link "c++"
+    export *
+}

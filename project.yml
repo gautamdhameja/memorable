@@ -13,6 +13,8 @@ settings:
     SWIFT_VERSION: "6"
     DEVELOPMENT_TEAM: GHL726VCA6
 packages:
+  SentencePiece:
+    path: Packages/SentencePiece
   GRDB:
     url: https://github.com/groue/GRDB.swift
     from: "7.0.0"
@@ -82,6 +84,7 @@ targets:
     resources:
       - path: Memorable/Resources
     dependencies:
+      - package: SentencePiece
       - package: GRDB
       - package: SwiftProtobuf
     settings:

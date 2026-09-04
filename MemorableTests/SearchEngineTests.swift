@@ -4,6 +4,273 @@ import os
 
 final class SearchEngineTests: XCTestCase {
 
+    func testDateFilterDescriptionsOnlyAbbreviateCompleteCalendarPeriods() throws {
+        let calendar = Calendar.current
+        func date(_ month: Int, _ day: Int, year: Int = 2022) throws -> Date {
+            try XCTUnwrap(calendar.date(from: DateComponents(year: year, month: month, day: day)))
+        }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.dateStyle = .medium
+        func dateSpan(_ start: Date, _ end: Date) -> String {
+            "\(formatter.string(from: start)) to \(formatter.string(from: end))"
+        }
+        let januaryStart = try date(1, 1)
+        let februaryStart = try date(2, 1)
+        let yearEnd = try date(1, 1, year: 2023)
+        let monthFormatter = DateFormatter()
+        monthFormatter.calendar = calendar
+        monthFormatter.dateFormat = "MMMM yyyy"
+        let yearFormatter = DateFormatter()
+        yearFormatter.calendar = calendar
+        yearFormatter.dateFormat = "yyyy"
+        let cases: [(DateRange, String)] = [
+            (DateRange(start: januaryStart, end: februaryStart, endIsExclusive: true),
+             monthFormatter.string(from: januaryStart)),
+            (DateRange(start: januaryStart, end: yearEnd, endIsExclusive: true),
+             yearFormatter.string(from: januaryStart)),
+            (DateRange(start: try date(1, 29), end: try date(2, 5), endIsExclusive: true),
+             dateSpan(try date(1, 29), try date(2, 4))),
+            (DateRange(start: try date(1, 5), end: try date(1, 7), endIsExclusive: true),
+             dateSpan(try date(1, 5), try date(1, 6))),
+            (DateRange(start: try date(1, 15), end: try date(3, 15), endIsExclusive: true),
+             dateSpan(try date(1, 15), try date(3, 14))),
+            (DateRange(start: try date(1, 5), end: yearEnd, endIsExclusive: true),
+             dateSpan(try date(1, 5), try date(12, 31))),
+            (DateRange(start: januaryStart, end: februaryStart),
+             dateSpan(januaryStart, februaryStart)),
+            (DateRange(start: januaryStart, end: try date(1, 2), endIsExclusive: true),
+             formatter.string(from: januaryStart)),
+            (DateRange(start: januaryStart, end: januaryStart),
+             formatter.string(from: januaryStart)),
+        ]
+        let engine = SearchEngine(database: SearchFixtureDatabase(photos: [
+            .init(id: "photo", localIdentifier: "photo", date: januaryStart,
+                  embedding: float16Vector(first: 1)),
+        ]))
+        try engine.loadIndex()
+        for (range, expected) in cases {
+            let response = try engine.hybridSearch(
+                hints: hints(text: "a photo", dateRange: range, hasVisualQuery: false),
+                featurePolicy: .pro
+            )
+            XCTAssertEqual(response.filtersApplied?.dateDescription, expected)
+        }
+    }
+
+    func testCalendarDateFiltersExcludeNextMidnightAndIncludeFractionalLastSecond() throws {
+        let parsed = QueryParserFallback.parse(query: "2022")
+        let nextYear = try XCTUnwrap(Calendar.current.date(from: DateComponents(year: 2023, month: 1, day: 1)))
+        let finalInstant = nextYear.addingTimeInterval(-0.25)
+        let photos: [FixturePhoto] = [
+            .init(id: "last-second", localIdentifier: "last-second", date: finalInstant,
+                  embedding: float16Vector(first: 1)),
+            .init(id: "next-midnight", localIdentifier: "next-midnight", date: nextYear,
+                  embedding: float16Vector(first: 1)),
+        ]
+        for residentLimit in [1, photos.count] {
+            let engine = SearchEngine(
+                database: SearchFixtureDatabase(photos: photos),
+                residentMediaLimit: residentLimit
+            )
+            try engine.loadIndex()
+            let calendarResponse = try engine.hybridSearch(hints: parsed, featurePolicy: .pro)
+            XCTAssertEqual(calendarResponse.results.map(\.id), ["last-second"])
+
+            let explicitInstant = hints(
+                text: "a photo",
+                dateRange: DateRange(start: nextYear, end: nextYear),
+                hasVisualQuery: false
+            )
+            let explicitResponse = try engine.hybridSearch(hints: explicitInstant, featurePolicy: .pro)
+            XCTAssertEqual(explicitResponse.results.map(\.id), ["next-midnight"])
+        }
+    }
+
+    func testPureFiltersWithExclusionsUseGenericScoringAcrossPages() async throws {
+        let date = try XCTUnwrap(Calendar.current.date(from: DateComponents(year: 2022, month: 6, day: 1)))
+        let photos: [FixturePhoto] = [
+            .init(id: "dog", localIdentifier: "dog", date: date,
+                  state: "CA", country: "United States", embedding: float16Vector(first: 1)),
+            .init(id: "other", localIdentifier: "other", date: date,
+                  state: "CA", country: "United States", embedding: float16Vector(second: 1)),
+            .init(id: "outside", localIdentifier: "outside", date: .distantPast,
+                  country: "Germany", embedding: float16Vector(second: 1)),
+        ]
+        for residentLimit in [1, photos.count] {
+            let engine = SearchEngine(
+                textEncoder: FakeTextEncoder([
+                    "a photo": floatVector(first: 0.1, second: 0.5),
+                    "dog": floatVector(first: 1),
+                    // A place embedding must not replace the generic baseline.
+                    "california": floatVector(first: 1),
+                ]),
+                database: SearchFixtureDatabase(photos: photos),
+                residentMediaLimit: residentLimit
+            )
+            try engine.loadIndex()
+            for query in ["2022 -dog", "California -dog"] {
+                let parsed = QueryParserFallback.parse(query: query)
+                XCTAssertEqual(parsed.negativeTerms, ["dog"])
+                let sync = try engine.hybridSearch(hints: parsed, featurePolicy: .pro)
+                XCTAssertEqual(sync.results.map(\.id), ["other"], "\(query), resident=\(residentLimit)")
+                XCTAssertTrue(sync.fallbackResults.isEmpty)
+                let asyncResponse = try await engine.search(query: query, featurePolicy: .pro)
+                XCTAssertEqual(asyncResponse.results.map(\.id), ["other"], "\(query), resident=\(residentLimit)")
+                XCTAssertTrue(asyncResponse.fallbackResults.isEmpty)
+            }
+        }
+    }
+
+    func testDropIndexRejectsAnInFlightSnapshotLoad() async throws {
+        let gate = ManualResetLoadGate()
+        let database = SearchFixtureDatabase(
+            photos: [.init(id: "deleted", localIdentifier: "deleted", date: nil,
+                           embedding: float16Vector(first: 1))],
+            photoLoadGate: gate
+        )
+        let engine = SearchEngine(database: database)
+        let load = Task.detached { try engine.loadIndex() }
+        XCTAssertEqual(gate.started.wait(timeout: .now() + 1), .success)
+        database.photos = []
+        engine.dropIndex()
+        gate.open()
+        try await load.value
+        XCTAssertFalse(engine.isIndexLoaded)
+        XCTAssertEqual(engine.residentSize, 0)
+    }
+
+    func testPostDropReloadDoesNotShareObsoleteLoadResult() async throws {
+        let gate = ManualResetLoadGate()
+        let database = SearchFixtureDatabase(
+            photos: [.init(id: "deleted", localIdentifier: "deleted", date: nil,
+                           embedding: float16Vector(first: 1))],
+            photoLoadGate: gate
+        )
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: database
+        )
+        let oldLoad = Task.detached { try engine.loadIndex() }
+        XCTAssertEqual(gate.started.wait(timeout: .now() + 1), .success)
+        engine.dropIndex()
+        database.photos = [.init(id: "new", localIdentifier: "new", date: nil,
+                                 embedding: float16Vector(first: 1))]
+        let reloadStarted = DispatchSemaphore(value: 0)
+        let freshLoad = Task.detached {
+            reloadStarted.signal()
+            try engine.loadIndex()
+        }
+        XCTAssertEqual(reloadStarted.wait(timeout: .now() + 1), .success)
+        for _ in 0..<20 { await Task.yield() }
+        gate.open()
+        try await oldLoad.value
+        try await freshLoad.value
+        XCTAssertEqual(database.photoLoadCount, 2)
+        XCTAssertEqual(try engine.hybridSearch(hints: hints(text: "dog")).results.map(\.id), ["new"])
+    }
+
+    func testDropIndexCancelsAnActiveSearch() async throws {
+        let scorer = BlockingSimilaritySearch()
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+            database: SearchFixtureDatabase(photos: [
+                .init(id: "deleted", localIdentifier: "deleted", date: nil,
+                      embedding: float16Vector(first: 1)),
+            ]),
+            photoSimilaritySearch: scorer
+        )
+        try engine.loadIndex()
+        let query = hints(text: "dog")
+        let search = Task.detached { try engine.hybridSearch(hints: query) }
+        XCTAssertEqual(scorer.searchStarted.wait(timeout: .now() + 1), .success)
+        engine.suspendForMemoryPressure()
+        engine.dropIndex()
+        engine.resumeAfterMemoryPressure()
+        scorer.resumeSearch.signal()
+        do {
+            _ = try await search.value
+            XCTFail("Invalidation must not reuse an older generation after resume")
+        } catch is CancellationError {
+            // Expected.
+        }
+    }
+
+    func testSuspensionStopsTailLoadsAndCacheRetentionForSearchAndSimilarity() async throws {
+        for findSimilar in [false, true] {
+            let gate = ManualResetLoadGate()
+            let photos = (0..<514).map { index in
+                FixturePhoto(id: "photo-\(index)", localIdentifier: "photo-\(index)",
+                             date: Date(timeIntervalSince1970: Double(514 - index)),
+                             embedding: float16Vector(first: 1))
+            }
+            let database = SearchFixtureDatabase(
+                photos: photos, photoLoadGate: gate, gatedPhotoLoadNumber: 2
+            )
+            let engine = SearchEngine(
+                textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+                database: database, residentMediaLimit: 1
+            )
+            try engine.loadIndex()
+            let query = hints(text: "dog")
+            let search = Task.detached {
+                if findSimilar {
+                    return engine.findSimilar(photoId: "photo-0", featurePolicy: .pro)
+                }
+                return try engine.hybridSearch(hints: query).results
+            }
+            XCTAssertEqual(gate.started.wait(timeout: .now() + 1), .success)
+            engine.suspendForMemoryPressure()
+            gate.open()
+            do {
+                let results = try await search.value
+                XCTAssertTrue(findSimilar)
+                XCTAssertTrue(results.isEmpty)
+            } catch is CancellationError {
+                XCTAssertFalse(findSimilar)
+            }
+            XCTAssertEqual(database.photoLoadCount, 2, "No next page may load after suspension")
+            XCTAssertEqual(engine.cachedTailPageBytes, 0)
+        }
+    }
+
+    func testTailCacheRejectsOldGenerationInsertions() throws {
+        let database = SearchFixtureDatabase(photos: [
+            .init(id: "photo", localIdentifier: "photo", date: nil,
+                  embedding: float16Vector(first: 1)),
+        ])
+        let page = try database.loadSearchMediaPage(after: nil, limit: 1)
+        let cursor = SearchMediaPageCursor(creationDate: nil, id: "previous", mediaType: .photo)
+        let cache = SearchTailPageCache(maximumBytes: 1_000_000)
+        cache.insert(page, after: cursor, generation: 0)
+        XCTAssertGreaterThan(cache.retainedBytes, 0)
+        cache.invalidate(generation: 1)
+        cache.insert(page, after: cursor, generation: 0)
+        XCTAssertEqual(cache.retainedBytes, 0)
+        XCTAssertNil(cache.page(after: cursor, generation: 0))
+        cache.insert(page, after: cursor, generation: 1)
+        XCTAssertNotNil(cache.page(after: cursor, generation: 1))
+        XCTAssertNil(cache.page(after: cursor, generation: 0))
+    }
+
+    func testTailCacheAccountsForLongMultibyteMetadata() throws {
+        let text = String(repeating: "界", count: 4_096)
+        let path = "/folder/" + String(repeating: "界", count: 1_000) + ".jpg"
+        let database = SearchFixtureDatabase(photos: [
+            .init(id: "photo", localIdentifier: "photo", date: nil,
+                  filePath: path, sceneLabels: String(repeating: "a", count: 1_024),
+                  ocrText: text, embedding: float16Vector(first: 1)),
+        ])
+        let page = try database.loadSearchMediaPage(after: nil, limit: 1)
+        let cost = SearchTailPageCache.estimatedBytes(for: page)
+        XCTAssertGreaterThan(cost, text.utf8.count + path.utf8.count + 1_024 + 1_536)
+        let cache = SearchTailPageCache(maximumBytes: cost - 1)
+        let cursor = SearchMediaPageCursor(creationDate: nil, id: "previous", mediaType: .photo)
+        cache.insert(page, after: cursor, generation: 0)
+        XCTAssertEqual(cache.retainedBytes, 0)
+        XCTAssertNil(cache.page(after: cursor, generation: 0))
+    }
+
     func testBoundedTopKMatchesDeterministicFullOrdering() throws {
         let candidates = (0..<1_000).map { index in
             SearchResult(
@@ -2298,6 +2565,7 @@ struct FixturePhoto: Sendable {
     var country: String? = nil
     var locationName: String? = nil
     var sceneLabels: String? = nil
+    var ocrText: String? = nil
     let embedding: [Float16]
 }
 
@@ -2497,7 +2765,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
                     state: photo.state,
                     country: photo.country,
                     locationName: photo.locationName,
-                    details: .photo(ocrText: nil, sceneLabels: photo.sceneLabels)
+                    details: .photo(ocrText: photo.ocrText, sceneLabels: photo.sceneLabels)
                 ),
                 embedding: photo.embedding
             )
@@ -2529,7 +2797,7 @@ final class SearchFixtureDatabase: DatabaseProtocol {
                     state: photo.state,
                     country: photo.country,
                     locationName: photo.locationName,
-                    details: .photo(ocrText: nil, sceneLabels: photo.sceneLabels)
+                    details: .photo(ocrText: photo.ocrText, sceneLabels: photo.sceneLabels)
                 ),
                 embedding: photo.embedding
             )

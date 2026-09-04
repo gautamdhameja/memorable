@@ -58,6 +58,21 @@ final class SmartQueryParserConcurrencyTests: XCTestCase {
         }
     }
 
+    func testSuccessfulSmartParsingDoesNotTreatNegativeTimeAsPositiveIntent() async {
+        let parser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "dog",
+                startDate: nil,
+                endDate: nil,
+                locationName: nil,
+                negativeTerms: ["night"]
+            ))
+        }
+        let hints = await parser.parse(query: "dog -night")
+        XCTAssertNil(hints.timeOfDayHours)
+        XCTAssertEqual(hints.negativeTerms, ["night"])
+    }
+
     func testSuccessfulModelParsePreservesDeterministicAdministrativeIntent() async {
         let parser = SmartQueryParser(isAvailable: true) {
             FixedParsedQueryResponder(parsedQuery: ParsedQuery(
@@ -446,9 +461,10 @@ final class SmartQueryParserConcurrencyTests: XCTestCase {
         XCTAssertEqual(calendar.component(.year, from: range.start), 2022)
         XCTAssertEqual(calendar.component(.month, from: range.start), 1)
         XCTAssertEqual(calendar.component(.day, from: range.start), 1)
-        XCTAssertEqual(calendar.component(.year, from: range.end), 2022)
-        XCTAssertEqual(calendar.component(.month, from: range.end), 12)
-        XCTAssertEqual(calendar.component(.day, from: range.end), 31)
+        XCTAssertEqual(calendar.component(.year, from: range.end), 2023)
+        XCTAssertEqual(calendar.component(.month, from: range.end), 1)
+        XCTAssertEqual(calendar.component(.day, from: range.end), 1)
+        XCTAssertTrue(range.endIsExclusive)
     }
 
     func testGenericPhotosDoNotBecomeSmartVisualContent() async {

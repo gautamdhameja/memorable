@@ -241,9 +241,23 @@ enum TimeOfDayConfig {
 
     /// Detect time-of-day from a lowercased query string
     static func detect(in text: String) -> (start: Int, end: Int)? {
-        for entry in entries {
-            if entry.keywords.contains(where: { text.contains($0) }) {
-                return (entry.startHour, entry.endHour)
+        // A longer activity phrase (such as afternoon tea) takes precedence
+        // over a general time word. Substrings such as knight are not intent.
+        let keywords = entries.flatMap { entry in
+            entry.keywords.map { (phrase: $0, entry: entry) }
+        }.sorted { $0.phrase.count > $1.phrase.count }
+        for keyword in keywords {
+            var searchStart = text.startIndex
+            while let range = text.range(of: keyword.phrase, range: searchStart..<text.endIndex) {
+                let before = range.lowerBound == text.startIndex
+                    || !text[text.index(before: range.lowerBound)].isLetter
+                        && !text[text.index(before: range.lowerBound)].isNumber
+                let after = range.upperBound == text.endIndex
+                    || !text[range.upperBound].isLetter && !text[range.upperBound].isNumber
+                if before && after {
+                    return (keyword.entry.startHour, keyword.entry.endHour)
+                }
+                searchStart = range.upperBound
             }
         }
         return nil

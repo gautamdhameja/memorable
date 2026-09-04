@@ -351,7 +351,7 @@ struct SmartQueryParser: Sendable {
             let hasVisual = !visual.trimmingCharacters(in: .whitespaces).isEmpty
 
             // Time-of-day detection (Foundation Models doesn't extract this)
-            let timeOfDayHours = TimeOfDayConfig.detect(in: query.lowercased())
+            let timeOfDayHours = fallbackHints.timeOfDayHours
 
             // Locations are hard constraints, so only the deterministic local
             // parser may create one. Model-only locations can be hallucinated

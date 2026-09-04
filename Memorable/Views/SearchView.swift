@@ -29,8 +29,6 @@ struct SearchView: View {
     @State private var totalLibraryCount: Int = 0
     @State private var placeholderIndex: Int = 0
     @State private var placeholderTimer: Task<Void, Never>?
-    @State private var findSimilarTask: Task<Void, Never>?
-    @State private var findSimilarGeneration = 0
     @State private var showStorageResetConfirm = false
     @AppStorage(AppKeys.persistentStoreReset) private var storageResetScheduled = false
 
@@ -1711,27 +1709,17 @@ struct SearchView: View {
             showUpgrade = true
             return
         }
-        findSimilarTask?.cancel()
-        findSimilarGeneration &+= 1
-        let generation = findSimilarGeneration
         let engine = searchEngine
         let featurePolicy = ProFeatureAccessPolicy(isPro: proManager.isPro)
-        findSimilarTask = Task {
-            let similar = await SimilaritySearchOperation.run {
+        viewModel.submitSimilaritySearch {
+            await SimilaritySearchOperation.run {
                 engine.findSimilar(photoId: photoID, featurePolicy: featurePolicy)
             }
-            guard !Task.isCancelled,
-                  generation == findSimilarGeneration,
-                  proManager.isPro else { return }
-            viewModel.applySimilarResults(similar)
-            findSimilarTask = nil
         }
     }
 
     private func cancelFindSimilar() {
-        findSimilarGeneration &+= 1
-        findSimilarTask?.cancel()
-        findSimilarTask = nil
+        viewModel.cancelSimilaritySearch()
     }
 
     private func handleResultTap(_ result: SearchResult) {

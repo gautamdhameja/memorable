@@ -91,8 +91,7 @@ final class PerformanceMetrics: @unchecked Sendable {
             "text_model_load_seconds=\(Self.format(value(PerformancePhase.textModelLoad)))",
             "tokenizer_load_seconds=\(Self.format(value(PerformancePhase.tokenizerLoad)))",
             "tokenizer_file_read_seconds=\(Self.format(value(PerformancePhase.tokenizerFileRead)))",
-            "tokenizer_proto_decode_seconds=\(Self.format(value(PerformancePhase.tokenizerProtoDecode)))",
-            "tokenizer_table_build_seconds=\(Self.format(value(PerformancePhase.tokenizerTableBuild)))",
+            "tokenizer_native_load_seconds=\(Self.format(value(PerformancePhase.tokenizerNativeLoad)))",
             "database_open_seconds=\(Self.format(value(PerformancePhase.databaseOpen)))",
             "entitlement_verification_seconds=\(Self.format(value(PerformancePhase.entitlementVerification)))",
             "index_load_seconds=\(Self.format(value(PerformancePhase.indexLoad)))",
@@ -126,8 +125,7 @@ enum PerformancePhase {
     static let textModelLoad = "startup.text_model_load"
     static let tokenizerLoad = "startup.tokenizer_load"
     static let tokenizerFileRead = "startup.tokenizer_file_read"
-    static let tokenizerProtoDecode = "startup.tokenizer_proto_decode"
-    static let tokenizerTableBuild = "startup.tokenizer_table_build"
+    static let tokenizerNativeLoad = "startup.tokenizer_native_load"
     static let databaseOpen = "startup.database_open"
     static let entitlementVerification = "startup.entitlement_verification"
     static let firstQuery = "search.first_query"

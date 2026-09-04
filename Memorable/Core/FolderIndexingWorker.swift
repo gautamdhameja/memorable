@@ -126,6 +126,7 @@ final class FolderIndexingWorker {
         let setProgress: (IndexingProgress) -> Void
         let reportError: (String) -> Void
         let reloadSearchIndex: () async -> Bool
+        let didReplaceMedia: (String) -> Void
     }
 
     private let imageEncoder: ImageEncoder
@@ -192,6 +193,7 @@ final class FolderIndexingWorker {
         defer { url.stopAccessingSecurityScopedResource() }
 
         let db = database
+        let indexedAt = Date()
         let scan = await FolderScanOperation.run {
             FolderScanner.scanFolder(at: url)
         }
@@ -294,7 +296,7 @@ final class FolderIndexingWorker {
         var successfullyHandledFileCount = 0
         var batch: [IndexedPhoto] = []
 
-        var existingPaths: Set<String> = []
+        var existingVersions: [String: IndexedMediaVersion] = [:]
         for (imageIndex, imageURL) in imageURLs.enumerated() {
             if Task.isCancelled { break }
             if imageIndex.isMultiple(of: SearchIndexLimits.databasePageMediaItems) {
@@ -305,8 +307,8 @@ final class FolderIndexingWorker {
                 let paths = imageURLs[imageIndex..<end].map(\.path)
                 do {
                     let db = database
-                    existingPaths = try await Task.detached(priority: .utility) {
-                        try db.existingFilePaths(in: paths, sourceId: sourceId)
+                    existingVersions = try await Task.detached(priority: .utility) {
+                        try db.indexedFolderVersions(in: paths, sourceId: sourceId)
                     }.value
                 } catch {
                     callbacks.reportError("Memorable could not read the saved folder index. Try again.")
@@ -315,12 +317,22 @@ final class FolderIndexingWorker {
                     return .failed
                 }
             }
-            if existingPaths.contains(imageURL.path) {
-                successfullyHandledFileCount += 1
-                indexed += 1
-                currentProgress.completed = indexed
-                progressPublisher.publish(currentProgress, using: callbacks.setProgress)
-                continue
+            let existingVersion = existingVersions[imageURL.path]
+            if let existingVersion {
+                let modifiedAt = await FolderFileReadOperation.run {
+                    FolderScanner.fileModificationDate(imageURL, within: url)
+                } ?? nil
+                guard !Task.isCancelled else { break }
+                // If the file cannot be inspected, attempt the normal load so
+                // failure is reported and the previous searchable row remains.
+                if let modifiedAt,
+                   !IndexedMediaFreshness.needsRefresh(modifiedAt: modifiedAt, indexedAt: existingVersion.indexedAt) {
+                    successfullyHandledFileCount += 1
+                    indexed += 1
+                    currentProgress.completed = indexed
+                    progressPublisher.publish(currentProgress, using: callbacks.setProgress)
+                    continue
+                }
             }
 
             let loadedImage = await FolderFileReadOperation.run {
@@ -339,8 +351,8 @@ final class FolderIndexingWorker {
                 let encoder = imageEncoder
                 let embedding = try await encoder.encodeCancellable(image: loadedImage.image)
                 try Task.checkCancellation()
-                batch.append(IndexedPhoto(
-                    id: UUID().uuidString,
+                let photo = IndexedPhoto(
+                    id: existingVersion?.id ?? UUID().uuidString,
                     localIdentifier: FolderScanner.localIdentifier(for: imageURL, within: url, sourceId: sourceId),
                     creationDate: loadedImage.date,
                     latitude: loadedImage.latitude,
@@ -348,14 +360,20 @@ final class FolderIndexingWorker {
                     pixelWidth: loadedImage.width,
                     pixelHeight: loadedImage.height,
                     embedding: embedding.toFloat16Data(),
-                    indexedAt: Date(),
+                    indexedAt: indexedAt,
                     sourceId: sourceId,
                     filePath: imageURL.path,
                     isScreenshot: MemoryContentPolicy.isLikelyScreenshotDimensions(
                         width: loadedImage.width,
                         height: loadedImage.height
                     )
-                ))
+                )
+                if existingVersion != nil {
+                    try await IndexedMediaReplacementOperation.run { try db.replacePhoto(photo) }
+                    callbacks.didReplaceMedia(photo.localIdentifier)
+                } else {
+                    batch.append(photo)
+                }
                 successfullyHandledFileCount += 1
                 if batch.count >= batchSize {
                     let photosToInsert = FolderPendingBatch.takeAll(&batch)

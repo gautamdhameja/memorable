@@ -5,6 +5,17 @@ final class QueryParserTests: XCTestCase {
 
     private let cal = Calendar.current
 
+    func testTimeIntentRequiresWholeWordsAndPrefersSpecificPhrases() {
+        XCTAssertEqual(TimeOfDayConfig.detect(in: "afternoon")?.start, 14)
+        XCTAssertEqual(TimeOfDayConfig.detect(in: "afternoon")?.end, 18)
+        XCTAssertEqual(TimeOfDayConfig.detect(in: "afternoon tea")?.start, 11)
+        XCTAssertEqual(TimeOfDayConfig.detect(in: "evening walk")?.start, 14)
+        XCTAssertNil(TimeOfDayConfig.detect(in: "knight"))
+        XCTAssertNil(TimeOfDayConfig.detect(in: "nightingale"))
+        XCTAssertNil(QueryParserFallback.parse(query: "dog -night").timeOfDayHours)
+        XCTAssertEqual(TimeOfDayConfig.detect(in: "(night)")?.start, 20)
+    }
+
     // MARK: - Pure Visual Queries (no location, no date)
 
     func testSunset() {

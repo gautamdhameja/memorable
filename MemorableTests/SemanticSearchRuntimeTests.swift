@@ -3,6 +3,118 @@ import XCTest
 
 final class SemanticSearchRuntimeTests: XCTestCase {
 
+    private enum LoaderError: Error { case failedDuringCancellation }
+
+    @MainActor
+    func testCancelledLoaderReturningSuccessCannotReportSearchReady() async {
+        let runtime = SemanticSearchRuntime()
+        let started = expectation(description: "loader started")
+        let finished = expectation(description: "search waiter cancelled")
+        var continuation: CheckedContinuation<Void, Never>?
+        runtime.setWarmupLoader { _ in
+            await withCheckedContinuation { held in
+                continuation = held
+                started.fulfill()
+            }
+        }
+        let waiter = Task { @MainActor in
+            do {
+                try await runtime.prepareForSearch()
+                XCTFail("A cancelled loader must not report success")
+            } catch is CancellationError {
+                // The loader ignored cancellation, but readiness did not.
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+            finished.fulfill()
+        }
+        await fulfillment(of: [started], timeout: 1)
+        runtime.cancelWarmupForMemoryPressure()
+        continuation?.resume()
+        await fulfillment(of: [finished], timeout: 2)
+        waiter.cancel()
+        XCTAssertFalse(runtime.readiness.isSemanticSearchReady)
+        guard case .failed = runtime.phase else {
+            return XCTFail("Expected a recoverable paused state")
+        }
+    }
+
+    @MainActor
+    func testGenericErrorFromCancelledLoaderDrainsBeforeRetry() async {
+        let runtime = SemanticSearchRuntime()
+        let started = expectation(description: "first loader started")
+        let retryStarted = expectation(description: "retry requested")
+        let finished = expectation(description: "retry completed")
+        var continuation: CheckedContinuation<Void, Error>?
+        var loadCount = 0
+        runtime.setWarmupLoader { _ in
+            loadCount += 1
+            if loadCount == 1 {
+                try await withCheckedThrowingContinuation { held in
+                    continuation = held
+                    started.fulfill()
+                }
+            } else {
+                runtime.markSemanticModelReady()
+                runtime.markIndexReady()
+            }
+        }
+        runtime.startPostPaintWarmup()
+        await fulfillment(of: [started], timeout: 1)
+        runtime.cancelWarmupForMemoryPressure()
+        let retry = Task { @MainActor in
+            retryStarted.fulfill()
+            do { try await runtime.prepareForSearch() }
+            catch { XCTFail("Retry failed: \(error)") }
+            finished.fulfill()
+        }
+        await fulfillment(of: [retryStarted], timeout: 1)
+        continuation?.resume(throwing: LoaderError.failedDuringCancellation)
+        await fulfillment(of: [finished], timeout: 2)
+        retry.cancel()
+        XCTAssertEqual(loadCount, 2)
+        XCTAssertEqual(runtime.phase, .ready)
+    }
+
+    @MainActor
+    func testSecondMemoryWarningCanWithdrawRetryWhileLoaderDrains() async {
+        let runtime = SemanticSearchRuntime()
+        let started = expectation(description: "loader started")
+        let retryStarted = expectation(description: "retry requested")
+        let finished = expectation(description: "retry terminated")
+        var continuation: CheckedContinuation<Void, Error>?
+        var loadCount = 0
+        runtime.setWarmupLoader { _ in
+            loadCount += 1
+            try await withCheckedThrowingContinuation { held in
+                continuation = held
+                started.fulfill()
+            }
+        }
+        runtime.startPostPaintWarmup()
+        await fulfillment(of: [started], timeout: 1)
+        runtime.cancelWarmupForMemoryPressure()
+        let retry = Task { @MainActor in
+            retryStarted.fulfill()
+            do {
+                try await runtime.prepareForSearch()
+                XCTFail("Withdrawn retry must not succeed")
+            } catch is CancellationError {
+                // The later memory warning deliberately leaves search paused.
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+            finished.fulfill()
+        }
+        await fulfillment(of: [retryStarted], timeout: 1)
+        runtime.cancelWarmupForMemoryPressure()
+        continuation?.resume(throwing: LoaderError.failedDuringCancellation)
+        await fulfillment(of: [finished], timeout: 2)
+        retry.cancel()
+        XCTAssertEqual(loadCount, 1)
+        XCTAssertFalse(runtime.readiness.isSemanticSearchReady)
+    }
+
     func testCancelledWarmupCannotConsumePendingOnboardingIndexRequest() {
         XCTAssertFalse(AppState.mayConsumePendingOnboardingRequest(isCancelled: true))
         XCTAssertTrue(AppState.mayConsumePendingOnboardingRequest(isCancelled: false))

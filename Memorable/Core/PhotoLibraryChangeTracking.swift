@@ -6,6 +6,8 @@ struct PhotoLibraryChangeDiff: Equatable, Sendable {
     var hasNewMedia: Bool
     var orphanedPhotoIDs: Set<String>
     var orphanedVideoIDs: Set<String>
+    var changedPhotoIDs: Set<String> = []
+    var changedVideoIDs: Set<String> = []
 
     static func evaluate(
         libraryPhotos: Set<String>,
@@ -32,6 +34,8 @@ struct PhotoLibraryChangeEvent: Equatable, Sendable {
     var insertedVideoIDs: Set<String> = []
     var removedPhotoIDs: Set<String> = []
     var removedVideoIDs: Set<String> = []
+    var changedPhotoIDs: Set<String> = []
+    var changedVideoIDs: Set<String> = []
     var requiresFullReconciliation = false
 
     static let fullReconciliation = PhotoLibraryChangeEvent(
@@ -44,6 +48,8 @@ struct PhotoLibraryChangeEvent: Equatable, Sendable {
             || !insertedVideoIDs.isEmpty
             || !removedPhotoIDs.isEmpty
             || !removedVideoIDs.isEmpty
+            || !changedPhotoIDs.isEmpty
+            || !changedVideoIDs.isEmpty
     }
 
     mutating func merge(_ other: PhotoLibraryChangeEvent) {
@@ -51,20 +57,26 @@ struct PhotoLibraryChangeEvent: Equatable, Sendable {
             || other.requiresFullReconciliation
         for id in other.insertedPhotoIDs {
             removedPhotoIDs.remove(id)
+            changedPhotoIDs.remove(id)
             insertedPhotoIDs.insert(id)
         }
         for id in other.insertedVideoIDs {
             removedVideoIDs.remove(id)
+            changedVideoIDs.remove(id)
             insertedVideoIDs.insert(id)
         }
         for id in other.removedPhotoIDs {
             insertedPhotoIDs.remove(id)
+            changedPhotoIDs.remove(id)
             removedPhotoIDs.insert(id)
         }
         for id in other.removedVideoIDs {
             insertedVideoIDs.remove(id)
+            changedVideoIDs.remove(id)
             removedVideoIDs.insert(id)
         }
+        changedPhotoIDs.formUnion(other.changedPhotoIDs.subtracting(removedPhotoIDs))
+        changedVideoIDs.formUnion(other.changedVideoIDs.subtracting(removedVideoIDs))
     }
 }
 
@@ -102,13 +114,57 @@ enum PhotoLibraryOrphanCleanupAuthorizationPolicy {
 }
 
 enum PhotoLibraryChangeReconciler {
+    struct AssetVersion: Equatable, Sendable {
+        let localIdentifier: String
+        let modifiedAt: Date?
+    }
+
+    static func needsIndexing(
+        assets: [AssetVersion], indexed: [String: IndexedMediaVersion]
+    ) -> Bool {
+        assets.contains { asset in
+            guard let version = indexed[asset.localIdentifier] else { return true }
+            return IndexedMediaFreshness.needsRefresh(
+                modifiedAt: asset.modifiedAt, indexedAt: version.indexedAt
+            )
+        }
+    }
+
+    /// Count equality cannot establish completeness after edits or replacement.
+    /// Read at most one page of identities/timestamps at a time and stop once
+    /// there is work; folder rows never participate in this comparison.
+    static func hasUnindexedOrModifiedMedia(database: DatabaseProtocol) throws -> Bool {
+        let assets = PhotoLibrary.fetchAllMedia()
+        let pageSize = SearchIndexLimits.databasePageMediaItems
+        for start in stride(from: 0, to: assets.count, by: pageSize) {
+            try Task.checkCancellation()
+            var photos: [AssetVersion] = []
+            var videos: [AssetVersion] = []
+            for index in start..<min(start + pageSize, assets.count) {
+                let asset = assets.object(at: index)
+                let version = AssetVersion(localIdentifier: asset.localIdentifier, modifiedAt: asset.modificationDate)
+                if asset.mediaType == .video { videos.append(version) } else { photos.append(version) }
+            }
+            if try needsIndexing(assets: photos, indexed: database.indexedPhotoVersions(in: photos.map(\.localIdentifier)))
+                || needsIndexing(assets: videos, indexed: database.indexedVideoVersions(in: videos.map(\.localIdentifier))) {
+                return true
+            }
+        }
+        return false
+    }
+
     static func reconcile(
         _ event: PhotoLibraryChangeEvent,
         database: DatabaseProtocol,
         authorizationStatus: PHAuthorizationStatus
     ) throws -> PhotoLibraryChangeDiff {
         if event.requiresFullReconciliation {
-            return try fullReconciliation(database: database)
+            var result = try fullReconciliation(database: database)
+            result.changedPhotoIDs = event.changedPhotoIDs
+            result.changedVideoIDs = event.changedVideoIDs
+            result.hasNewMedia = result.hasNewMedia
+                || !event.changedPhotoIDs.isEmpty || !event.changedVideoIDs.isEmpty
+            return result
         }
 
         let indexedInsertedPhotos = try database.existingPhotoIdentifiers(
@@ -137,42 +193,20 @@ enum PhotoLibraryChangeReconciler {
         }
         return PhotoLibraryChangeDiff(
             hasNewMedia: !event.insertedPhotoIDs.subtracting(indexedInsertedPhotos).isEmpty
-                || !event.insertedVideoIDs.subtracting(indexedInsertedVideos).isEmpty,
+                || !event.insertedVideoIDs.subtracting(indexedInsertedVideos).isEmpty
+                || !event.changedPhotoIDs.isEmpty || !event.changedVideoIDs.isEmpty,
             orphanedPhotoIDs: orphanedPhotos,
-            orphanedVideoIDs: orphanedVideos
+            orphanedVideoIDs: orphanedVideos,
+            changedPhotoIDs: event.changedPhotoIDs,
+            changedVideoIDs: event.changedVideoIDs
         )
     }
 
     private static func fullReconciliation(
         database: DatabaseProtocol
     ) throws -> PhotoLibraryChangeDiff {
-        let allMedia = PhotoLibrary.fetchAllMedia()
-        var hasNewMedia = false
+        let hasNewMedia = try hasUnindexedOrModifiedMedia(database: database)
         let pageSize = SearchIndexLimits.databasePageMediaItems
-        for pageStart in stride(from: 0, to: allMedia.count, by: pageSize) {
-            try Task.checkCancellation()
-            let pageEnd = min(pageStart + pageSize, allMedia.count)
-            var photoIDs: [String] = []
-            var videoIDs: [String] = []
-            photoIDs.reserveCapacity(pageEnd - pageStart)
-            videoIDs.reserveCapacity(pageEnd - pageStart)
-            for index in pageStart..<pageEnd {
-                let asset = allMedia.object(at: index)
-                if asset.mediaType == .video {
-                    videoIDs.append(asset.localIdentifier)
-                } else {
-                    photoIDs.append(asset.localIdentifier)
-                }
-            }
-            let pageDiff = PhotoLibraryChangeDiff.evaluate(
-                libraryPhotos: Set(photoIDs),
-                libraryVideos: Set(videoIDs),
-                indexedPhotos: try database.existingPhotoIdentifiers(in: photoIDs),
-                indexedVideos: try database.existingVideoIdentifiers(in: videoIDs),
-                allowsOrphanCleanup: false
-            )
-            hasNewMedia = hasNewMedia || pageDiff.hasNewMedia
-        }
 
         var orphanedPhotos: Set<String> = []
         var orphanedVideos: Set<String> = []
@@ -317,6 +351,13 @@ final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchec
                     event.removedVideoIDs.insert(asset.localIdentifier)
                 } else {
                     event.removedPhotoIDs.insert(asset.localIdentifier)
+                }
+            }
+            for asset in details.changedObjects {
+                if asset.mediaType == .video {
+                    event.changedVideoIDs.insert(asset.localIdentifier)
+                } else {
+                    event.changedPhotoIDs.insert(asset.localIdentifier)
                 }
             }
             return event

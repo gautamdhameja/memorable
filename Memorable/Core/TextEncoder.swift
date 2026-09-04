@@ -60,7 +60,7 @@ final class TextEncoder: TextEmbeddingEncoding, Sendable {
     }
 
     func encode(text: String) throws -> [Float] {
-        let tokenIds = tokenizer.tokenize(text: text.lowercased(), maxLength: contextLength)
+        let tokenIds = try tokenizer.tokenize(text: text, maxLength: contextLength)
 
         #if DEBUG
         let nonPadTokens = tokenIds.filter { $0 != 0 }
@@ -107,8 +107,8 @@ final class TextEncoder: TextEmbeddingEncoding, Sendable {
 
     func encodeCancellable(text: String) async throws -> [Float] {
         try Task.checkCancellation()
-        let tokenIds = tokenizer.tokenize(
-            text: text.lowercased(),
+        let tokenIds = try tokenizer.tokenize(
+            text: text,
             maxLength: contextLength
         )
         let inputArray = try MLMultiArray(

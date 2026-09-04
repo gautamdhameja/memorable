@@ -56,9 +56,11 @@ struct SearchRestrictionSummary: Equatable, Sendable {
 private final class IndexLoadCoordinator: @unchecked Sendable {
     private final class Flight: @unchecked Sendable {
         let completion = DispatchGroup()
+        let generation: UInt
         var error: Error?
 
-        init() {
+        init(generation: UInt) {
+            self.generation = generation
             completion.enter()
         }
     }
@@ -66,7 +68,13 @@ private final class IndexLoadCoordinator: @unchecked Sendable {
     private let lock = NSLock()
     private var activeFlight: Flight?
 
-    func run(_ operation: () throws -> Void) throws {
+    func run(generation: UInt, _ operation: () throws -> Void) throws {
+        while true {
+            if try runFlight(generation: generation, operation) { return }
+        }
+    }
+
+    private func runFlight(generation: UInt, _ operation: () throws -> Void) throws -> Bool {
         let flight: Flight
         let isLeader: Bool
 
@@ -75,7 +83,7 @@ private final class IndexLoadCoordinator: @unchecked Sendable {
             flight = activeFlight
             isLeader = false
         } else {
-            flight = Flight()
+            flight = Flight(generation: generation)
             activeFlight = flight
             isLeader = true
         }
@@ -86,11 +94,14 @@ private final class IndexLoadCoordinator: @unchecked Sendable {
                 try Task.checkCancellation()
             }
             try Task.checkCancellation()
+            // A caller after invalidation needs a fresh load, not the obsolete
+            // flight's success or failure. Serialize it behind that flight.
+            guard flight.generation == generation else { return false }
             lock.lock()
             let error = flight.error
             lock.unlock()
             if let error { throw error }
-            return
+            return true
         }
 
         do {
@@ -100,6 +111,7 @@ private final class IndexLoadCoordinator: @unchecked Sendable {
             finish(flight, error: error)
             throw error
         }
+        return true
     }
 
     private func finish(_ flight: Flight, error: Error?) {
@@ -113,10 +125,9 @@ private final class IndexLoadCoordinator: @unchecked Sendable {
     }
 }
 
-/// Prevents a reload from retaining accelerator-backed snapshots in active
-/// searches while a complete replacement is constructed. A reload blocks new
-/// searches, waits for current searches to release their snapshot, and then
-/// performs one bounded ownership transition. Waiters remain cancelable.
+/// Keeps snapshot installation and tail-cache invalidation exclusive with
+/// searches. Replacement construction happens before this short transition;
+/// waiters remain cancelable while existing searches finish.
 private final class SearchIndexAccessCoordinator: @unchecked Sendable {
     private let condition = NSCondition()
     private var reloadInProgress = false
@@ -194,11 +205,12 @@ private final class SearchIndexAccessCoordinator: @unchecked Sendable {
 /// Retains decoded continuation pages across searches. The cache never evicts
 /// during a generation (which would make sequential full scans thrash); once
 /// its conservative byte budget is full, later pages simply remain uncached.
-private final class SearchTailPageCache: @unchecked Sendable {
+final class SearchTailPageCache: @unchecked Sendable {
     private struct State: Sendable {
         var pages: [SearchMediaPageCursor: SearchMediaPage] = [:]
         var retainedBytes = 0
         var isFull = false
+        var generation: UInt = 0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -210,14 +222,24 @@ private final class SearchTailPageCache: @unchecked Sendable {
         maximumBytes = max(minimum, min(maximum, Int(physicalMemory / 128)))
     }
 
-    func page(after cursor: SearchMediaPageCursor) -> SearchMediaPage? {
-        state.withLock { $0.pages[cursor] }
+    init(maximumBytes: Int) {
+        self.maximumBytes = max(0, maximumBytes)
     }
 
-    func insert(_ page: SearchMediaPage, after cursor: SearchMediaPageCursor) {
+    var retainedBytes: Int { state.withLock { $0.retainedBytes } }
+
+    func page(after cursor: SearchMediaPageCursor, generation: UInt) -> SearchMediaPage? {
+        state.withLock { $0.generation == generation ? $0.pages[cursor] : nil }
+    }
+
+    func insert(_ page: SearchMediaPage, after cursor: SearchMediaPageCursor, generation: UInt) {
+        guard state.withLock({
+            $0.generation == generation && !$0.isFull && $0.pages[cursor] == nil
+        }) else { return }
         let cost = Self.estimatedBytes(for: page)
         state.withLock { state in
-            guard !state.isFull, state.pages[cursor] == nil else { return }
+            guard state.generation == generation,
+                  !state.isFull, state.pages[cursor] == nil else { return }
             guard state.retainedBytes + cost <= maximumBytes else {
                 state.isFull = true
                 return
@@ -227,15 +249,38 @@ private final class SearchTailPageCache: @unchecked Sendable {
         }
     }
 
-    func removeAll() {
-        state.withLock { $0 = State() }
+    func invalidate(generation: UInt) {
+        state.withLock { $0 = State(generation: generation) }
     }
 
-    private static func estimatedBytes(for page: SearchMediaPage) -> Int {
-        let embeddingBytes = (page.photos.embeddings.count + page.videos.embeddings.count)
-            * MemoryLayout<Float16>.size
-        let metadataBytes = (page.photos.count + page.videos.count) * 256
-        return embeddingBytes + metadataBytes
+    static func estimatedBytes(for page: SearchMediaPage) -> Int {
+        // Include allocated array storage and each string's payload. Charging
+        // shared/inline strings separately deliberately overestimates ownership.
+        func arrayBytes<T>(_ values: [T]) -> Int {
+            64 + values.capacity * MemoryLayout<T>.stride
+        }
+        func stringBytes(_ value: String) -> Int {
+            32 + max(value.utf8.count, value.utf16.count * 2)
+        }
+        func indexBytes(_ index: MediaIndex) -> Int {
+            var bytes = arrayBytes(index.embeddings)
+                + arrayBytes(index.dates) + arrayBytes(index.latitudes)
+                + arrayBytes(index.longitudes) + arrayBytes(index.framePositions)
+            for values in [index.ids, index.localIdentifiers, index.sourceIds] {
+                bytes += arrayBytes(values)
+                for value in values { bytes += stringBytes(value) }
+            }
+            for values in [index.filePaths, index.ocrTexts, index.sceneLabels,
+                           index.locationCities, index.locationStates,
+                           index.locationCountries, index.locationNames] {
+                bytes += arrayBytes(values)
+                for value in values {
+                    if let value { bytes += stringBytes(value) }
+                }
+            }
+            return bytes
+        }
+        return 256 + indexBytes(page.photos) + indexBytes(page.videos)
     }
 }
 
@@ -318,22 +363,20 @@ final class SearchEngine: Sendable {
     }
 
     func loadIndex() throws {
-        guard !isMemoryPressureSuspended else { return }
-        try indexLoadCoordinator.run { [self] in
-            guard !isMemoryPressureSuspended else { return }
-            try loadIndexOnce()
+        let generation = indexSnapshot.withLock {
+            $0.isMemoryPressureSuspended ? nil : $0.memoryPressureGeneration
+        }
+        guard let generation else { return }
+        try indexLoadCoordinator.run(generation: generation) { [self] in
+            guard isSearchGenerationActive(generation) else { return }
+            try loadIndexOnce(generation: generation)
         }
     }
 
-    private func loadIndexOnce() throws {
+    private func loadIndexOnce(generation loadGeneration: UInt) throws {
         #if DEBUG
         let loadStart = CFAbsoluteTimeGetCurrent()
         #endif
-
-        let loadGeneration = indexSnapshot.withLock { snapshot -> UInt? in
-            snapshot.isMemoryPressureSuspended ? nil : snapshot.memoryPressureGeneration
-        }
-        guard let loadGeneration else { return }
 
         indexReloadPhase.withLock { $0 = .loadingResidentData }
         defer { indexReloadPhase.withLock { $0 = .idle } }
@@ -358,13 +401,13 @@ final class SearchEngine: Sendable {
         newGPUSearch = injectedPhotoSimilaritySearch
         newGPUVideoSearch = injectedVideoSimilaritySearch
         #else
-        // Build fresh production scorers only after the old snapshot and its
-        // GPU buffers have been released.
+        // Fresh production scorers keep the serving snapshot immutable while
+        // its replacement is constructed.
         newGPUSearch = injectedPhotoSimilaritySearch ?? GPUSimilaritySearch()
         newGPUVideoSearch = injectedVideoSimilaritySearch ?? GPUSimilaritySearch()
         #endif
         try Task.checkCancellation()
-        guard !isMemoryPressureSuspended else { return }
+        guard isSearchGenerationActive(loadGeneration) else { return }
         newGPUSearch?.buildIndex(embeddings: photoIndex.embeddings, count: photoIndex.count)
         try Task.checkCancellation()
         if videoIndex.count > 0 {
@@ -385,6 +428,7 @@ final class SearchEngine: Sendable {
             memoryPressureGeneration: loadGeneration
         )
         try Task.checkCancellation()
+        guard isSearchGenerationActive(loadGeneration) else { return }
 
         // The expensive database and accelerator work happens while searches
         // continue using the previous immutable snapshot. Only the final swap
@@ -392,14 +436,11 @@ final class SearchEngine: Sendable {
         // fully accelerated and usable.
         try indexAccessCoordinator.withExclusiveReload {
             try Task.checkCancellation()
-            let installed = indexSnapshot.withLock { snapshot -> Bool in
+            indexSnapshot.withLock { snapshot in
                 guard !snapshot.isMemoryPressureSuspended,
-                      snapshot.memoryPressureGeneration == loadGeneration else { return false }
+                      snapshot.memoryPressureGeneration == loadGeneration else { return }
                 snapshot = replacement
-                return true
-            }
-            if installed {
-                tailPageCache.removeAll()
+                tailPageCache.invalidate(generation: loadGeneration)
             }
         }
 
@@ -423,6 +464,8 @@ final class SearchEngine: Sendable {
             ($0.photos.count + $0.videos.count) * embeddingDim * MemoryLayout<Float16>.size
         }
     }
+
+    var cachedTailPageBytes: Int { tailPageCache.retainedBytes }
 
     var indexMemoryState: SearchIndexMemoryState {
         let phase = indexReloadPhase.withLock { $0 }
@@ -478,15 +521,21 @@ final class SearchEngine: Sendable {
         }
     }
 
+    /// Invalidates serving data and any work started before a storage change.
+    /// Memory-pressure suspension remains in force until explicitly resumed.
     func dropIndex() {
         indexSnapshot.withLock {
             let suspended = $0.isMemoryPressureSuspended
-            $0 = SearchIndexSnapshot(isMemoryPressureSuspended: suspended)
+            let generation = $0.memoryPressureGeneration &+ 1
+            $0 = SearchIndexSnapshot(
+                isMemoryPressureSuspended: suspended,
+                memoryPressureGeneration: generation
+            )
+            tailPageCache.invalidate(generation: generation)
         }
-        tailPageCache.removeAll()
         locationMetadataOverlay.withLock { $0.removeAll(keepingCapacity: false) }
         #if DEBUG
-        logger.info("[SearchEngine] Index dropped due to memory pressure")
+        logger.info("[SearchEngine] Index invalidated")
         #endif
     }
 
@@ -496,8 +545,8 @@ final class SearchEngine: Sendable {
                 isMemoryPressureSuspended: true,
                 memoryPressureGeneration: $0.memoryPressureGeneration &+ 1
             )
+            tailPageCache.invalidate(generation: $0.memoryPressureGeneration)
         }
-        tailPageCache.removeAll()
         locationMetadataOverlay.withLock { $0.removeAll(keepingCapacity: false) }
         #if DEBUG
         logger.info("[SearchEngine] Index suspended due to memory pressure")
@@ -563,7 +612,7 @@ final class SearchEngine: Sendable {
             )
         }
         try checkSearchGeneration(memoryPressureGeneration)
-        let effectiveHints = featurePolicy.enforcing(hints)
+        let effectiveHints = scoringHints(featurePolicy.enforcing(hints))
         var precomputedEmbeddings: [String: [Float]] = [:]
         if hasSearchIntent(hints)
             && hasSearchIntent(effectiveHints)
@@ -612,6 +661,10 @@ final class SearchEngine: Sendable {
     /// Exclusion-only and empty queries are not filters and must never enter
     /// the unscored path that returns every candidate.
     private func isPureLocationQuery(_ hints: QueryHints) -> Bool {
+        hints.negativeTerms.isEmpty && hasPureFilterIntent(hints)
+    }
+
+    private func hasPureFilterIntent(_ hints: QueryHints) -> Bool {
         if !hints.hasVisualQuery {
             return hints.locationHint != nil || hints.dateRange != nil
         }
@@ -619,6 +672,14 @@ final class SearchEngine: Sendable {
             return true
         }
         return false
+    }
+
+    private func scoringHints(_ hints: QueryHints) -> QueryHints {
+        guard !hints.negativeTerms.isEmpty, hasPureFilterIntent(hints) else { return hints }
+        var scoring = hints
+        scoring.textQuery = "a photo"
+        scoring.hasVisualQuery = false
+        return scoring
     }
 
     private func hasSearchIntent(_ hints: QueryHints) -> Bool {
@@ -664,7 +725,7 @@ final class SearchEngine: Sendable {
         return try indexAccessCoordinator.withSearch {
             try checkSearchGeneration(memoryPressureGeneration)
             let response = try performHybridSearch(
-                hints: featurePolicy.enforcing(hints),
+                hints: scoringHints(featurePolicy.enforcing(hints)),
                 precomputedEmbeddings: precomputedEmbeddings,
                 recordsPerformanceMetrics: recordsPerformanceMetrics
             )
@@ -1230,21 +1291,15 @@ final class SearchEngine: Sendable {
         var tailLoadingDuration: TimeInterval = 0
         var tailScoringDuration: TimeInterval = 0
         while let currentCursor = cursor {
-            try SearchCancellation.checkNow()
+            try checkSearchGeneration(residentSnapshot.memoryPressureGeneration)
             guard currentCursor != previousCursor else {
                 throw SearchEngineError.corruptedIndex
             }
             let loadStartedAt = CFAbsoluteTimeGetCurrent()
-            let page: SearchMediaPage
-            if let cached = tailPageCache.page(after: currentCursor) {
-                page = cached
-            } else {
-                page = try database.loadSearchMediaPage(
-                    after: currentCursor,
-                    limit: SearchIndexLimits.databasePageMediaItems
-                )
-                tailPageCache.insert(page, after: currentCursor)
-            }
+            let page = try loadTailPage(
+                after: currentCursor,
+                generation: residentSnapshot.memoryPressureGeneration
+            )
             tailLoadingDuration += CFAbsoluteTimeGetCurrent() - loadStartedAt
             guard page.mediaCount > 0 else {
                 throw SearchEngineError.corruptedIndex
@@ -1277,6 +1332,26 @@ final class SearchEngine: Sendable {
         }
 
         return try finalizeWholeLibrarySearch(accumulator, hints: hints)
+    }
+
+    private func loadTailPage(
+        after cursor: SearchMediaPageCursor,
+        generation: UInt
+    ) throws -> SearchMediaPage {
+        try checkSearchGeneration(generation)
+        let page: SearchMediaPage
+        if let cached = tailPageCache.page(after: cursor, generation: generation) {
+            page = cached
+        } else {
+            page = try database.loadSearchMediaPage(
+                after: cursor,
+                limit: SearchIndexLimits.databasePageMediaItems
+            )
+            try checkSearchGeneration(generation)
+            tailPageCache.insert(page, after: cursor, generation: generation)
+        }
+        try checkSearchGeneration(generation)
+        return page
     }
 
     private func accumulateSearchPage(
@@ -1508,16 +1583,7 @@ final class SearchEngine: Sendable {
                 guard currentCursor != previousCursor else {
                     throw SearchEngineError.corruptedIndex
                 }
-                let page: SearchMediaPage
-                if let cached = tailPageCache.page(after: currentCursor) {
-                    page = cached
-                } else {
-                    page = try database.loadSearchMediaPage(
-                        after: currentCursor,
-                        limit: SearchIndexLimits.databasePageMediaItems
-                    )
-                    tailPageCache.insert(page, after: currentCursor)
-                }
+                let page = try loadTailPage(after: currentCursor, generation: generation)
                 guard page.mediaCount > 0 else { throw SearchEngineError.corruptedIndex }
                 try retainSimilarResults(
                     in: page.photos,
@@ -1627,8 +1693,7 @@ final class SearchEngine: Sendable {
             try SearchCancellation.check(row)
             if let dateRange = hints.dateRange {
                 guard let date = index.dates[row],
-                      date >= dateRange.start,
-                      date <= dateRange.end else {
+                      dateRange.contains(date) else {
                     mask[row] = false
                     continue
                 }
@@ -1802,21 +1867,41 @@ final class SearchEngine: Sendable {
     private func formatDateRange(_ range: DateRange) -> String {
         let formatter = DateFormatter()
         let calendar = Calendar.current
-        let daysBetween = calendar.dateComponents([.day], from: range.start, to: range.end).day ?? 0
+        formatter.calendar = calendar
+        func precedingInstant(_ date: Date) -> Date {
+            Date(timeIntervalSinceReferenceDate: date.timeIntervalSinceReferenceDate.nextDown)
+        }
+        // Date-only labels must show the previous calendar day for an exclusive
+        // midnight. Avoid subsecond subtraction that formatters may round back
+        // up to midnight, while preserving non-midnight ends on their own day.
+        let displayEnd: Date
+        if range.endIsExclusive, range.end > range.start,
+           calendar.startOfDay(for: range.end) == range.end {
+            displayEnd = calendar.date(byAdding: .day, value: -1, to: range.end) ?? range.start
+        } else {
+            displayEnd = range.end
+        }
+        func isComplete(_ component: Calendar.Component) -> Bool {
+            guard let interval = calendar.dateInterval(of: component, for: range.start),
+                  range.start == interval.start else { return false }
+            return range.endIsExclusive
+                ? range.end == interval.end
+                : range.end == precedingInstant(interval.end)
+        }
 
-        if daysBetween <= 1 {
-            formatter.dateStyle = .medium
-            return formatter.string(from: range.start)
-        } else if daysBetween <= 35 {
-            formatter.dateFormat = "MMMM yyyy"
-            return formatter.string(from: range.start)
-        } else if daysBetween > 350 && daysBetween < 380 {
+        if isComplete(.year) {
             formatter.dateFormat = "yyyy"
             return formatter.string(from: range.start)
-        } else {
-            formatter.dateStyle = .medium
-            return "\(formatter.string(from: range.start)) to \(formatter.string(from: range.end))"
         }
+        if isComplete(.month) {
+            formatter.dateFormat = "MMMM yyyy"
+            return formatter.string(from: range.start)
+        }
+        formatter.dateStyle = .medium
+        if calendar.isDate(range.start, inSameDayAs: displayEnd) {
+            return formatter.string(from: range.start)
+        }
+        return "\(formatter.string(from: range.start)) to \(formatter.string(from: displayEnd))"
     }
 
     private func encodeQuery(

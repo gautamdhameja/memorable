@@ -418,6 +418,12 @@ final class SimulatorDatasetHarnessTests: XCTestCase {
         if surfacedResults.contains(where: { !$0.score.isFinite }) {
             failures.append("\(policyName) '\(queryCase.query)' returned a non-finite score")
         }
+        if Set(surfacedResults.map(\.localIdentifier)).count != surfacedResults.count {
+            failures.append("\(policyName) '\(queryCase.query)' returned duplicate media")
+        }
+        if zip(surfacedResults, surfacedResults.dropFirst()).contains(where: { $0.score < $1.score }) {
+            failures.append("\(policyName) '\(queryCase.query)' returned results out of score order")
+        }
 
         if policy.allowsAdvancedQueryFeatures {
             let hints = await QueryParser.parse(query: queryCase.query, featurePolicy: policy)
@@ -429,7 +435,7 @@ final class SimulatorDatasetHarnessTests: XCTestCase {
                     country: hints.locationCountryName
                 )
             }
-            for result in topFive where !result.isVideo {
+            for result in surfacedResults where !result.isVideo {
                 guard let index = try database.loadPhotoEmbedding(id: result.id), index.count == 1 else {
                     failures.append("\(policyName) '\(queryCase.query)' could not reload result \(result.id)")
                     continue
@@ -445,7 +451,7 @@ final class SimulatorDatasetHarnessTests: XCTestCase {
                 }
                 if let dateRange = hints.dateRange,
                    let date = index.dates[0],
-                   !(date >= dateRange.start && date <= dateRange.end) {
+                   !dateRange.contains(date) {
                     failures.append("\(policyName) '\(queryCase.query)' leaked out-of-range result \(result.localIdentifier)")
                 }
                 if hints.dateRange != nil && index.dates[0] == nil {

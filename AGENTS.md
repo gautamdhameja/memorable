@@ -11,6 +11,13 @@ You are a senior engineer with 20 years of experience. You never guess. You neve
 - If local sub-agents are unavailable, perform the review in the current task or report the missing coverage. Never substitute an external reviewer.
 - Network access needed for dependency resolution, repository synchronization, or test datasets does not authorize sending review material to an external reviewer.
 
+### Reuse established implementations
+
+- Before creating or extending custom implementations of standard formats, protocols, tokenizers, or general-purpose algorithms, check the platform APIs, existing dependencies, and maintained open-source implementations.
+- Prefer a suitable established implementation. Custom code requires a concrete, verified compatibility or capability gap; convenience, avoiding a dependency, or the mere existence of custom code is not sufficient justification.
+- State which alternatives were checked and why custom code is necessary. Keep any required adapter narrow and test it against the reference implementation.
+- Protobuf decoding must use Apple's SwiftProtobuf and generated types. Do not add a handwritten protobuf decoder or hand-edit generated protobuf code.
+
 ### Before every task
 
 1. **Understand first.** Restate what you think I'm asking in one sentence. If anything is ambiguous, ask me before proceeding. Do not infer requirements I didn't state.
@@ -120,7 +127,8 @@ Complete the separate `RELEASE_MANUAL_CHECKLIST.md` before App Store submission.
 ## Dependencies
 
 - **GRDB.swift 7.x** -- SQLite database
-- **apple/swift-protobuf 1.28+** -- SentencePiece tokenizer model deserialization
+- **apple/swift-protobuf 1.28+** -- generated SentencePiece model types and compatibility validation
+- **Google SentencePiece 0.2.2** -- upstream native tokenizer via the local `Packages/SentencePiece` package; rebuild with `scripts/build_sentencepiece.py`
 
 ## Architecture
 
@@ -154,7 +162,7 @@ Core/                          Views/
 ## Critical implementation details
 
 ### Tokenizer -- SentencePiece BPE with byte fallback
-The tokenizer loads a standard SentencePiece `.model` protobuf file (Gemma tokenizer, 256k vocab). It uses BPE with byte fallback -- unknown characters are encoded as UTF-8 byte tokens (`<0x00>`-`<0xFF>`), so every input is tokenizable. Text preprocessing: lowercase and collapse whitespace (punctuation is preserved as tokens, matching the model's training). No BOS token, EOS appended, padded with 0. First word has no `▁` prefix (`add_dummy_prefix=false`). Context length is 64 tokens. All vocab/score/special-token data is derived from the protobuf at init, not hardcoded.
+The tokenizer delegates model decoding, normalization, BPE, and byte fallback to Google's unmodified SentencePiece library through a narrow C ABI bridge. It loads the bundled Gemma `.model` (256k vocabulary). The Swift adapter lowercases and collapses whitespace, preserves punctuation, adds no BOS, appends EOS, and pads with the model's padding ID. The model supplies `add_dummy_prefix=false`. Context length is 64 tokens; shorter requested lengths must be positive. Native errors propagate as Swift errors, and processor access is serialized under a lock. Do not reimplement vocabulary lookup, merging, normalization, byte fallback, or caching in Swift.
 
 ### PHImageManager fires callbacks twice
 `requestImage` may call its handler multiple times (first degraded, then final). All `withCheckedContinuation` wrappers use a `hasResumed` flag to resume only once on the non-degraded callback. Without this, continuations resume on the nil/degraded first call and all thumbnails return nil.
@@ -249,7 +257,7 @@ Dark navy background (#070f17), sky-blue primary (#6fb1ff), defined in `Theme.sw
 - Progressive photo index reloads happen at throttled checkpoints; very large libraries use a larger checkpoint interval to avoid excessive full-index rebuilds
 - Indexed-identifier lookups use bounded database pages and sets for O(1) skip checks.
 - `reserveCapacity` on embeddings array before loading
-- Tokenizer cache with 1000-entry eviction
+- Native SentencePiece tokenization (no duplicate Swift tokenizer cache)
 - Debounced search (500ms) to avoid encoding on every keystroke
 - DuplicateFinder runs on `Task.detached` to avoid blocking main thread
 - OnThisDay filters in SQL (month/day/year) instead of loading all rows
