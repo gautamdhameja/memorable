@@ -171,7 +171,8 @@ extension AppDatabase {
         let cursor = try Row.fetchCursor(
             db,
             sql: """
-                SELECT id, localIdentifier, creationDate, sourceId, filePath, embedding
+                SELECT id, localIdentifier, creationDate, sourceId, filePath,
+                       pixelWidth, pixelHeight, embedding
                 FROM indexed_photos
                 WHERE rowid IN (
                     SELECT rowid FROM indexed_photos
@@ -212,7 +213,9 @@ extension AppDatabase {
                     localIdentifier: row["localIdentifier"],
                     creationDate: date,
                     sourceId: row["sourceId"],
-                    filePath: row["filePath"]
+                    filePath: row["filePath"],
+                    pixelWidth: row["pixelWidth"],
+                    pixelHeight: row["pixelHeight"]
                 ),
                 embedding: row["embedding"]
             ))

@@ -58,6 +58,70 @@ final class DataModelTests: XCTestCase {
         XCTAssertLessThanOrEqual(MemoryConfig.maximumOnThisDayPhotosPerYear, 500)
     }
 
+    func testMemoryCardAspectRatioFollowsPortraitCompositionWithinLayoutBounds() {
+        let portrait = memoryReference(id: "portrait", width: 3_024, height: 4_032)
+        let veryTall = memoryReference(id: "very-tall", width: 1_080, height: 2_400)
+        let panorama = memoryReference(id: "panorama", width: 4_000, height: 1_000)
+        let landscape = memoryReference(id: "landscape", width: 4_032, height: 3_024)
+        let missingDimensions = memoryReference(id: "missing", width: 0, height: -1)
+
+        XCTAssertEqual(
+            MemoryCardLayout.aspectRatio(for: portrait),
+            3.0 / 4.0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            MemoryCardLayout.aspectRatio(for: veryTall),
+            MemoryCardLayout.minimumAspectRatio,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            MemoryCardLayout.aspectRatio(for: panorama),
+            MemoryCardLayout.maximumAspectRatio,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            MemoryCardLayout.aspectRatio(for: landscape),
+            4.0 / 3.0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            MemoryCardLayout.aspectRatio(for: missingDimensions),
+            MemoryCardLayout.fallbackAspectRatio,
+            accuracy: 0.001
+        )
+
+        let defaultTarget = MemoryCardLayout.targetSize(for: portrait)
+        XCTAssertEqual(defaultTarget.width, MemoryCardLayout.targetWidth, accuracy: 0.001)
+        XCTAssertEqual(defaultTarget.height, 1_024 * 4.0 / 3.0, accuracy: 0.001)
+
+        let thumbnailTarget = MemoryCardLayout.targetSize(for: landscape, width: 400)
+        XCTAssertEqual(thumbnailTarget.width, 400, accuracy: 0.001)
+        XCTAssertEqual(thumbnailTarget.height, 300, accuracy: 0.001)
+    }
+
+    func testMemoryGroupsExcludeTheHeroWithoutLeavingEmptySections() {
+        let hero = memoryReference(id: "hero", width: 3_024, height: 4_032)
+        let companion = memoryReference(id: "companion", width: 4_032, height: 3_024)
+        let onlyPhoto = memoryReference(id: "only-photo", width: 4_032, height: 3_024)
+        let groups = [
+            (year: 2025, photos: [hero, companion]),
+            (year: 2024, photos: [onlyPhoto]),
+        ]
+
+        let visible = MemoryYearGroupPresentation.excludingHero(groups, heroID: hero.id)
+
+        XCTAssertEqual(visible.map(\.year), [2025, 2024])
+        XCTAssertEqual(visible[0].photos.map(\.id), [companion.id])
+        XCTAssertEqual(visible[1].photos.map(\.id), [onlyPhoto.id])
+
+        let heroOnly = MemoryYearGroupPresentation.excludingHero(
+            [(year: 2025, photos: [hero])],
+            heroID: hero.id
+        )
+        XCTAssertTrue(heroOnly.isEmpty)
+    }
+
     func testMemoryContentPolicyRejectsScreenshotsAndDocumentImages() {
         XCTAssertFalse(MemoryContentPolicy.isEligible(
             isMarkedScreenshot: true,
@@ -100,6 +164,18 @@ final class DataModelTests: XCTestCase {
         XCTAssertFalse(filter.accepts(first.toFloat16Data()))
         XCTAssertTrue(filter.accepts(distinct.toFloat16Data()))
         XCTAssertEqual(filter.retainedCount, 2)
+    }
+
+    private func memoryReference(id: String, width: Int, height: Int) -> IndexedPhotoReference {
+        IndexedPhotoReference(
+            id: id,
+            localIdentifier: id,
+            creationDate: nil,
+            sourceId: PhotoSourceType.photokit.rawValue,
+            filePath: nil,
+            pixelWidth: width,
+            pixelHeight: height
+        )
     }
 
     // MARK: - EmbeddingConfig

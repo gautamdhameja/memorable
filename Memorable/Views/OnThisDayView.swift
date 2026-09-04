@@ -3,10 +3,24 @@ import SwiftUI
 struct OnThisDayView: View {
     let captionService: PhotoCaptionService
     @Environment(\.database) private var database
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var yearGroups: [(year: Int, photos: [IndexedPhotoReference])] = []
     @State private var isLoading = true
     @State private var showSlideshow = false
+    @State private var selectedHeroResult: SearchResult?
     @State private var indexedCount = 0
+
+    private var heroPhoto: IndexedPhotoReference? {
+        yearGroups.first?.photos.first
+    }
+
+    private var visibleYearGroups: [(year: Int, photos: [IndexedPhotoReference])] {
+        MemoryYearGroupPresentation.excludingHero(yearGroups, heroID: heroPhoto?.id)
+    }
+
+    private var memoryHeroHeight: CGFloat {
+        MemoryHeroMetrics.height(for: dynamicTypeSize)
+    }
 
     var body: some View {
         ZStack {
@@ -44,8 +58,15 @@ struct OnThisDayView: View {
                         .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                     } else {
                         ZStack(alignment: .bottomLeading) {
-                            MemoryHeroImage(photo: yearGroups.first?.photos.first)
-                                .frame(height: 400)
+                            MemoryHeroImage(photo: heroPhoto)
+                                .frame(height: memoryHeroHeight)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedHeroResult = heroPhoto?.searchResult
+                                }
+                                .accessibilityLabel("Open featured memory")
+                                .accessibilityAddTraits(.isButton)
+                                .accessibilityHint("Opens this memory full screen")
                             LinearGradient(
                                 colors: [.black.opacity(0.12), Celestial.Colors.background],
                                 startPoint: .top,
@@ -81,14 +102,14 @@ struct OnThisDayView: View {
                         }
 
                         LazyVStack(spacing: Celestial.Spacing.sectionGap) {
-                            ForEach(yearGroups, id: \.year) { group in
+                            ForEach(visibleYearGroups, id: \.year) { group in
                                 VStack(spacing: 12) {
                                     HStack(alignment: .firstTextBaseline) {
                                         Text("\(String(group.year))")
                                             .font(Celestial.Typography.title2)
                                             .foregroundStyle(Celestial.Colors.onSurface)
                                         Spacer()
-                                        Text("\(group.photos.count) photos")
+                                        Text("\(allPhotos(in: group.year).count) photos")
                                             .font(Celestial.Typography.caption)
                                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                     }
@@ -98,7 +119,10 @@ struct OnThisDayView: View {
                                         Array(group.photos.prefix(20)),
                                         spacing: 5
                                     ) { photo in
-                                        MemoryThumbnail(photo: photo, groupPhotos: group.photos)
+                                        MemoryThumbnail(
+                                            photo: photo,
+                                            groupPhotos: allPhotos(in: group.year)
+                                        )
                                     }
                                     .padding(.horizontal, 5)
                                 }
@@ -114,6 +138,12 @@ struct OnThisDayView: View {
         .preferredColorScheme(.dark)
         .fullScreenCover(isPresented: $showSlideshow) {
             MemorySlideshowView(captionService: captionService)
+        }
+        .fullScreenCover(item: $selectedHeroResult) { result in
+            SearchResultsViewer(
+                initialResult: result,
+                allResults: yearGroups.first?.photos.map(\.searchResult) ?? [result]
+            )
         }
         .task {
             do {
@@ -134,6 +164,32 @@ struct OnThisDayView: View {
             isLoading = false
         }
     }
+
+    private func allPhotos(in year: Int) -> [IndexedPhotoReference] {
+        yearGroups.first(where: { $0.year == year })?.photos ?? []
+    }
+}
+
+enum MemoryYearGroupPresentation {
+    typealias YearGroup = (year: Int, photos: [IndexedPhotoReference])
+
+    static func excludingHero(_ groups: [YearGroup], heroID: String?) -> [YearGroup] {
+        guard let heroID else { return groups }
+        return groups.compactMap { group in
+            let photos = group.photos.filter { $0.id != heroID }
+            return photos.isEmpty ? nil : (year: group.year, photos: photos)
+        }
+    }
+}
+
+private enum MemoryHeroMetrics {
+    static let regularHeight: CGFloat = 340
+    static let accessibilityHeight: CGFloat = 460
+    static let backgroundBlurRadius: CGFloat = 24
+
+    static func height(for dynamicTypeSize: DynamicTypeSize) -> CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? accessibilityHeight : regularHeight
+    }
 }
 
 private struct MemoryHeroImage: View {
@@ -144,15 +200,24 @@ private struct MemoryHeroImage: View {
     @State private var imageLoadTask: Task<Void, Never>?
 
     var body: some View {
-        Group {
+        ZStack {
             if let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
+                    .blur(radius: MemoryHeroMetrics.backgroundBlurRadius)
+                    .scaleEffect(1.08)
+                    .opacity(0.5)
+                    .accessibilityHidden(true)
+
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
             } else {
                 Celestial.memoryGradient
             }
         }
+        .background(Celestial.Colors.surfaceContainerLow)
         .clipped()
         .task(id: photo?.id) {
             guard let photo else {
@@ -188,7 +253,7 @@ private struct MemoryHeroImage: View {
             }
             imageLoadGeneration &+= 1
             let generation = imageLoadGeneration
-            let loaded = await PhotoLibrary.loadImage(
+            let loaded = await PhotoLibrary.loadPreviewImage(
                 for: photo.searchResult,
                 targetSize: CGSize(width: 1200, height: 1200)
             )
@@ -259,10 +324,7 @@ struct MemoryThumbnail: View {
     @State private var creationDate: Date?
 
     private var aspectRatio: CGFloat {
-        guard let thumb = thumbnail else { return 4.0/3.0 }
-        guard thumb.size.height > 0 else { return 4.0/3.0 }
-        let raw = thumb.size.width / thumb.size.height
-        return min(max(raw, 9.0/16.0), 16.0/9.0)
+        MemoryCardLayout.aspectRatio(for: photo)
     }
 
     var body: some View {
@@ -271,11 +333,18 @@ struct MemoryThumbnail: View {
                 if let thumb = thumbnail {
                     Image(uiImage: thumb)
                         .resizable()
-                        .aspectRatio(aspectRatio, contentMode: .fit)
+                        .scaledToFill()
+                        .blur(radius: 12)
+                        .scaleEffect(1.08)
+                        .opacity(0.5)
+                        .accessibilityHidden(true)
+
+                    Image(uiImage: thumb)
+                        .resizable()
+                        .scaledToFit()
                 } else {
                     Rectangle()
                         .fill(Celestial.Colors.surfaceContainer)
-                        .aspectRatio(4.0/3.0, contentMode: .fit)
                         .overlay {
                             ProgressView()
                                 .tint(Celestial.Colors.outlineVariant)
@@ -283,6 +352,7 @@ struct MemoryThumbnail: View {
                         }
                 }
             }
+            .aspectRatio(aspectRatio, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -330,9 +400,9 @@ struct MemoryThumbnail: View {
             let generation = imageLoadGeneration
             let result = photo.searchResult
             let load: @Sendable () async -> UIImage? = {
-                await PhotoLibrary.loadImage(
+                await PhotoLibrary.loadPreviewImage(
                     for: result,
-                    targetSize: CGSize(width: 400, height: 400)
+                    targetSize: MemoryCardLayout.targetSize(for: photo, width: 400)
                 )
             }
             let loaded = if coordinatesRecovery {

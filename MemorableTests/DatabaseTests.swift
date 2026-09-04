@@ -475,13 +475,15 @@ final class DatabaseTests: XCTestCase {
         )
         XCTAssertEqual(retainedIDs, ["duplicate-1", "distinct"])
 
-        let onThisDayIDs = Set(try database.onThisDayPhotos().flatMap { $0.photos.map(\.id) })
+        let onThisDayPhotos = try database.onThisDayPhotos().flatMap(\.photos)
+        let onThisDayIDs = Set(onThisDayPhotos.map(\.id))
         XCTAssertEqual(onThisDayIDs.count, 3)
         XCTAssertTrue(onThisDayIDs.contains("distinct"))
         XCTAssertTrue(onThisDayIDs.contains("older-distinct"))
         XCTAssertEqual(onThisDayIDs.intersection(["duplicate-1", "duplicate-2"]).count, 1)
         XCTAssertFalse(onThisDayIDs.contains("screenshot"))
         XCTAssertFalse(onThisDayIDs.contains("document"))
+        XCTAssertTrue(onThisDayPhotos.allSatisfy { $0.pixelWidth == 100 && $0.pixelHeight == 100 })
 
         let summary = try XCTUnwrap(database.onThisDaySummary())
         XCTAssertTrue(onThisDayIDs.contains(summary.heroPhoto.id))

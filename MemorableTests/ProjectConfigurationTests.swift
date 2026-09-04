@@ -786,9 +786,9 @@ final class ProjectConfigurationTests: XCTestCase {
             ".frame(minHeight: SearchHomeCardMetrics.captionHeight)"
         ))
         XCTAssertTrue(memoryCard.contains(
-            ".aspectRatio(SearchHomeCardMetrics.imageAspectRatio, contentMode: .fit)"
+            "MemoryCardLayout.aspectRatio(for: memory.heroPhoto)"
         ))
-        XCTAssertTrue(searchView.contains("static let imageAspectRatio: CGFloat = 4.0 / 3.0"))
+        XCTAssertTrue(memoryCard.contains("fillsBackdrop: true"))
         XCTAssertTrue(searchView.contains("static let recentThumbnailWidth: CGFloat = 64"))
         XCTAssertTrue(searchView.contains("static let recentThumbnailHeight: CGFloat = 48"))
         XCTAssertTrue(recentSearchRow.contains(
@@ -805,7 +805,39 @@ final class ProjectConfigurationTests: XCTestCase {
         ))
         XCTAssertTrue(homeImage.contains("PhotoLibrary.loadPreviewImage("))
         XCTAssertTrue(homeImage.contains(".scaledToFit()"))
-        XCTAssertFalse(homeImage.contains(".scaledToFill()"))
+        XCTAssertTrue(homeImage.contains("if fillsBackdrop"))
+        XCTAssertTrue(homeImage.contains(".scaledToFill()"))
+    }
+
+    func testMemoriesUseUncroppedHeroAndDoNotRepeatItInTheGrid() throws {
+        let memoriesView = try contents(of: "Memorable/Views/OnThisDayView.swift")
+        let heroImage = try sourceSection(
+            in: memoriesView,
+            from: "private struct MemoryHeroImage: View",
+            to: "// MARK: - Memory Thumbnail"
+        )
+        XCTAssertTrue(memoriesView.contains(
+            "MemoryYearGroupPresentation.excludingHero(yearGroups, heroID: heroPhoto?.id)"
+        ))
+        XCTAssertTrue(memoriesView.contains("ForEach(visibleYearGroups, id: \\.year)"))
+        XCTAssertTrue(memoriesView.contains("groupPhotos: allPhotos(in: group.year)"))
+        XCTAssertTrue(memoriesView.contains("dynamicTypeSize.isAccessibilitySize"))
+        XCTAssertTrue(memoriesView.contains("selectedHeroResult = heroPhoto?.searchResult"))
+        XCTAssertTrue(memoriesView.contains(
+            "allResults: yearGroups.first?.photos.map(\\.searchResult) ?? [result]"
+        ))
+        XCTAssertTrue(heroImage.contains("PhotoLibrary.loadPreviewImage("))
+        XCTAssertTrue(heroImage.contains(".scaledToFit()"))
+        XCTAssertTrue(heroImage.contains(".blur(radius:"))
+        let thumbnail = try sourceSection(
+            in: memoriesView,
+            from: "struct MemoryThumbnail: View",
+            to: "private func handleMemoryPressure()"
+        )
+        XCTAssertTrue(thumbnail.contains("MemoryCardLayout.aspectRatio(for: photo)"))
+        XCTAssertTrue(thumbnail.contains(".aspectRatio(aspectRatio, contentMode: .fit)"))
+        XCTAssertTrue(thumbnail.contains("PhotoLibrary.loadPreviewImage("))
+        XCTAssertTrue(thumbnail.contains("MemoryCardLayout.targetSize(for: photo, width: 400)"))
     }
 
     func testValidatedSuggestionsAreExclusiveWithSearchHistory() throws {

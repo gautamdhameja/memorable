@@ -713,7 +713,7 @@ struct SearchView: View {
             VStack(spacing: 0) {
                 Rectangle()
                     .fill(Celestial.Colors.surfaceContainerLow.opacity(0.48))
-                    .aspectRatio(SearchHomeCardMetrics.imageAspectRatio, contentMode: .fit)
+                    .aspectRatio(SearchHomeCardMetrics.placeholderAspectRatio, contentMode: .fit)
                     .overlay {
                         ProgressView()
                             .tint(Celestial.Colors.primaryDim)
@@ -967,9 +967,13 @@ struct SearchView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     SearchHomePhotoImage(
                         result: memory.heroPhoto.searchResult,
-                        targetSize: CGSize(width: 1_024, height: 768)
+                        targetSize: MemoryCardLayout.targetSize(for: memory.heroPhoto),
+                        fillsBackdrop: true
                     )
-                    .aspectRatio(SearchHomeCardMetrics.imageAspectRatio, contentMode: .fit)
+                    .aspectRatio(
+                        MemoryCardLayout.aspectRatio(for: memory.heroPhoto),
+                        contentMode: .fit
+                    )
 
                     HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 5) {
@@ -1852,7 +1856,7 @@ struct SearchView: View {
 }
 
 private enum SearchHomeCardMetrics {
-    static let imageAspectRatio: CGFloat = 4.0 / 3.0
+    static let placeholderAspectRatio: CGFloat = 4.0 / 3.0
     static let captionHeight: CGFloat = 62
     static let cornerRadius: CGFloat = 20
     static let recentThumbnailWidth: CGFloat = 64
@@ -1860,6 +1864,28 @@ private enum SearchHomeCardMetrics {
 
     static var cardShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+}
+
+enum MemoryCardLayout {
+    static let minimumAspectRatio: CGFloat = 3.0 / 4.0
+    static let maximumAspectRatio: CGFloat = 16.0 / 9.0
+    static let fallbackAspectRatio: CGFloat = 4.0 / 3.0
+    static let targetWidth: CGFloat = 1_024
+
+    static func aspectRatio(for photo: IndexedPhotoReference) -> CGFloat {
+        guard photo.pixelWidth > 0, photo.pixelHeight > 0 else {
+            return fallbackAspectRatio
+        }
+        let aspectRatio = CGFloat(photo.pixelWidth) / CGFloat(photo.pixelHeight)
+        return min(max(aspectRatio, minimumAspectRatio), maximumAspectRatio)
+    }
+
+    static func targetSize(
+        for photo: IndexedPhotoReference,
+        width: CGFloat = targetWidth
+    ) -> CGSize {
+        CGSize(width: width, height: width / aspectRatio(for: photo))
     }
 }
 
@@ -1892,6 +1918,7 @@ private struct RecentSearchTimelineRail: View {
 private struct SearchHomePhotoImage: View {
     let result: SearchResult
     let targetSize: CGSize
+    var fillsBackdrop = false
     @State private var image: UIImage?
     @State private var imageLoadGeneration: UInt = 0
     @State private var imageLoadTask: Task<Void, Never>?
@@ -1901,6 +1928,16 @@ private struct SearchHomePhotoImage: View {
             RecentSearchPlaceholder()
 
             if let image {
+                if fillsBackdrop {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .blur(radius: 20)
+                        .scaleEffect(1.08)
+                        .opacity(0.55)
+                        .accessibilityHidden(true)
+                }
+
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()

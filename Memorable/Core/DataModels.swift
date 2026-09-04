@@ -73,6 +73,8 @@ struct IndexedPhotoReference: Identifiable, Sendable {
     let creationDate: Date?
     let sourceId: String
     let filePath: String?
+    let pixelWidth: Int
+    let pixelHeight: Int
 
     var searchResult: SearchResult {
         SearchResult(
