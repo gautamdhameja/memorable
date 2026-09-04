@@ -60,6 +60,82 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSuccessfulSearchPersistsTopResultAsRecentSearchPreview() async {
+        var storedHistory: [String] = []
+        var storedPreviews: [RecentSearchPreview] = []
+        let video = Self.result(id: "video", isVideo: true, bestFramePosition: 0.4)
+        let photo = Self.result(id: "photo")
+        let model = makeModel(
+            search: { _ in
+                SearchResponse(
+                    results: [video, photo],
+                    fallbackResults: [],
+                    filtersApplied: nil
+                )
+            },
+            addHistory: { query, previewResult, resultCount in
+                storedHistory = [query]
+                storedPreviews = [RecentSearchPreview(
+                    query: query,
+                    result: previewResult,
+                    resultCount: resultCount
+                )]
+            },
+            loadHistory: { storedHistory },
+            loadHistoryPreviews: { storedPreviews }
+        )
+
+        model.setQueryText("California 2022")
+        model.submitSearch(saveToHistory: true)
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.searchHistory, ["California 2022"])
+        XCTAssertEqual(model.recentSearchPreviews.map(\.result.id), ["video"])
+        XCTAssertEqual(model.recentSearchPreviews.map(\.result.bestFramePosition), [0.4])
+        XCTAssertEqual(model.recentSearchPreviews.map(\.resultCount), [2])
+    }
+
+    @MainActor
+    func testInitialHistorySnapshotCannotOverwriteNewerPublishedHistory() {
+        let model = makeModel(search: { _ in Self.response(ids: []) })
+        let stalePreview = RecentSearchPreview(
+            query: "stale",
+            result: Self.result(id: "stale"),
+            resultCount: 1
+        )
+        let currentPreview = RecentSearchPreview(
+            query: "current",
+            result: Self.result(id: "current"),
+            resultCount: 2
+        )
+
+        model.setSearchHistory(["current"], previews: [currentPreview])
+        model.applyInitialSearchHistory(["stale"], previews: [stalePreview])
+
+        XCTAssertEqual(model.searchHistory, ["current"])
+        XCTAssertEqual(model.recentSearchPreviews, [currentPreview])
+    }
+
+    func testRecentSearchHomePolicyLimitsHistoryAndPreservesMissingPreviewFallbacks() {
+        let secondPreview = RecentSearchPreview(
+            query: "Dogs at the beach",
+            result: Self.result(id: "dogs"),
+            resultCount: 27
+        )
+
+        let items = RecentSearchHomePolicy.items(
+            history: ["California 2022", "dogs at the beach", "family cooking", "fourth"],
+            previews: [secondPreview]
+        )
+
+        XCTAssertEqual(items.map(\.query), ["California 2022", "dogs at the beach", "family cooking"])
+        XCTAssertEqual(items.map(\.historyIndex), [0, 1, 2])
+        XCTAssertNil(items[0].preview)
+        XCTAssertEqual(items[1].preview?.result.id, "dogs")
+        XCTAssertNil(items[2].preview)
+    }
+
+    @MainActor
     func testSearchPublishesAndClearingQueryRemovesRestrictionDisclosure() async {
         let restriction = SearchRestrictionSummary(features: [.location, .date])
         let model = makeModel(search: { _ in
@@ -321,8 +397,9 @@ final class SearchViewModelTests: XCTestCase {
             search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
             detectScreenshotIDs: { _ in [] },
             validResultIDs: { _ in [] },
-            addHistory: { _ in },
+            addHistory: { _, _, _ in },
             loadHistory: { [] },
+            loadHistoryPreviews: { [] },
             clearHistory: {},
             removeHistory: { _ in },
             now: { 1 }
@@ -349,8 +426,9 @@ final class SearchViewModelTests: XCTestCase {
             search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
             detectScreenshotIDs: { _ in [] },
             validResultIDs: { _ in [] },
-            addHistory: { _ in },
+            addHistory: { _, _, _ in },
             loadHistory: { [] },
+            loadHistoryPreviews: { [] },
             clearHistory: {},
             removeHistory: { _ in },
             now: { 1 }
@@ -397,8 +475,9 @@ final class SearchViewModelTests: XCTestCase {
             search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
             detectScreenshotIDs: { _ in [] },
             validResultIDs: { _ in [] },
-            addHistory: { _ in },
+            addHistory: { _, _, _ in },
             loadHistory: { [] },
+            loadHistoryPreviews: { [] },
             clearHistory: {},
             removeHistory: { _ in },
             now: { 1 }
@@ -419,7 +498,10 @@ final class SearchViewModelTests: XCTestCase {
         prioritizeUserSearch: @escaping () -> Void = {},
         search: @escaping (String) async throws -> SearchResponse,
         validate: @escaping ([SearchResult]) async -> Set<String> = { results in Set(results.map(\.id)) },
-        detectScreenshots: @escaping ([SearchResult]) async -> Set<String> = { _ in [] }
+        detectScreenshots: @escaping ([SearchResult]) async -> Set<String> = { _ in [] },
+        addHistory: @escaping (String, SearchResult, Int) -> Void = { _, _, _ in },
+        loadHistory: @escaping () -> [String] = { [] },
+        loadHistoryPreviews: @escaping () -> [RecentSearchPreview] = { [] }
     ) -> SearchViewModel {
         SearchViewModel(dependencies: .init(
             prioritizeUserSearch: prioritizeUserSearch,
@@ -430,8 +512,9 @@ final class SearchViewModelTests: XCTestCase {
             search: search,
             detectScreenshotIDs: detectScreenshots,
             validResultIDs: validate,
-            addHistory: { _ in },
-            loadHistory: { [] },
+            addHistory: addHistory,
+            loadHistory: loadHistory,
+            loadHistoryPreviews: loadHistoryPreviews,
             clearHistory: {},
             removeHistory: { _ in },
             now: { 1 }
@@ -449,7 +532,8 @@ final class SearchViewModelTests: XCTestCase {
     private static func result(
         id: String,
         date: Date? = nil,
-        isVideo: Bool = false
+        isVideo: Bool = false,
+        bestFramePosition: Double? = nil
     ) -> SearchResult {
         SearchResult(
             id: id,
@@ -457,7 +541,7 @@ final class SearchViewModelTests: XCTestCase {
             localIdentifier: id,
             creationDate: date,
             isVideo: isVideo,
-            bestFramePosition: nil
+            bestFramePosition: bestFramePosition
         )
     }
 

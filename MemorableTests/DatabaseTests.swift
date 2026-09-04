@@ -200,6 +200,142 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(try database.videoIndexedCount(), 0)
     }
 
+    func testSearchHistoryPersistsPreviewMetadataAndClearsItWithHistory() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let creationDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let preview = RecentSearchPreview(
+            query: "California 2022",
+            result: SearchResult(
+                id: "photo-1",
+                score: 0.91,
+                localIdentifier: "local-photo-1",
+                creationDate: creationDate,
+                isVideo: false,
+                bestFramePosition: nil,
+                sourceId: PhotoSourceType.photokit.rawValue,
+                filePath: nil
+            ),
+            resultCount: 84
+        )
+
+        try database.addSearchHistory(preview.query, preview: preview)
+
+        XCTAssertEqual(try database.loadSearchHistory(), ["California 2022"])
+        XCTAssertEqual(try database.loadSearchHistoryPreviews(limit: 3), [preview])
+
+        try database.clearSearchHistory()
+
+        XCTAssertTrue(try database.loadSearchHistory().isEmpty)
+        XCTAssertTrue(try database.loadSearchHistoryPreviews(limit: 3).isEmpty)
+    }
+
+    func testSearchHistoryPreviewMigrationsPreserveLegacyRows() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(
+            queue,
+            upTo: "v14-geocoding-no-result-retry"
+        )
+        let searchedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try queue.write { db in
+            try db.execute(
+                sql: "INSERT INTO search_history (query, searchedAt) VALUES (?, ?)",
+                arguments: ["legacy search", searchedAt]
+            )
+        }
+
+        try AppDatabase.migrator.migrate(queue)
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { _ in }
+        )
+
+        XCTAssertEqual(try database.loadSearchHistory(), ["legacy search"])
+        XCTAssertTrue(try database.loadSearchHistoryPreviews(limit: 3).isEmpty)
+        let columns = try queue.read { db in
+            try db.columns(in: "search_history").map(\.name)
+        }
+        XCTAssertTrue(columns.contains("previewResultID"))
+        XCTAssertTrue(columns.contains("previewScore"))
+    }
+
+    func testSearchHistoryScoreMigrationCompletesPartialPreviewUpgrade() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(
+            queue,
+            upTo: "v15-search-history-previews"
+        )
+        XCTAssertFalse(try queue.read { db in
+            try db.columns(in: "search_history").contains { $0.name == "previewScore" }
+        })
+
+        try AppDatabase.migrator.migrate(queue)
+        let database = AppDatabase(
+            openQueue: { queue },
+            migrate: { _ in }
+        )
+        let preview = RecentSearchPreview(
+            query: "video search",
+            result: SearchResult(
+                id: "video-1",
+                score: 0.87,
+                localIdentifier: "local-video-1",
+                creationDate: nil,
+                isVideo: true,
+                bestFramePosition: 0.4
+            ),
+            resultCount: 12
+        )
+
+        try database.addSearchHistory(preview.query, preview: preview)
+
+        XCTAssertEqual(try database.loadSearchHistoryPreviews(limit: 3), [preview])
+    }
+
+    func testDuplicateSearchReplacesPreviewAndRemovalDeletesIt() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let original = RecentSearchPreview(
+            query: "California",
+            result: SearchResult(
+                id: "original",
+                score: 0.5,
+                localIdentifier: "original",
+                creationDate: nil,
+                isVideo: false,
+                bestFramePosition: nil
+            ),
+            resultCount: 1
+        )
+        let replacement = RecentSearchPreview(
+            query: "california",
+            result: SearchResult(
+                id: "replacement",
+                score: 0.9,
+                localIdentifier: "replacement",
+                creationDate: nil,
+                isVideo: false,
+                bestFramePosition: nil
+            ),
+            resultCount: 7
+        )
+
+        try database.addSearchHistory(original.query, preview: original)
+        try database.addSearchHistory(replacement.query, preview: replacement)
+
+        XCTAssertEqual(try database.loadSearchHistory(), ["california"])
+        XCTAssertEqual(try database.loadSearchHistoryPreviews(limit: 3), [replacement])
+
+        try database.removeSearchHistory(at: 0)
+
+        XCTAssertTrue(try database.loadSearchHistory().isEmpty)
+        XCTAssertTrue(try database.loadSearchHistoryPreviews(limit: 3).isEmpty)
+    }
+
     func testMemoryQueriesIgnoreRowsOutsideLegacySafetyWindow() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },

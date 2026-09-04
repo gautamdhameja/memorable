@@ -36,8 +36,9 @@ final class SearchViewModel: ObservableObject {
         let search: (String) async throws -> SearchResponse
         let detectScreenshotIDs: ([SearchResult]) async -> Set<String>
         let validResultIDs: ([SearchResult]) async -> Set<String>
-        let addHistory: (String) -> Void
+        let addHistory: (String, SearchResult, Int) -> Void
         let loadHistory: () -> [String]
+        let loadHistoryPreviews: () -> [RecentSearchPreview]
         let clearHistory: () -> Void
         let removeHistory: (Int) -> Void
         let now: () -> TimeInterval
@@ -57,6 +58,7 @@ final class SearchViewModel: ObservableObject {
     @Published private(set) var visibleCount = SearchViewModel.initialVisibleCount
     @Published private(set) var searchTimeMs = 0
     @Published private(set) var searchHistory: [String] = []
+    @Published private(set) var recentSearchPreviews: [RecentSearchPreview] = []
     @Published private(set) var isSearchHistoryLoaded = false
     @Published private(set) var lastQuery = ""
     @Published private(set) var lastResults: [SearchResult] = []
@@ -168,9 +170,27 @@ final class SearchViewModel: ObservableObject {
         setSearchHistory(dependencies.loadHistory())
     }
 
-    func setSearchHistory(_ history: [String]) {
+    func setSearchHistory(
+        _ history: [String],
+        previews: [RecentSearchPreview]? = nil
+    ) {
         searchHistory = history
+        if let previews {
+            recentSearchPreviews = previews
+        } else if history.isEmpty {
+            recentSearchPreviews = []
+        } else {
+            recentSearchPreviews = dependencies.loadHistoryPreviews()
+        }
         isSearchHistoryLoaded = true
+    }
+
+    func applyInitialSearchHistory(
+        _ history: [String],
+        previews: [RecentSearchPreview]
+    ) {
+        guard !isSearchHistoryLoaded else { return }
+        setSearchHistory(history, previews: previews)
     }
 
     func clearSearchHistory() {
@@ -361,7 +381,7 @@ final class SearchViewModel: ObservableObject {
 
             if !response.results.isEmpty {
                 if saveToHistory {
-                    dependencies.addHistory(query)
+                    dependencies.addHistory(query, response.results[0], response.results.count)
                     setSearchHistory(dependencies.loadHistory())
                 }
                 lastQuery = query

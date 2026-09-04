@@ -131,8 +131,15 @@ struct SearchView: View {
                     task.cancel()
                 }
             },
-            addHistory: { SearchHistory.add(query: $0) },
+            addHistory: {
+                SearchHistory.add(
+                    query: $0,
+                    previewResult: $1,
+                    resultCount: $2
+                )
+            },
             loadHistory: { SearchHistory.load() },
+            loadHistoryPreviews: { SearchHistory.loadPreviews() },
             clearHistory: { SearchHistory.clear() },
             removeHistory: { SearchHistory.remove(at: $0) },
             now: { CFAbsoluteTimeGetCurrent() }
@@ -316,15 +323,26 @@ struct SearchView: View {
                 // Load DB-backed data off the main thread's critical path so
                 // the search bar is tappable immediately on appear.
                 async let savedData = Task.detached(priority: .utility) {
-                    (albums: SmartAlbumStore.load(), history: SearchHistory.load())
+                    let history = SearchHistory.load()
+                    return (
+                        albums: SmartAlbumStore.load(),
+                        history: history,
+                        previews: SearchHistory.loadPreviews()
+                    )
                 }.value
                 async let libraryCount = Task.detached(priority: .utility) {
                     PhotoLibrary.fetchAllMedia().count
                 }.value
-                let (data, count) = await (savedData, libraryCount)
+                let data = await savedData
                 guard !Task.isCancelled else { return }
                 smartAlbums = data.albums
-                viewModel.setSearchHistory(data.history)
+                viewModel.applyInitialSearchHistory(
+                    data.history,
+                    previews: data.previews
+                )
+
+                let count = await libraryCount
+                guard !Task.isCancelled else { return }
                 totalLibraryCount = count
             }
             .onDisappear {
@@ -800,59 +818,145 @@ struct SearchView: View {
     // MARK: - Recent Queries
 
     private var searchHistoryView: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let items = RecentSearchHomePolicy.items(
+            history: viewModel.searchHistory,
+            previews: viewModel.recentSearchPreviews
+        )
+
+        return VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("RECENT SEARCHES")
-                    .font(Celestial.Typography.eyebrow)
-                    .tracking(0.6)
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                Text("Recent searches")
+                    .font(Celestial.Typography.bodyEmphasized)
+                    .foregroundStyle(Celestial.Colors.onSurface)
                 Spacer()
-                Button("Clear All") {
-                    viewModel.clearSearchHistory()
-                }
-                .font(Celestial.Typography.captionStrong)
-                .foregroundStyle(Celestial.Colors.primaryFixedDim)
-            }
-            .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
-            .padding(.top, Celestial.Spacing.surfaceContentInset)
-            .padding(.bottom, 12)
-
-            ForEach(Array(viewModel.searchHistory.enumerated()), id: \.offset) { index, query in
-                Button {
-                    viewModel.setQueryText(query)
-                    performSearch(saveToHistory: true)
+                Menu {
+                    Button("Clear recent searches", role: .destructive) {
+                        viewModel.clearSearchHistory()
+                    }
                 } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(Celestial.Typography.supporting)
-                            .foregroundStyle(Celestial.Colors.tertiaryDim)
-                        Text(query)
-                            .font(Celestial.Typography.supporting)
-                            .foregroundStyle(Celestial.Colors.onSurface)
-                        Spacer()
-                        Image(systemName: "arrow.up.left")
-                            .font(Celestial.Typography.footnote)
-                            .foregroundStyle(Celestial.Colors.outlineVariant)
-                    }
-                    .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
-                    .padding(.vertical, 12)
+                    Image(systemName: "ellipsis")
+                        .font(Celestial.Typography.supportingEmphasized)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
-                .contextMenu {
-                    Button(role: .destructive) {
-                        viewModel.removeSearchHistory(at: index)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
+                .accessibilityLabel("Recent search options")
+            }
+            .padding(.leading, 2)
+            .padding(.bottom, 10)
 
-                if index < viewModel.searchHistory.count - 1 {
-                    CelestialHairline()
-                        .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
+            if let newest = items.first {
+                recentSearchCard(newest, prominence: .primary)
+
+                let olderItems = Array(items.dropFirst())
+                if !olderItems.isEmpty {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(
+                                .flexible(),
+                                spacing: Celestial.Spacing.stackedContainerGap
+                            ),
+                            GridItem(.flexible()),
+                        ],
+                        alignment: .leading,
+                        spacing: Celestial.Spacing.stackedContainerGap
+                    ) {
+                        ForEach(olderItems) { item in
+                            recentSearchCard(item, prominence: .secondary)
+                        }
+                    }
+                    .padding(.top, Celestial.Spacing.stackedContainerGap)
                 }
             }
         }
-        .modifier(GlassPanelModifier(cornerRadius: 18))
         .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+    }
+
+    private func recentSearchCard(
+        _ item: RecentSearchHomeItem,
+        prominence: RecentSearchCardProminence
+    ) -> some View {
+        Button {
+            viewModel.setQueryText(item.query)
+            performSearch(saveToHistory: true)
+        } label: {
+            ZStack(alignment: .bottomLeading) {
+                if let preview = item.preview,
+                   FolderResultAccessPolicy.allows(
+                       sourceId: preview.result.sourceId,
+                       isPro: proManager.isPro
+                   ) {
+                    RecentSearchPreviewImage(
+                        result: preview.result,
+                        targetSize: prominence.targetSize
+                    )
+                } else {
+                    RecentSearchPlaceholder()
+                }
+
+                LinearGradient(
+                    colors: [.clear, Color.black.opacity(0.2), Color.black.opacity(0.88)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.query)
+                        .font(
+                            prominence == .primary
+                                ? Celestial.Typography.bodyEmphasized
+                                : Celestial.Typography.supportingEmphasized
+                        )
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    recentSearchMetadata(item, prominence: prominence)
+                }
+                .padding(prominence == .primary ? 16 : 12)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: prominence.height)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Celestial.Colors.outlineVariant.opacity(0.36), lineWidth: 0.7)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                viewModel.removeSearchHistory(at: item.historyIndex)
+            } label: {
+                Label("Delete recent search", systemImage: "trash")
+            }
+        }
+        .accessibilityLabel("Search again for \(item.query)")
+        .accessibilityHint("Runs this recent search")
+    }
+
+    @ViewBuilder
+    private func recentSearchMetadata(
+        _ item: RecentSearchHomeItem,
+        prominence: RecentSearchCardProminence
+    ) -> some View {
+        let resultCount = item.preview?.resultCount ?? 0
+        if prominence == .primary || resultCount > 0 {
+            HStack(spacing: 5) {
+                if prominence == .primary {
+                    Text("Most recent")
+                    if resultCount > 0 {
+                        Text("·")
+                    }
+                }
+                if resultCount > 0 {
+                    Text("\(resultCount.formatted()) \(resultCount == 1 ? "result" : "results")")
+                }
+            }
+            .font(Celestial.Typography.micro)
+            .foregroundStyle(Color.white.opacity(0.72))
+        }
     }
 
     // MARK: - Last Results (when search cleared)
@@ -1508,6 +1612,100 @@ struct SearchView: View {
         viewModel.submitSearch(saveToHistory: saveToHistory)
     }
 
+}
+
+private enum RecentSearchCardProminence {
+    case primary
+    case secondary
+
+    var height: CGFloat {
+        switch self {
+        case .primary: return 198
+        case .secondary: return 150
+        }
+    }
+
+    var targetSize: CGSize {
+        switch self {
+        case .primary: return CGSize(width: 1_050, height: 620)
+        case .secondary: return CGSize(width: 540, height: 480)
+        }
+    }
+}
+
+private struct RecentSearchPreviewImage: View {
+    let result: SearchResult
+    let targetSize: CGSize
+    @State private var image: UIImage?
+    @State private var imageLoadGeneration: UInt = 0
+    @State private var imageLoadTask: Task<Void, Never>?
+
+    var body: some View {
+        ZStack {
+            RecentSearchPlaceholder()
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .task(id: result.id) {
+            imageLoadTask?.cancel()
+            let task = Task { @MainActor in
+                imageLoadGeneration &+= 1
+                let generation = imageLoadGeneration
+                image = nil
+                let loaded = await PhotoLibrary.loadImage(
+                    for: result,
+                    targetSize: targetSize
+                )
+                guard ImageLoadGenerationPolicy.acceptsCompletion(
+                    startedGeneration: generation,
+                    currentGeneration: imageLoadGeneration,
+                    isCancelled: Task.isCancelled
+                ) else { return }
+                image = loaded
+            }
+            imageLoadTask = task
+            await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIApplication.didReceiveMemoryWarningNotification
+            )
+        ) { _ in
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&image)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct RecentSearchPlaceholder: View {
+    var body: some View {
+        LinearGradient(
+            colors: [
+                Celestial.Colors.surfaceBright,
+                Celestial.Colors.secondaryContainer,
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .overlay {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 27, weight: .light))
+                .foregroundStyle(Celestial.Colors.primaryFixedDim.opacity(0.58))
+        }
+    }
 }
 
 enum SearchResultForegroundValidator {

@@ -2638,7 +2638,9 @@ final class SearchFixtureDatabase: DatabaseProtocol {
     }
     func onThisDayPhotos() throws -> [(year: Int, photos: [IndexedPhotoReference])] { [] }
     func addSearchHistory(_ query: String) throws {}
+    func addSearchHistory(_ query: String, preview: RecentSearchPreview?) throws {}
     func loadSearchHistory() throws -> [String] { [] }
+    func loadSearchHistoryPreviews(limit: Int) throws -> [RecentSearchPreview] { [] }
     func clearSearchHistory() throws {}
     func removeSearchHistory(at index: Int) throws {}
     func loadSmartAlbums() throws -> [SmartAlbum] { [] }

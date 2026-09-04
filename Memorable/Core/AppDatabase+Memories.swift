@@ -168,14 +168,40 @@ extension AppDatabase {
     // MARK: - Search History
 
     func addSearchHistory(_ query: String) throws {
+        try addSearchHistory(query, preview: nil)
+    }
+
+    func addSearchHistory(_ query: String, preview: RecentSearchPreview?) throws {
         let boundedQuery = QueryInputPolicy.bounded(query)
         guard !boundedQuery.isEmpty else { return }
         try dbQueue.write { db in
             // Remove existing duplicate (case-insensitive)
             try db.execute(sql: "DELETE FROM search_history WHERE LOWER(query) = LOWER(?)", arguments: [boundedQuery])
             try db.execute(
-                sql: "INSERT INTO search_history (query, searchedAt) VALUES (?, ?)",
-                arguments: [boundedQuery, Date()]
+                sql: """
+                    INSERT INTO search_history (
+                        query, searchedAt, previewResultID, previewScore, previewLocalIdentifier,
+                        previewCreationDate, previewIsVideo, previewBestFramePosition,
+                        previewSourceId, previewFilePath, previewResultCount
+                    ) VALUES (
+                        :query, :searchedAt, :previewResultID, :previewScore, :previewLocalIdentifier,
+                        :previewCreationDate, :previewIsVideo, :previewBestFramePosition,
+                        :previewSourceId, :previewFilePath, :previewResultCount
+                    )
+                    """,
+                arguments: [
+                    "query": boundedQuery,
+                    "searchedAt": Date(),
+                    "previewResultID": preview?.result.id,
+                    "previewScore": preview?.result.score,
+                    "previewLocalIdentifier": preview?.result.localIdentifier,
+                    "previewCreationDate": preview?.result.creationDate,
+                    "previewIsVideo": preview?.result.isVideo,
+                    "previewBestFramePosition": preview?.result.bestFramePosition,
+                    "previewSourceId": preview?.result.sourceId,
+                    "previewFilePath": preview?.result.filePath,
+                    "previewResultCount": preview?.resultCount,
+                ]
             )
             // Keep only the most recent 20
             try db.execute(sql: """
@@ -189,6 +215,47 @@ extension AppDatabase {
     func loadSearchHistory() throws -> [String] {
         try dbQueue.read { db in
             try String.fetchAll(db, sql: "SELECT query FROM search_history ORDER BY searchedAt DESC LIMIT 20")
+        }
+    }
+
+    func loadSearchHistoryPreviews(limit: Int) throws -> [RecentSearchPreview] {
+        let boundedLimit = max(0, min(limit, 20))
+        guard boundedLimit > 0 else { return [] }
+        return try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT query, previewResultID, previewScore, previewLocalIdentifier,
+                           previewCreationDate, previewIsVideo, previewBestFramePosition,
+                           previewSourceId, previewFilePath, previewResultCount
+                    FROM search_history
+                    ORDER BY searchedAt DESC
+                    LIMIT ?
+                    """,
+                arguments: [boundedLimit]
+            ).compactMap { row in
+                let resultID: String? = row["previewResultID"]
+                let localIdentifier: String? = row["previewLocalIdentifier"]
+                guard let resultID, let localIdentifier else { return nil }
+                let query: String = row["query"]
+                let sourceId: String? = row["previewSourceId"]
+                let result = SearchResult(
+                    id: resultID,
+                    score: row["previewScore"] ?? 1,
+                    localIdentifier: localIdentifier,
+                    creationDate: row["previewCreationDate"],
+                    isVideo: row["previewIsVideo"] ?? false,
+                    bestFramePosition: row["previewBestFramePosition"],
+                    sourceId: sourceId ?? PhotoSourceType.photokit.rawValue,
+                    filePath: row["previewFilePath"]
+                )
+                let resultCount: Int? = row["previewResultCount"]
+                return RecentSearchPreview(
+                    query: query,
+                    result: result,
+                    resultCount: resultCount ?? 0
+                )
+            }
         }
     }
 

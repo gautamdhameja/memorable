@@ -555,7 +555,9 @@ protocol DatabaseProtocol: Sendable {
 
     // Search History
     func addSearchHistory(_ query: String) throws
+    func addSearchHistory(_ query: String, preview: RecentSearchPreview?) throws
     func loadSearchHistory() throws -> [String]
+    func loadSearchHistoryPreviews(limit: Int) throws -> [RecentSearchPreview]
     func clearSearchHistory() throws
     func removeSearchHistory(at index: Int) throws
 
@@ -1424,6 +1426,29 @@ final class AppDatabase: DatabaseProtocol, Sendable {
             }
             try db.alter(table: "indexed_videos") { t in
                 t.add(column: "locationRetryAfter", .datetime)
+            }
+        }
+
+        // Keep the top result for each recent query so the search home can be
+        // photo-led without re-running semantic searches during launch.
+        migrator.registerMigration("v15-search-history-previews") { db in
+            try db.alter(table: "search_history") { t in
+                t.add(column: "previewResultID", .text)
+                t.add(column: "previewLocalIdentifier", .text)
+                t.add(column: "previewCreationDate", .datetime)
+                t.add(column: "previewIsVideo", .boolean)
+                t.add(column: "previewBestFramePosition", .double)
+                t.add(column: "previewSourceId", .text)
+                t.add(column: "previewFilePath", .text)
+                t.add(column: "previewResultCount", .integer)
+            }
+        }
+
+        // Kept separate from v15 so development installs that already ran the
+        // preview migration receive the score column without rebuilding data.
+        migrator.registerMigration("v16-search-history-preview-score") { db in
+            try db.alter(table: "search_history") { t in
+                t.add(column: "previewScore", .double)
             }
         }
 
