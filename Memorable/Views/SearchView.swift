@@ -713,7 +713,10 @@ struct SearchView: View {
             VStack(spacing: 0) {
                 Rectangle()
                     .fill(Celestial.Colors.surfaceContainerLow.opacity(0.48))
-                    .aspectRatio(SearchHomeCardMetrics.placeholderAspectRatio, contentMode: .fit)
+                    .aspectRatio(
+                        SearchHomeCardMetrics.memoryPreviewAspectRatio,
+                        contentMode: .fit
+                    )
                     .overlay {
                         ProgressView()
                             .tint(Celestial.Colors.primaryDim)
@@ -967,11 +970,11 @@ struct SearchView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     SearchHomePhotoImage(
                         result: memory.heroPhoto.searchResult,
-                        targetSize: MemoryCardLayout.targetSize(for: memory.heroPhoto),
+                        targetSize: SearchHomeCardMetrics.memoryPreviewTargetSize,
                         fillsBackdrop: true
                     )
                     .aspectRatio(
-                        MemoryCardLayout.aspectRatio(for: memory.heroPhoto),
+                        SearchHomeCardMetrics.memoryPreviewAspectRatio,
                         contentMode: .fit
                     )
 
@@ -1856,7 +1859,8 @@ struct SearchView: View {
 }
 
 private enum SearchHomeCardMetrics {
-    static let placeholderAspectRatio: CGFloat = 4.0 / 3.0
+    static let memoryPreviewAspectRatio: CGFloat = 16.0 / 9.0
+    static let memoryPreviewTargetSize = CGSize(width: 1_024, height: 1_024)
     static let captionHeight: CGFloat = 62
     static let cornerRadius: CGFloat = 20
     static let recentThumbnailWidth: CGFloat = 64
