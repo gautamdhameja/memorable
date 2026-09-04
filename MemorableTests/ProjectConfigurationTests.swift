@@ -785,16 +785,17 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(memoryCard.contains(
             ".frame(minHeight: SearchHomeCardMetrics.captionHeight)"
         ))
-        XCTAssertTrue(memoryCard.contains("SearchHomeCardMetrics.memoryPreviewAspectRatio"))
+        XCTAssertTrue(memoryCard.contains(
+            ".frame(height: SearchHomeCardMetrics.memoryPreviewHeight)"
+        ))
+        XCTAssertTrue(memoryCard.contains(".clipped()"))
         XCTAssertTrue(searchView.contains(
-            "static let memoryPreviewAspectRatio: CGFloat = 16.0 / 9.0"
+            "static let memoryPreviewHeight: CGFloat = 156"
         ))
         XCTAssertTrue(memoryCard.contains(
             "targetSize: SearchHomeCardMetrics.memoryPreviewTargetSize"
         ))
-        XCTAssertFalse(memoryCard.contains(
-            "MemoryCardLayout.aspectRatio(for: memory.heroPhoto)"
-        ))
+        XCTAssertFalse(memoryCard.contains(".aspectRatio("))
         XCTAssertTrue(memoryCard.contains("fillsBackdrop: true"))
         XCTAssertTrue(searchView.contains("static let recentThumbnailWidth: CGFloat = 64"))
         XCTAssertTrue(searchView.contains("static let recentThumbnailHeight: CGFloat = 48"))
