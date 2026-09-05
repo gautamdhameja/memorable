@@ -32,6 +32,30 @@ private final class FailingResetFileManager: FileManager, @unchecked Sendable {
 
 final class DatabaseTests: XCTestCase {
 
+    func testSmartAlbumWriteFailuresPropagateAndPreserveSavedAlbums() throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        let saved = SmartAlbum(id: "saved", name: "Dogs", query: "dog", createdAt: Date())
+        try database.saveSmartAlbum(saved)
+        try database.dbQueue.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_album_insert BEFORE INSERT ON smart_albums
+                BEGIN SELECT RAISE(ABORT, 'injected album save failure'); END;
+                CREATE TRIGGER fail_album_delete BEFORE DELETE ON smart_albums
+                BEGIN SELECT RAISE(ABORT, 'injected album delete failure'); END;
+                """)
+        }
+        let newAlbum = SmartAlbum(id: "new", name: "Cats", query: "cat", createdAt: Date())
+        XCTAssertThrowsError(try database.saveSmartAlbum(newAlbum))
+        XCTAssertThrowsError(try database.deleteSmartAlbum(id: saved.id))
+        XCTAssertEqual(try database.loadSmartAlbums().map(\.id), [saved.id])
+        try database.dbQueue.write { db in
+            try db.execute(sql: "DROP TRIGGER fail_album_insert; DROP TRIGGER fail_album_delete;")
+        }
+        try database.deleteSmartAlbum(id: saved.id)
+        XCTAssertTrue(try database.loadSmartAlbums().isEmpty)
+    }
+
     func testPhotoRefreshPreservesIdentityResetsEnrichmentAndChangesOlderRowRevision() throws {
         let database = AppDatabase(openQueue: { try DatabaseQueue() },
                                    migrate: { try AppDatabase.migrator.migrate($0) })

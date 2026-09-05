@@ -110,8 +110,3 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
         }
     }
 }
-
-/// Lightweight Identifiable wrapper for raw strings (e.g. PHAsset local identifiers).
-struct IdentifiedString: Identifiable {
-    let id: String
-}

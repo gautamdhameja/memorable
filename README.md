@@ -10,7 +10,7 @@ Memorable searches locally available photos and videos on iPhone with bundled AI
 
 Memorable uses [SigLIP2](https://arxiv.org/abs/2502.14786) (Google, Apache 2.0) to encode photos, video frames, and query text as 768-dimensional embeddings. The app stores media embeddings and searchable metadata in a local SQLite database and ranks results with dot-product similarity.
 
-During initial setup, the app indexes photos first so search becomes available at progressive checkpoints. It then indexes video frames and runs deferred OCR, sharpness, scene-label, and place-name enrichment.
+During initial setup, the app indexes photos first so search becomes available at progressive checkpoints. It then indexes video frames. The main indexing screen ends after photos and videos; optional photo analysis continues later without blocking search.
 
 ```text
 Query -> Parse date, location, and exclusions -> Encode visual text locally
@@ -131,6 +131,12 @@ Keep high-cost work bounded and cancellable:
 - Background-task expiration cancels the active indexing workflow.
 
 Rebuilding the index preserves saved folder registrations and bookmarks. A confirmed Pro downgrade removes derived folder index rows but preserves those registrations. After a rebuild or confirmed Pro restoration, the app automatically schedules saved folders that need indexing.
+
+Initial indexing and later indexing runs show a memory slideshow while no query is displayed. Progress stays in the indexing card; counts describe searchable media, not the size of the photo library. During later runs, you can search the available index and clear the query to return to the slideshow.
+
+Photo enrichment waits for a quiet interval and pauses for the full duration of text and similarity searches. It processes at most two photos at a time, retains completed work when interrupted, and publishes metadata periodically. Screenshots use PhotoKit metadata and accurate OCR first; other photos group fast OCR and scene classification through Apple Vision. A dismissible status appears on the normal search screen while analysis runs.
+
+Both slideshows show photo dates without generated or canned captions. No caption model preparation runs at startup. The progress card stays below the slideshow and uses a subtle tint from its current photo. It reuses the loaded image, clears that reference when the slideshow closes or memory runs low, and omits the tint when Reduce Transparency is enabled.
 
 Add a deterministic limit and a cancellation check before introducing any new operation whose memory or work scales with library size.
 

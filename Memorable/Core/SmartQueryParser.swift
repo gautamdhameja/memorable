@@ -465,17 +465,4 @@ enum QueryParser {
         return QueryParserFallback.parse(query: query)
     }
 
-    // Synchronous fallback for callers that can't await
-    static func parseSync(
-        query: String,
-        featurePolicy: SearchFeaturePolicy = .basic
-    ) -> QueryHints {
-        guard featurePolicy.allowsAdvancedQueryFeatures else {
-            let text = QueryInputPolicy.bounded(query)
-                .lowercased()
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return QueryHints(textQuery: text.isEmpty ? "a photo" : text, hasVisualQuery: !text.isEmpty)
-        }
-        return QueryParserFallback.parse(query: query)
-    }
 }

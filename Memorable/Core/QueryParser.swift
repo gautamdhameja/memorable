@@ -681,14 +681,6 @@ private enum TemporalParser {
             let endDate = cal.date(from: DateComponents(year: year, month: endMonth + 1, day: 0)) ?? start
             return DateRange(start: start, end: dayEnd(endDate))
         }
-        func mostRecentPast(month: Int, dayStart: Int, dayEnd de: Int) -> DateRange {
-            let thisYear = makeDate(currentYear, month, de)
-            let year = thisYear <= now ? currentYear : currentYear - 1
-            return DateRange(
-                start: makeDate(year, month, dayStart),
-                end: TemporalParser.dayEndHelper(makeDate(year, month, de), cal: cal)
-            )
-        }
         func startOfWeek(weeksBack: Int) -> Date {
             let components = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today)
             let weekStart = cal.date(from: components) ?? today

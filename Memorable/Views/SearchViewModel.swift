@@ -45,6 +45,7 @@ final class SearchViewModel: ObservableObject {
         let clearHistory: () -> Void
         let removeHistory: (Int) -> Void
         let now: () -> TimeInterval
+        var searchActivityChanged: (Bool) -> Void = { _ in }
     }
 
     @Published private(set) var queryText = ""
@@ -52,7 +53,13 @@ final class SearchViewModel: ObservableObject {
     @Published private(set) var fallbackResults: [SearchResult] = []
     @Published private(set) var filterSummary: FilterSummary?
     @Published private(set) var restrictionSummary: SearchRestrictionSummary?
-    @Published private(set) var isSearching = false
+    @Published private(set) var isSearching = false {
+        didSet {
+            if isSearching != oldValue {
+                dependencies.searchActivityChanged(isSearching)
+            }
+        }
+    }
     @Published private(set) var searchError: String?
     @Published private(set) var lastSearchedQuery: String?
     @Published private(set) var screenshotIDs: Set<String> = []

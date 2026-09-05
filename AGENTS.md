@@ -146,9 +146,8 @@ Core/                          Views/
 ├── QueryParser.swift
 ├── SmartQueryParser.swift
 ├── ResultGrouper.swift
-├── ModelDownloader.swift
+├── ModelResourceManager.swift
 ├── SearchHistory.swift
-├── SmartAlbumStore.swift
 ├── SurpriseQueries.swift
 ├── DuplicateFinder.swift
 ├── OCRService.swift
@@ -213,7 +212,7 @@ Two-pass indexing: photos first, then videos.
 
 **Pass 2 (Videos):** For each video → extract 2-5 frames based on duration (spread 10%-90%) → encode each frame → store video record + frame embeddings → reload index. Progress shows "Indexing videos" with "Photos ready — you can search now".
 
-**Deferred enrichment:** After base indexing is idle, incomplete photo rows are enriched in bounded batches with OCR, screenshot OCR, blur scoring, and scene labels. Enrichment state is persisted per photo; folder-source enrichment reopens the saved security-scoped bookmark and validates paths before reading files.
+**Deferred enrichment:** The main indexing experience ends after photos and videos. After a quiet interval, incomplete photos receive OCR, blur scoring, and scene labels in batches of 20 with at most two photos in flight. Text and similarity searches suspend maintenance for their full duration. Completed analysis survives cancellation and is published periodically without invalidating the existing search index. PhotoKit screenshot metadata selects accurate OCR; other photos group fast OCR and classification through Apple Vision. Enrichment stops when the app is inactive and resumes later. Folder-source enrichment reopens the saved security-scoped bookmark and validates paths before reading files.
 
 **Location enrichment:** GPS-bearing media is searchable by unambiguous city, region, and country before reverse geocoding completes, using a bundled read-only gazetteer and local point-in-polygon checks. While the app is active, deferred reverse geocoding groups nearby coordinates, reuses a persistent cache, writes metadata in batches, and retries transient failures with bounded backoff. It cancels when the app becomes inactive.
 

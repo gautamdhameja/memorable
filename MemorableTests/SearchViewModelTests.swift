@@ -631,6 +631,41 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertEqual(events, ["prioritize", "search"])
     }
 
+    @MainActor
+    func testSearchActivityCoversSlowSearchAndClearReleasesIt() async {
+        let searcher = ControlledSearcher()
+        var activity: [Bool] = []
+        let model = makeModel(
+            searchActivityChanged: { activity.append($0) },
+            search: searcher.search
+        )
+        model.setQueryText("cats")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "cats")
+        XCTAssertEqual(activity, [true])
+        model.setQueryText("")
+        XCTAssertEqual(activity, [true, false])
+        await searcher.complete(query: "cats", with: response(id: "old"))
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(activity, [true, false])
+    }
+
+    @MainActor
+    func testSearchFailureAndSimilarityReleaseMaintenancePause() async {
+        var activity: [Bool] = []
+        let model = makeModel(
+            searchActivityChanged: { activity.append($0) },
+            search: { _ in throw ExpectedError.failure }
+        )
+        model.setQueryText("cats")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(activity, [true, false])
+        model.submitSimilaritySearch { [] }
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(activity, [true, false, true, false])
+    }
+
     func testForegroundValidationPartitionsPhotoKitAndFolderResults() {
         let candidates = [
             Self.result(id: "photo-valid"),
@@ -772,6 +807,7 @@ final class SearchViewModelTests: XCTestCase {
     @MainActor
     private func makeModel(
         prioritizeUserSearch: @escaping () -> Void = {},
+        searchActivityChanged: @escaping (Bool) -> Void = { _ in },
         search: @escaping (String) async throws -> SearchResponse,
         searchForHistoryPreview: ((String) async throws -> SearchResponse)? = nil,
         validate: @escaping ([SearchResult]) async -> Set<String> = { results in Set(results.map(\.id)) },
@@ -798,7 +834,8 @@ final class SearchViewModelTests: XCTestCase {
             loadHistoryPreviews: loadHistoryPreviews,
             clearHistory: {},
             removeHistory: { _ in },
-            now: { 1 }
+            now: { 1 },
+            searchActivityChanged: searchActivityChanged
         ))
     }
 

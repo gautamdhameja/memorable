@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct OnThisDayView: View {
-    let captionService: PhotoCaptionService
     @Environment(\.database) private var database
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var yearGroups: [(year: Int, photos: [IndexedPhotoReference])] = []
@@ -137,7 +136,7 @@ struct OnThisDayView: View {
         .celestialNavigationTitle("Memories")
         .preferredColorScheme(.dark)
         .fullScreenCover(isPresented: $showSlideshow) {
-            MemorySlideshowView(captionService: captionService)
+            MemorySlideshowView()
         }
         .fullScreenCover(item: $selectedHeroResult) { result in
             SearchResultsViewer(

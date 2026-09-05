@@ -83,23 +83,6 @@ extension MLMultiArray {
     }
 }
 
-// MARK: - Timeout Wrapper
-
-/// Wraps an async operation with a timeout. Returns nil if the timeout expires.
-func withTimeout<T: Sendable>(seconds: Double, operation: @escaping (@escaping (T?) -> Void) -> Void) async -> T? {
-    await withCheckedContinuation { continuation in
-        let guard_ = ContinuationGuard(continuation)
-        let timeoutTask = Task {
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard_.resume(returning: nil)
-        }
-        operation { value in
-            timeoutTask.cancel()
-            guard_.resume(returning: value)
-        }
-    }
-}
-
 // MARK: - DateFormatter Cache
 
 extension DateFormatter {

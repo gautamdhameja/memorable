@@ -554,7 +554,7 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertLessThan(surpriseDock.lowerBound, moreDock.lowerBound)
         XCTAssertTrue(mainTabView.contains("Text(\"Surprise me\")"))
         XCTAssertFalse(mainTabView.contains("case memories"))
-        XCTAssertTrue(moreView.contains("OnThisDayView(captionService: captionService)"))
+        XCTAssertTrue(moreView.contains("OnThisDayView()"))
         XCTAssertFalse(moreView.contains("SurpriseExploreView"))
         XCTAssertFalse(moreView.contains("title: \"Smart Albums\""))
         XCTAssertFalse(moreView.contains("SmartAlbumStore"))
@@ -562,7 +562,7 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertFalse(searchView.contains("Button(action: performSurpriseSearch)"))
         XCTAssertTrue(searchView.contains("private var smartAlbumsView"))
         XCTAssertTrue(searchView.contains("ForEach(smartAlbums)"))
-        XCTAssertFalse(searchView.contains("smartAlbums.prefix("))
+        XCTAssertFalse(searchView.contains("ForEach(smartAlbums.prefix("))
     }
 
     func testSearchDockReselectReturnsToSearchHistory() throws {
@@ -651,7 +651,7 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(moreView.contains(".font(Celestial.Typography.screenTitle)"))
     }
 
-    func testInitialIndexingUsesMemoryFirstHierarchyWithoutSearch() throws {
+    func testIndexingUsesMemoryFirstHierarchyAndKeepsInitialSearchHidden() throws {
         let searchView = try contents(of: "Memorable/Views/SearchView.swift")
         let initialVisibilitySection = try sourceSection(
             in: searchView,
@@ -661,21 +661,20 @@ final class ProjectConfigurationTests: XCTestCase {
 
         XCTAssertTrue(initialVisibilitySection.contains("searchBar"))
         XCTAssertEqual(searchView.components(separatedBy: "searchBar\n").count - 1, 1)
-        XCTAssertTrue(searchView.contains("YOUR LIBRARY IS COMING TO LIFE"))
+        XCTAssertTrue(searchView.contains("BUILDING YOUR SEARCH"))
         XCTAssertTrue(searchView.contains(
-            "While we build your search, revisit a few moments."
+            "A few memories while indexing continues."
         ))
         XCTAssertTrue(searchView.contains(
             ".font(Celestial.Typography.compactMemoryCaption)"
         ))
         XCTAssertEqual(
             searchView.components(
-                separatedBy: "IndexingBannerView(indexingService: indexingService)"
+                separatedBy: "IndexingBannerView("
             ).count - 1,
             2,
             "Initial and incremental indexing must use the same home-screen progress card"
         )
-        XCTAssertTrue(searchView.contains("presentation: .initialIndexing"))
         let indexingBanner = try contents(of: "Memorable/Views/IndexingBannerView.swift")
         let indexingProgress = try sourceSection(
             in: indexingBanner,
@@ -685,9 +684,10 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(indexingProgress.contains("ProgressView("))
         XCTAssertTrue(indexingProgress.contains(".frame(minWidth: 44, minHeight: 44)"))
         XCTAssertFalse(indexingBanner.contains("Circle()"), "The legacy dial must not remain")
-        XCTAssertFalse(searchView.contains(
-            "else if indexingService.progress.isRunning,\n                                          viewModel.queryText.isEmpty"
-        ), "Incremental indexing must keep the normal home content visible")
+        XCTAssertTrue(searchView.contains("if shouldShowIndexingExperience {"),
+                      "The slideshow must also appear during re-indexing")
+        XCTAssertFalse(searchView.contains("Text(\"Search your "),
+                       "Searchable counts must not imply the size of the photo library")
 
         let service = try contents(of: "Memorable/Core/IndexingService.swift")
         let searchPrioritySection = try sourceSection(
@@ -885,7 +885,7 @@ final class ProjectConfigurationTests: XCTestCase {
         let searchBar = try sourceSection(
             in: searchView,
             from: "private var searchBar: some View",
-            to: "private var initialIndexingExperience: some View"
+            to: "private var indexingExperience: some View"
         )
         XCTAssertTrue(searchBar.contains(
             ".disabled(!semanticRuntime.readiness.isSemanticSearchReady)"

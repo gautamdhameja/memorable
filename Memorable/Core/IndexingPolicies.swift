@@ -11,6 +11,19 @@ enum SearchSuggestionVisibilityPolicy {
     }
 }
 
+enum IndexingHomePresentationPolicy {
+    static func showsSlideshow(
+        isInitialLibraryWorkflowActive: Bool,
+        isRunning: Bool,
+        isPaused: Bool,
+        hasQuery: Bool,
+        phase: IndexingPhase = .photos
+    ) -> Bool {
+        phase != .enrichment
+            && (isInitialLibraryWorkflowActive || ((isRunning || isPaused) && !hasQuery))
+    }
+}
+
 enum InitialIndexingExperienceStore {
     static func isPending(in defaults: UserDefaults = .standard) -> Bool {
         defaults.bool(forKey: AppKeys.initialIndexingExperiencePending)
@@ -344,7 +357,8 @@ enum PhotoEnrichmentBatchOperation {
     static func run(
         candidates: [PhotoEnrichmentCandidate],
         prefetchPhotoKitAssets: ([String]) async -> Void,
-        enrich: (PhotoEnrichmentCandidate) async -> PhotoEnrichmentUpdate?
+        maximumConcurrentPhotos: Int = IndexingConfig.enrichmentConcurrency,
+        enrich: @escaping @MainActor @Sendable (PhotoEnrichmentCandidate) async -> PhotoEnrichmentUpdate?
     ) async -> [PhotoEnrichmentUpdate]? {
         guard !Task.isCancelled else { return nil }
         let photoKitIdentifiers = candidates.compactMap { candidate in
@@ -357,16 +371,31 @@ enum PhotoEnrichmentBatchOperation {
         }
         guard !Task.isCancelled else { return nil }
 
-        var updates: [PhotoEnrichmentUpdate] = []
-        updates.reserveCapacity(candidates.count)
-        for candidate in candidates {
-            guard !Task.isCancelled, let update = await enrich(candidate) else {
-                return nil
+        // Keep completed results when cancellation interrupts the rest of a
+        // batch, so frequent searches do not repeatedly discard analysis.
+        return await withTaskGroup(of: (Int, PhotoEnrichmentUpdate?).self) { group in
+            var next = 0
+            var updates = [PhotoEnrichmentUpdate?](repeating: nil, count: candidates.count)
+            let limit = min(candidates.count, max(1, maximumConcurrentPhotos))
+            for index in 0..<limit {
+                let candidate = candidates[index]
+                group.addTask { (index, await enrich(candidate)) }
+                next += 1
             }
-            updates.append(update)
-            await Task.yield()
+            while let (index, update) = await group.next() {
+                if let update { updates[index] = update }
+                if Task.isCancelled || update == nil {
+                    group.cancelAll()
+                }
+                if !group.isCancelled, next < candidates.count {
+                    let index = next
+                    let candidate = candidates[index]
+                    group.addTask { (index, await enrich(candidate)) }
+                    next += 1
+                }
+            }
+            return updates.compactMap { $0 }
         }
-        return updates
     }
 }
 
@@ -423,30 +452,5 @@ enum ProUnlockIndexingRecoveryPolicy {
         hasLibraryIndexingWork: Bool
     ) -> Bool {
         !isMemoryPressureSuspended && !hasLibraryIndexingWork
-    }
-}
-
-struct IndexingBatchCursor<Item> {
-    private let items: [Item]
-    private let batchSize: Int
-    private var nextIndex = 0
-
-    init(items: [Item], batchSize: Int) {
-        self.items = items
-        self.batchSize = max(1, batchSize)
-    }
-
-    var hasRemaining: Bool {
-        nextIndex < items.count
-    }
-
-    mutating func nextBatch(maxCount: Int? = nil) -> [Item] {
-        guard hasRemaining else { return [] }
-        let requestedCount = maxCount.map { min(batchSize, max(0, $0)) } ?? batchSize
-        guard requestedCount > 0 else { return [] }
-        let batchEnd = min(nextIndex + requestedCount, items.count)
-        let batch = Array(items[nextIndex..<batchEnd])
-        nextIndex = batchEnd
-        return batch
     }
 }

@@ -72,7 +72,6 @@ struct MainTabView: View {
     var indexingService: IndexingService?
     var searchEngine: SearchEngine?
     @ObservedObject var semanticRuntime: SemanticSearchRuntime
-    let captionService: PhotoCaptionService
     let retrySemanticWarmup: () -> Void
 
     @State private var navigation = MainTabNavigationState()
@@ -84,7 +83,6 @@ struct MainTabView: View {
                     indexingService: indexingService,
                     searchEngine: searchEngine,
                     semanticRuntime: semanticRuntime,
-                    captionService: captionService,
                     surpriseRequestID: navigation.surpriseRequestID,
                     searchHomeRequestID: navigation.searchHomeRequestID
                 )
@@ -97,8 +95,7 @@ struct MainTabView: View {
             if let indexingService, let searchEngine, !semanticRuntime.isCheckingIndexAvailability {
                 MoreView(
                     indexingService: indexingService,
-                    searchEngine: searchEngine,
-                    captionService: captionService
+                    searchEngine: searchEngine
                 )
                     .tag(MainTabDestination.more)
             } else {

@@ -22,7 +22,6 @@ struct ContentView: View {
                     indexingService: appState.indexingService,
                     searchEngine: appState.searchEngine,
                     semanticRuntime: appState.semanticRuntime,
-                    captionService: appState.captionService,
                     retrySemanticWarmup: appState.retrySemanticWarmup
                 )
             } else if let error = appState.errorMessage {

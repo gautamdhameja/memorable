@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import Vision
 @preconcurrency import Photos
 import ImageIO
 import Darwin
@@ -49,6 +50,135 @@ final class ImagePreprocessingTests: XCTestCase {
         XCTAssertNotNil(text)
         XCTAssertLessThanOrEqual(text?.count ?? 0, OCRTextPolicy.maximumCharacters)
         XCTAssertLessThanOrEqual(text?.split(separator: " ").count ?? 0, OCRTextPolicy.maximumObservations)
+    }
+
+    func testGroupedPhotoAnalysisMatchesStandaloneRequests() async {
+        let image = makeOCRTestImage()
+        let analysis = await OCRService.analyzePhoto(image)
+        let standaloneText = await OCRService.extractTextFast(from: image)
+        let standaloneLabels = await SceneClassifier.classify(image: image)
+
+        XCTAssertTrue(analysis.ocrText?.contains("4837") == true)
+        XCTAssertEqual(analysis.ocrText, standaloneText)
+        XCTAssertEqual(analysis.sceneLabels, standaloneLabels)
+    }
+
+    func testGroupedPhotoAnalysisCanSkipAlreadyRecognizedText() async {
+        let image = makeOCRTestImage()
+        let analysis = await OCRService.analyzePhoto(image, recognizeText: false)
+        let standaloneLabels = await SceneClassifier.classify(image: image)
+
+        XCTAssertNil(analysis.ocrText)
+        XCTAssertEqual(analysis.sceneLabels, standaloneLabels)
+    }
+
+    func testGroupedPhotoAnalysisHandlesMissingImageBacking() async {
+        let analysis = await OCRService.analyzePhoto(UIImage())
+
+        XCTAssertEqual(analysis, PhotoVisionAnalysis(ocrText: nil, sceneLabels: []))
+    }
+
+    func testSceneLabelsRetainExistingConfidenceLimitAndNormalization() throws {
+        let request = VNClassifyImageRequest()
+        let handler = VNImageRequestHandler(
+            cgImage: try XCTUnwrap(makeOCRTestImage().cgImage), options: [:]
+        )
+        try VisionRequestExecution.perform([request], using: handler)
+        let observations = try XCTUnwrap(request.results)
+        XCTAssertGreaterThan(observations.count, 2)
+
+        let labels = SceneClassifier.labels(
+            from: observations, maxLabels: 2, minConfidence: 0
+        )
+        XCTAssertEqual(labels.count, 2)
+        XCTAssertTrue(labels.allSatisfy { $0 == $0.lowercased() && !$0.contains("_") })
+        XCTAssertTrue(SceneClassifier.labels(
+            from: observations, minConfidence: 1.1
+        ).isEmpty)
+    }
+
+    func testGroupedVisionFailureStillRunsRemainingOCR() async throws {
+        let invalidRequest = VNRecognizeTextRequest()
+        invalidRequest.regionOfInterest = CGRect(x: -1, y: -1, width: 2, height: 2)
+        let validRequest = VNRecognizeTextRequest()
+        validRequest.recognitionLevel = .fast
+        validRequest.usesLanguageCorrection = false
+        let handler = VNImageRequestHandler(
+            cgImage: try XCTUnwrap(makeOCRTestImage().cgImage), options: [:]
+        )
+        let text = try await CancellableVisionOperation.run(requests: [invalidRequest, validRequest]) {
+            try VisionRequestExecution.perform([invalidRequest, validRequest], using: handler)
+            XCTAssertNil(invalidRequest.results)
+            return OCRTextPolicy.boundedText(from: (validRequest.results ?? []).compactMap {
+                $0.topCandidates(1).first?.string
+            })
+        }
+
+        XCTAssertTrue(text?.contains("4837") == true)
+    }
+
+    func testGroupedVisionCancellationCancelsEveryRequestAndDiscardsLateResult() async {
+        let firstRequest = CancellationCountingVisionRequest()
+        let secondRequest = CancellationCountingVisionRequest()
+        let started = expectation(description: "grouped operation started")
+        let release = DispatchSemaphore(value: 0)
+        let task = Task {
+            try await CancellableVisionOperation.run(requests: [firstRequest, secondRequest]) {
+                started.fulfill()
+                _ = release.wait(timeout: .now() + 5)
+                return "late result"
+            }
+        }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        release.signal()
+
+        do {
+            _ = try await task.value
+            XCTFail("Cancelled Vision work must not publish a result")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(firstRequest.cancellationCount, 1)
+        XCTAssertEqual(secondRequest.cancellationCount, 1)
+    }
+
+    func testAlreadyCancelledVisionWorkDoesNotStart() async {
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await CancellableVisionOperation.run(request: VNRecognizeTextRequest()) {
+                calls.withLock { $0 += 1 }
+                return true
+            }
+        }
+
+        do {
+            _ = try await task.value
+            XCTFail("Already cancelled Vision work must not start")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(calls.withLock { $0 }, 0)
+    }
+
+    private func makeOCRTestImage() -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(
+            size: CGSize(width: 800, height: 240), format: format
+        ).image { context in
+            UIColor.white.setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 800, height: 240))
+            ("MEMORABLE 4837" as NSString).draw(
+                at: CGPoint(x: 40, y: 70),
+                withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 64),
+                    .foregroundColor: UIColor.black
+                ]
+            )
+        }
     }
 
     func testFolderScanStopsAtConfiguredBoundAndSortsRetainedFiles() throws {
@@ -597,4 +727,15 @@ private struct RGB: Equatable {
     let red: UInt8
     let green: UInt8
     let blue: UInt8
+}
+
+private final class CancellationCountingVisionRequest: VNRecognizeTextRequest, @unchecked Sendable {
+    private let count = OSAllocatedUnfairLock(initialState: 0)
+
+    var cancellationCount: Int { count.withLock { $0 } }
+
+    override func cancel() {
+        count.withLock { $0 += 1 }
+        super.cancel()
+    }
 }

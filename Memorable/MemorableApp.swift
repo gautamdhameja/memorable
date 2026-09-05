@@ -112,11 +112,9 @@ class AppState: ObservableObject {
     var searchEngine: SearchEngine?
     @Published private(set) var indexingService: IndexingService?
     let semanticRuntime = SemanticSearchRuntime()
-    let captionService = PhotoCaptionService()
     private var isInitializing = false
     private var isCoreWarmupRunning = false
     private var currentWarmupPriority: SemanticWarmupPriority = .postPaint
-    private var captionPreparationTask: Task<Void, Never>?
     private var modelPrewarmTask: Task<PrewarmedModels, Error>?
     private var modelPrewarmGeneration: UInt64 = 0
     private var isApplicationActive = false
@@ -288,13 +286,10 @@ class AppState: ObservableObject {
         semanticRuntime.cancelWarmupForMemoryPressure()
         backgroundIndexingPreparationTask?.cancel()
         cancelModelPrewarm()
-        captionPreparationTask?.cancel()
-        captionPreparationTask = nil
         indexingService?.cancelAllWorkForMemoryPressure()
         searchEngine?.suspendForMemoryPressure()
         indexingService?.isReady = false
         ProManager.shared.onFreeTierReconciliationNeeded = nil
-        captionService.releaseMemory()
         MemoryPressureReleasePolicy.release(&indexingService)
         MemoryPressureReleasePolicy.release(&searchEngine)
         MemoryPressureReleasePolicy.release(&imageEncoder)
@@ -487,12 +482,6 @@ class AppState: ObservableObject {
             PerformanceMetrics.shared.end(PerformancePhase.indexLoad)
             #endif
 
-            if loadedIndex {
-                if let txtEncoder = textEncoder {
-                    startCaptionPreparation(textEncoder: txtEncoder)
-                }
-            }
-
             #if DEBUG || STARTUP_METRICS
             PerformanceMetrics.shared.end(PerformancePhase.semanticWarmup)
             PerformanceMetrics.shared.end(PerformancePhase.startupToSemanticSearch)
@@ -524,7 +513,7 @@ class AppState: ObservableObject {
 
     /// Restores only the components required to persist more embeddings. A
     /// scheduler launch must not hydrate the resident search index, tokenizer,
-    /// text model, captions, or launch maintenance while the app is backgrounded.
+    /// text model or launch maintenance while the app is backgrounded.
     private func prepareIndexingStackForBackground() async throws {
         if indexingService != nil { return }
         if let backgroundIndexingPreparationTask {
@@ -644,16 +633,6 @@ class AppState: ObservableObject {
         modelPrewarmGeneration &+= 1
         modelPrewarmTask?.cancel()
         modelPrewarmTask = nil
-    }
-
-    private func startCaptionPreparation(textEncoder: TextEncoder) {
-        captionPreparationTask?.cancel()
-        captionPreparationTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            await captionService.prepare(textEncoder: textEncoder)
-            guard !Task.isCancelled else { return }
-            captionPreparationTask = nil
-        }
     }
 
     private func startPendingOnboardingIndexIfNeeded(using indexing: IndexingService) {

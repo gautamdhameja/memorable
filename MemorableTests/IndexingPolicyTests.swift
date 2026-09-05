@@ -6,6 +6,42 @@ import os
 @testable import Memorable
 
 final class IndexingPolicyTests: XCTestCase {
+    func testIndexingHomeShowsSlideshowThroughInitialWorkflowAndReindexing() {
+        // First-run presentation must survive gaps between indexing phases.
+        XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
+            isInitialLibraryWorkflowActive: true,
+            isRunning: false, isPaused: false, hasQuery: false
+        ))
+        // Later runs must not fall through to the empty/home library count.
+        XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
+            isInitialLibraryWorkflowActive: false,
+            isRunning: true, isPaused: false, hasQuery: false
+        ))
+        XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
+            isInitialLibraryWorkflowActive: false,
+            isRunning: false, isPaused: true, hasQuery: false
+        ))
+        // Completion or an explicit stop returns to the regular home screen.
+        XCTAssertFalse(IndexingHomePresentationPolicy.showsSlideshow(
+            isInitialLibraryWorkflowActive: false,
+            isRunning: false, isPaused: false, hasQuery: false
+        ))
+    }
+
+    func testIndexingSlideshowDoesNotCoverQueriesDuringLaterRuns() {
+        for isPaused in [false, true] {
+            XCTAssertFalse(IndexingHomePresentationPolicy.showsSlideshow(
+                isInitialLibraryWorkflowActive: false,
+                isRunning: !isPaused, isPaused: isPaused, hasQuery: true
+            ))
+        }
+        // Initial setup retains its existing presentation until ready.
+        XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
+            isInitialLibraryWorkflowActive: true,
+            isRunning: true, isPaused: false, hasQuery: true
+        ))
+    }
+
     func testCompletenessComparesIdentityAndModificationDates() {
         let indexedAt = Date(timeIntervalSince1970: 100)
         let indexed = ["old": IndexedMediaVersion(id: "stable", indexedAt: indexedAt)]
@@ -1834,7 +1870,8 @@ final class IndexingPolicyTests: XCTestCase {
             }
         )
 
-        XCTAssertEqual(events, ["prefetch:photo-1", "enrich:photo-1", "enrich:folder-1"])
+        XCTAssertEqual(events.first, "prefetch:photo-1")
+        XCTAssertEqual(Set(events.dropFirst()), ["enrich:photo-1", "enrich:folder-1"])
         XCTAssertEqual(updates?.map(\.localIdentifier), ["photo-1", "folder-1"])
     }
 
@@ -1864,6 +1901,85 @@ final class IndexingPolicyTests: XCTestCase {
 
         XCTAssertNil(updates)
         XCTAssertTrue(events.isEmpty)
+    }
+
+    func testEnrichmentNeverTakesOverTheSearchHome() {
+        for initial in [false, true] {
+            for query in [false, true] {
+                XCTAssertFalse(IndexingHomePresentationPolicy.showsSlideshow(
+                    isInitialLibraryWorkflowActive: initial,
+                    isRunning: true,
+                    isPaused: false,
+                    hasQuery: query,
+                    phase: .enrichment
+                ))
+            }
+        }
+    }
+
+    @MainActor
+    func testPhotoEnrichmentKeepsCompletedWorkWhenCancelled() async {
+        let secondStarted = expectation(description: "second photo started")
+        let candidates = (0..<3).map {
+            PhotoEnrichmentCandidate(localIdentifier: "photo-\($0)", pixelWidth: 100,
+                                     pixelHeight: 100, sourceId: "folder", filePath: nil)
+        }
+        let task = Task {
+            await PhotoEnrichmentBatchOperation.run(
+                candidates: candidates,
+                prefetchPhotoKitAssets: { _ in },
+                maximumConcurrentPhotos: 1
+            ) { candidate in
+                if candidate.localIdentifier == "photo-1" {
+                    secondStarted.fulfill()
+                    do { try await Task.sleep(for: .seconds(60)) } catch { return nil }
+                }
+                return PhotoEnrichmentUpdate(localIdentifier: candidate.localIdentifier,
+                                             ocrText: "saved", sharpnessScore: 1, sceneLabels: nil)
+            }
+        }
+        await fulfillment(of: [secondStarted], timeout: 1)
+        task.cancel()
+        let updates = await task.value
+        XCTAssertEqual(updates?.map(\.localIdentifier), ["photo-0"])
+    }
+
+    @MainActor
+    func testPhotoEnrichmentBoundsConcurrencyAndPreservesOrder() async {
+        let firstPairStarted = expectation(description: "two photos run together")
+        firstPairStarted.expectedFulfillmentCount = 2
+        var gates: [CheckedContinuation<Void, Never>] = []
+        var active = 0
+        var peak = 0
+        var started = 0
+        let candidates = (0..<5).map {
+            PhotoEnrichmentCandidate(localIdentifier: "photo-\($0)", pixelWidth: 100,
+                                     pixelHeight: 100, sourceId: "folder", filePath: nil)
+        }
+        let task = Task {
+            await PhotoEnrichmentBatchOperation.run(
+                candidates: candidates, prefetchPhotoKitAssets: { _ in }, maximumConcurrentPhotos: 2
+            ) { candidate in
+                active += 1
+                started += 1
+                peak = max(peak, active)
+                if started <= 2 {
+                    await withCheckedContinuation { continuation in
+                        gates.append(continuation)
+                        firstPairStarted.fulfill()
+                    }
+                }
+                active -= 1
+                return PhotoEnrichmentUpdate(localIdentifier: candidate.localIdentifier,
+                                             ocrText: nil, sharpnessScore: 1, sceneLabels: nil)
+            }
+        }
+        await fulfillment(of: [firstPairStarted], timeout: 1)
+        XCTAssertEqual(started, 2)
+        for gate in gates.reversed() { gate.resume() }
+        let updates = await task.value
+        XCTAssertEqual(peak, 2)
+        XCTAssertEqual(updates?.map(\.localIdentifier), candidates.map(\.localIdentifier))
     }
 
     private enum RegistrationTestError: Error, Equatable {
@@ -1952,38 +2068,6 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertLessThanOrEqual(sanitized.count, FolderDisplayNamePolicy.maximumCharacters)
         XCTAssertTrue(sanitized.hasPrefix("AlbumName"))
         XCTAssertEqual(FolderDisplayNamePolicy.sanitized("\t\n"), "Folder")
-    }
-
-    func testSequentialBatchCursorContinuesAfterEmptyLoadedBatch() {
-        var cursor = IndexingBatchCursor(items: Array(0..<40), batchSize: 16)
-        var batchNumber = 0
-        var indexedItems: [Int] = []
-
-        while cursor.hasRemaining {
-            let batch = cursor.nextBatch()
-            let loadedItems = batchNumber == 0 ? [] : batch
-            indexedItems.append(contentsOf: loadedItems)
-            batchNumber += 1
-        }
-
-        XCTAssertEqual(batchNumber, 3)
-        XCTAssertEqual(indexedItems, Array(16..<40))
-    }
-
-    func testBatchCursorNormalizesInvalidBatchSizeWithoutCrashing() {
-        var cursor = IndexingBatchCursor(items: [1, 2], batchSize: 0)
-
-        XCTAssertEqual(cursor.nextBatch(), [1])
-        XCTAssertEqual(cursor.nextBatch(), [2])
-        XCTAssertFalse(cursor.hasRemaining)
-    }
-
-    func testBatchCursorDoesNotSkipItemsWhenCapacityIsSmallerThanBatch() {
-        var cursor = IndexingBatchCursor(items: Array(0..<16), batchSize: 16)
-
-        XCTAssertEqual(cursor.nextBatch(maxCount: 1), [0])
-        XCTAssertEqual(cursor.nextBatch(maxCount: 1), [1])
-        XCTAssertTrue(cursor.hasRemaining)
     }
 
     func testProgressEstimateWaitsForMinimumCompletedItems() {
@@ -2094,7 +2178,7 @@ final class IndexingPolicyTests: XCTestCase {
         ))
     }
 
-    func testInitialIndexingExperienceStaysVisibleBetweenBaseIndexingAndEnrichment() {
+    func testInitialIndexingExperienceTracksBaseWorkflowActivity() {
         XCTAssertTrue(InitialIndexingExperiencePolicy.shouldShow(
             isInitialLibraryWorkflowActive: true
         ))
@@ -2180,12 +2264,6 @@ private final class UnusedImagePredictionModel: CoreMLModelPredicting {
         throw PredictionError.unexpectedlyInvoked
     }
 
-    func predictions(
-        from inputBatch: MLBatchProvider,
-        options: MLPredictionOptions
-    ) throws -> MLBatchProvider {
-        throw PredictionError.unexpectedlyInvoked
-    }
 }
 
 @MainActor

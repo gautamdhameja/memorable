@@ -2,6 +2,8 @@ import SwiftUI
 
 struct IndexingBannerView: View {
     @ObservedObject var indexingService: IndexingService
+    var backdropImage: UIImage? = nil
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private var phaseLabel: String {
         if indexingService.isThermallyPaused {
@@ -38,7 +40,7 @@ struct IndexingBannerView: View {
         var parts: [String] = []
         if progress.searchableCount > 0 {
             let noun = progress.searchableCount == 1 ? "item" : "items"
-            parts.append("\(progress.searchableCount.formatted()) \(noun) ready")
+            parts.append("\(progress.searchableCount.formatted()) \(noun) searchable")
         } else {
             parts.append("Finding your first searchable moments")
         }
@@ -57,8 +59,9 @@ struct IndexingBannerView: View {
                 Spacer()
                 if !indexingService.isThermallyPaused {
                     Text("\(Int(indexingService.progress.percentage))%")
-                        .font(Celestial.Typography.supportingEmphasized)
-                        .foregroundStyle(Celestial.Colors.amber)
+                        .font(Celestial.Typography.footnote)
+                        .monospacedDigit()
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 }
             }
 
@@ -66,7 +69,10 @@ struct IndexingBannerView: View {
                 value: indexingService.progress.percentage,
                 total: 100
             )
-            .tint(isPaused ? Celestial.Colors.amber : Celestial.Colors.primaryDim)
+            .progressViewStyle(.linear)
+            .tint(isPaused ? Celestial.Colors.amber : Celestial.Colors.primary)
+            .scaleEffect(x: 1, y: 0.5)
+            .accessibilityLabel("Indexing progress")
 
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(detail)
@@ -79,7 +85,7 @@ struct IndexingBannerView: View {
                 Button(isPaused ? "Cancel" : "Stop") {
                     indexingService.stopIndexing()
                 }
-                .font(Celestial.Typography.captionStrong)
+                .font(Celestial.Typography.caption)
                 .foregroundStyle(Celestial.Colors.onSurface)
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
@@ -91,6 +97,23 @@ struct IndexingBannerView: View {
             }
         }
         .padding(Celestial.Spacing.surfaceContentInset)
+        .background {
+            if let backdropImage, !reduceTransparency {
+                GeometryReader { geometry in
+                    Image(uiImage: backdropImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .blur(radius: 24, opaque: true)
+                        .saturation(0.65)
+                        .opacity(0.35)
+                        .overlay(Celestial.Colors.background.opacity(0.65))
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
         .modifier(
             GlassPanelModifier(
                 cornerRadius: 18,

@@ -7,7 +7,6 @@ struct SearchView: View {
     @ObservedObject var indexingService: IndexingService
     let searchEngine: SearchEngine
     @ObservedObject var semanticRuntime: SemanticSearchRuntime
-    let captionService: PhotoCaptionService
     let surpriseRequestID: Int
     let searchHomeRequestID: Int
 
@@ -16,6 +15,7 @@ struct SearchView: View {
     @State private var showUpgrade = false
     @State private var showSaveAlbum = false
     @State private var albumName = ""
+    @State private var smartAlbumError: String?
     @ObservedObject private var proManager = ProManager.shared
     @Environment(\.database) private var database
     @Environment(\.scenePhase) private var scenePhase
@@ -29,12 +29,32 @@ struct SearchView: View {
     @State private var totalLibraryCount: Int = 0
     @State private var placeholderIndex: Int = 0
     @State private var placeholderTimer: Task<Void, Never>?
+    @State private var indexingBackdropImage: UIImage?
+    @State private var enrichmentStatusDismissed = false
     @State private var showStorageResetConfirm = false
     @AppStorage(AppKeys.persistentStoreReset) private var storageResetScheduled = false
 
     // Keep the existing persisted key stable. SearchViewModel owns the runtime
     // sort state; this wrapper is the SwiftUI persistence adapter.
     @AppStorage(SearchViewModel.sortModeStorageKey) private var sortModeRaw: String = SearchSortMode.relevance.rawValue
+
+    private func saveSmartAlbum() {
+        let album = SmartAlbum(
+            id: UUID().uuidString,
+            name: SmartAlbumPolicy.boundedName(albumName),
+            query: QueryInputPolicy.bounded(viewModel.queryText),
+            createdAt: Date()
+        )
+        do {
+            try database.saveSmartAlbum(album)
+            smartAlbums.insert(album, at: 0)
+            smartAlbums = Array(smartAlbums.prefix(SmartAlbumPolicy.maximumAlbums))
+            albumName = ""
+        } catch {
+            logger.error("Failed to save smart album: \(error.safeDiagnosticCode)")
+            smartAlbumError = "The album couldn’t be saved. Please try again."
+        }
+    }
 
     private static let placeholders = [
         "Search your photos...",
@@ -44,14 +64,12 @@ struct SearchView: View {
         indexingService: IndexingService,
         searchEngine: SearchEngine,
         semanticRuntime: SemanticSearchRuntime,
-        captionService: PhotoCaptionService,
         surpriseRequestID: Int,
         searchHomeRequestID: Int
     ) {
         self.indexingService = indexingService
         self.searchEngine = searchEngine
         self.semanticRuntime = semanticRuntime
-        self.captionService = captionService
         self.surpriseRequestID = surpriseRequestID
         self.searchHomeRequestID = searchHomeRequestID
         _viewModel = StateObject(wrappedValue: SearchViewModel(dependencies: .init(
@@ -156,7 +174,8 @@ struct SearchView: View {
             loadHistoryPreviews: { SearchHistory.loadPreviews() },
             clearHistory: { SearchHistory.clear() },
             removeHistory: { SearchHistory.remove(at: $0) },
-            now: { CFAbsoluteTimeGetCurrent() }
+            now: { CFAbsoluteTimeGetCurrent() },
+            searchActivityChanged: { indexingService.setUserSearchActive($0) }
         )))
     }
 
@@ -217,12 +236,13 @@ struct SearchView: View {
                     }
 
                     ScrollView {
-                        if indexingService.shouldShowInitialIndexingExperience {
-                            initialIndexingExperience
+                        if shouldShowIndexingExperience {
+                            indexingExperience
                         } else {
                             VStack(spacing: 0) {
                                 // Indexing banners
-                                if indexingService.progress.isRunning
+                                if indexingService.progress.phase != .enrichment,
+                                   indexingService.progress.isRunning
                                     || indexingService.isThermallyPaused
                                     || indexingService.backgroundExecutionState == .pausedAwaitingForeground {
                                     IndexingBannerView(indexingService: indexingService)
@@ -245,6 +265,13 @@ struct SearchView: View {
                                 }
 
                                 // Deferred reverse-geocoding progress
+                                if indexingService.progress.phase == .enrichment,
+                                   indexingService.progress.isRunning,
+                                   !viewModel.isSearching,
+                                   !enrichmentStatusDismissed {
+                                    enrichmentProgressStrip
+                                }
+
                                 if let geo = indexingService.geocodingProgress,
                                    !indexingService.progress.isRunning {
                                     geocodingProgressStrip(geo)
@@ -315,14 +342,20 @@ struct SearchView: View {
                 TextField("Album name", text: $albumName)
                 Button("Save") {
                     if !albumName.isEmpty && !viewModel.queryText.isEmpty {
-                        SmartAlbumStore.add(name: albumName, query: viewModel.queryText)
-                        smartAlbums = SmartAlbumStore.load()
-                        albumName = ""
+                        saveSmartAlbum()
                     }
                 }
                 Button("Cancel", role: .cancel) { albumName = "" }
             } message: {
                 Text("This album will auto-update when new matching photos are indexed.")
+            }
+            .alert("Smart albums", isPresented: Binding(
+                get: { smartAlbumError != nil },
+                set: { if !$0 { smartAlbumError = nil } }
+            )) {
+                Button("OK", role: .cancel) { smartAlbumError = nil }
+            } message: {
+                Text(smartAlbumError ?? "")
             }
             .alert("Reset local search data?", isPresented: $showStorageResetConfirm) {
                 Button("Reset on next launch", role: .destructive) {
@@ -345,10 +378,11 @@ struct SearchView: View {
             .task {
                 // Load DB-backed data off the main thread's critical path so
                 // the search bar is tappable immediately on appear.
+                let database = database
                 async let savedData = Task.detached(priority: .utility) {
                     let history = SearchHistory.load()
                     return (
-                        albums: SmartAlbumStore.load(),
+                        albums: Result { try database.loadSmartAlbums() },
                         history: history,
                         previews: SearchHistory.loadPreviews()
                     )
@@ -358,7 +392,13 @@ struct SearchView: View {
                 }.value
                 let data = await savedData
                 guard !Task.isCancelled else { return }
-                smartAlbums = data.albums
+                switch data.albums {
+                case .success(let albums):
+                    smartAlbums = albums
+                case .failure(let error):
+                    logger.error("Failed to load smart albums: \(error.safeDiagnosticCode)")
+                    smartAlbumError = "Your saved albums couldn’t be loaded. Reopen this screen to try again."
+                }
                 viewModel.applyInitialSearchHistory(
                     data.history,
                     previews: data.previews
@@ -551,27 +591,69 @@ struct SearchView: View {
         )
     }
 
-    private var initialIndexingExperience: some View {
+    private var shouldShowIndexingExperience: Bool {
+        IndexingHomePresentationPolicy.showsSlideshow(
+            isInitialLibraryWorkflowActive: indexingService.shouldShowInitialIndexingExperience,
+            isRunning: indexingService.progress.isRunning,
+            isPaused: indexingService.isThermallyPaused
+                || indexingService.backgroundExecutionState == .pausedAwaitingForeground,
+            hasQuery: !viewModel.queryText.isEmpty,
+            phase: indexingService.progress.phase
+        )
+    }
+
+    private var enrichmentProgressStrip: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "photo.badge.checkmark")
+                .foregroundStyle(Celestial.Colors.primary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Search is ready")
+                    .font(Celestial.Typography.captionStrong)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text("Adding photo details in the background")
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            }
+            Spacer(minLength: 0)
+            Button {
+                enrichmentStatusDismissed = true
+            } label: {
+                Image(systemName: "xmark")
+                    .font(Celestial.Typography.caption)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            .accessibilityLabel("Dismiss photo details status")
+        }
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
+    }
+
+    private var indexingExperience: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("YOUR LIBRARY IS COMING TO LIFE")
+            Text("BUILDING YOUR SEARCH")
                 .font(Celestial.Typography.eyebrow)
                 .tracking(1.2)
                 .foregroundStyle(Celestial.Colors.amber)
 
-            Text("While we build your search, revisit a few moments.")
+            Text("A few memories while indexing continues.")
                 .font(Celestial.Typography.compactMemoryCaption)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .lineSpacing(3)
                 .padding(.top, 8)
 
             IndexingSlideshowView(
-                captionService: captionService,
-                presentation: .initialIndexing
+                onImageChange: { indexingBackdropImage = $0 }
             )
             .padding(.top, 20)
 
-            IndexingBannerView(indexingService: indexingService)
-                .padding(.top, 16)
+            IndexingBannerView(
+                indexingService: indexingService,
+                backdropImage: indexingBackdropImage
+            )
+            .padding(.top, 16)
         }
         .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
         .padding(.top, 18)
@@ -669,14 +751,14 @@ struct SearchView: View {
             }
             if indexingService.hitFreeLimit
                 && totalLibraryCount > searchEngine.totalSize {
-                Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
+                Text("\(searchEngine.totalSize) of \(totalLibraryCount) photos & videos searchable")
                     .font(Celestial.Typography.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
                 resumeIndexingButton
             } else if searchEngine.totalSize > 0 {
-                Text("Search your \(searchEngine.totalSize) photos & videos")
+                Text("\(searchEngine.totalSize) photos & videos searchable")
                     .font(Celestial.Typography.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
                     .frame(maxWidth: .infinity)
@@ -855,7 +937,7 @@ struct SearchView: View {
         .accessibilityLabel("\(summary.message) Upgrade to Pro")
     }
 
-    // Shown after the "Search your N of M photos & videos" hint once the user upgrades,
+    // Shown after the searchable-count hint once the user upgrades,
     // so they can resume indexing the remaining library without having to
     // re-scan already-indexed photos (startIndexing() skips those).
     @ViewBuilder
@@ -931,8 +1013,13 @@ struct SearchView: View {
                         .accessibilityHint("Runs the saved search: \(album.query)")
                         .contextMenu {
                             Button(role: .destructive) {
-                                SmartAlbumStore.delete(id: album.id)
-                                smartAlbums = SmartAlbumStore.load()
+                                do {
+                                    try database.deleteSmartAlbum(id: album.id)
+                                    smartAlbums.removeAll { $0.id == album.id }
+                                } catch {
+                                    logger.error("Failed to delete smart album: \(error.safeDiagnosticCode)")
+                                    smartAlbumError = "The album couldn’t be deleted. Please try again."
+                                }
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -960,7 +1047,7 @@ struct SearchView: View {
             .padding(.horizontal, 2)
 
             NavigationLink {
-                OnThisDayView(captionService: captionService)
+                OnThisDayView()
             } label: {
                 VStack(alignment: .leading, spacing: 0) {
                     SearchHomePhotoImage(
@@ -1391,12 +1478,12 @@ struct SearchView: View {
             if indexingService.isReady && searchEngine.totalSize > 0 {
                 if indexingService.hitFreeLimit
                     && totalLibraryCount > searchEngine.totalSize {
-                    Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
+                    Text("\(searchEngine.totalSize) of \(totalLibraryCount) photos & videos searchable")
                         .font(Celestial.Typography.interfaceTitle3)
                         .foregroundStyle(Celestial.Colors.onSurface)
                     resumeIndexingButton
                 } else {
-                    Text("Search your \(searchEngine.totalSize) photos & videos")
+                    Text("\(searchEngine.totalSize) photos & videos searchable")
                         .font(Celestial.Typography.interfaceTitle3)
                         .foregroundStyle(Celestial.Colors.onSurface)
                 }
@@ -1750,22 +1837,6 @@ struct SearchView: View {
                 }
             }
         }
-    }
-
-    private func fallbackTitle(summary: FilterSummary) -> String {
-        let hasLocation = summary.locationDescription != nil
-        let hasDate = summary.dateDescription != nil
-
-        // When filters are active, the fallback contains filter-matched media
-        // (the visual query didn't find anything in that subset).
-        // Title should describe what's actually shown, not the failed visual query.
-        if hasLocation || hasDate {
-            let parts = [summary.locationDescription, summary.dateDescription].compactMap { $0 }
-            return "Media from \(parts.joined(separator: ", "))"
-        }
-
-        // No filters: fallback is near-miss CLIP results for the visual query
-        return "Other \"\(summary.visualQuery)\" matches"
     }
 
     private func memoryTitle(_ memory: OnThisDaySummary) -> String {

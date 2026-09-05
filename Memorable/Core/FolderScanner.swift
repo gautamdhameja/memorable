@@ -325,21 +325,6 @@ class FolderScanner {
         } ?? nil
     }
 
-    /// Checks that a stored folder result is still reachable through its
-    /// security-scoped bookmark without decoding or loading the image.
-    static func canAccessBookmarkedImage(filePath: String, sourceId: String) -> Bool {
-        guard sourceId != PhotoSourceType.photokit.rawValue,
-              let folderURL = resolveBookmark(forSourceId: sourceId) else {
-            return false
-        }
-
-        let hasAccess = folderURL.startAccessingSecurityScopedResource()
-        guard hasAccess else { return false }
-        defer { folderURL.stopAccessingSecurityScopedResource() }
-
-        return isValidImageFile(URL(fileURLWithPath: filePath), within: folderURL)
-    }
-
     /// Validates several results under one security-scoped folder access.
     static func accessibleBookmarkedImagePaths(
         _ filePaths: [String],

@@ -1,15 +1,13 @@
 import SwiftUI
 
 struct MemorySlideshowView: View {
-    let captionService: PhotoCaptionService
     @Environment(\.dismiss) private var dismiss
     @Environment(\.database) private var database
 
     @State private var currentImage: UIImage?
     @State private var currentDate: Date?
-    @State private var currentCaption: String?
     @State private var isVisible = false
-    @State private var captionVisible = false
+    @State private var dateVisible = false
     @State private var showControls = true
     @State private var timerTask: Task<Void, Never>?
     @State private var initialLoadTask: Task<Void, Never>?
@@ -29,42 +27,32 @@ struct MemorySlideshowView: View {
                     .opacity(isVisible ? 1 : 0)
                     .animation(.easeInOut(duration: 1.0), value: isVisible)
                     .overlay(alignment: .bottom) {
-                        VStack(spacing: 8) {
-                            if let caption = currentCaption {
-                                Text(caption)
-                                    .font(Celestial.Typography.memoryCaption)
-                                    .italic()
-                                    .foregroundStyle(.white)
-                                    .multilineTextAlignment(.center)
-                                    .shadow(color: .black.opacity(0.6), radius: 6, y: 3)
-                            }
-                            if let date = currentDate {
-                                Text(date.formatted(date: .long, time: .omitted))
-                                    .font(Celestial.Typography.footnoteEmphasized)
-                                    .foregroundStyle(.white.opacity(0.7))
-                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                            }
+                        if let date = currentDate {
+                            Text(date.formatted(date: .long, time: .omitted))
+                                .font(Celestial.Typography.footnoteEmphasized)
+                                .foregroundStyle(.white.opacity(0.7))
+                                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 12)
+                                .modifier(
+                                    GlassPanelModifier(
+                                        cornerRadius: 18,
+                                        tint: Color.black.opacity(0.14)
+                                    )
+                                )
+                                .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                                .padding(.bottom, 40)
+                                .frame(maxWidth: .infinity)
+                                .background(
+                                    LinearGradient(
+                                        colors: [.clear, .clear, .black.opacity(0.7)],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                                .opacity(dateVisible ? 1 : 0)
+                                .animation(.easeInOut(duration: 0.8), value: dateVisible)
                         }
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 12)
-                        .modifier(
-                            GlassPanelModifier(
-                                cornerRadius: 18,
-                                tint: Color.black.opacity(0.14)
-                            )
-                        )
-                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
-                        .padding(.bottom, 40)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            LinearGradient(
-                                colors: [.clear, .clear, .black.opacity(0.7)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .opacity(captionVisible ? 1 : 0)
-                        .animation(.easeInOut(duration: 0.8), value: captionVisible)
                     }
             } else {
                 VStack(spacing: 12) {
@@ -158,7 +146,6 @@ struct MemorySlideshowView: View {
         memoryRecoveryTask?.cancel()
         memoryRecoveryTask = nil
         imageLoadGeneration &+= 1
-        currentCaption = nil
         shownIds.removeAll(keepingCapacity: false)
         duplicateFilter.reset()
 
@@ -197,7 +184,7 @@ struct MemorySlideshowView: View {
         }
 
         // Fade out
-        withAnimation { captionVisible = false }
+        withAnimation { dateVisible = false }
         do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
         withAnimation { isVisible = false }
         do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
@@ -210,18 +197,10 @@ struct MemorySlideshowView: View {
         currentImage = loaded
         currentDate = photo.creationDate
 
-        // Caption from stored embedding
-        if let embedding = photo.embedding.validatedFloat16Embedding() {
-            currentCaption = captionService.caption(for: embedding)
-        } else {
-            logger.error("Skipped a memory caption with a malformed embedding")
-            currentCaption = nil
-        }
-
         // Fade in
         withAnimation { isVisible = true }
         do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
-        withAnimation { captionVisible = true }
+        withAnimation { dateVisible = true }
     }
 
     private func loadNextEligiblePhoto(

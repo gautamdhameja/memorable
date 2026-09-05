@@ -4,10 +4,7 @@ import Foundation
 protocol CoreMLModelPredicting: AnyObject, Sendable {
     func prediction(from input: MLFeatureProvider) throws -> MLFeatureProvider
     func cancellablePrediction(from input: MLFeatureProvider) async throws -> MLFeatureProvider
-    func predictions(
-        from inputBatch: MLBatchProvider,
-        options: MLPredictionOptions
-    ) throws -> MLBatchProvider
+
 }
 
 extension CoreMLModelPredicting {

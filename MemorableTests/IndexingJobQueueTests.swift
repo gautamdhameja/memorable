@@ -4,6 +4,28 @@ import os
 
 @MainActor
 final class IndexingJobQueueTests: XCTestCase {
+    func testSearchSuspensionHoldsMaintenanceButAllowsBaseIndexing() async {
+        let queue = IndexingJobQueue()
+        var events: [String] = []
+        let baseFinished = expectation(description: "base indexing remains runnable")
+        queue.setMaintenanceSuspended(true)
+        queue.enqueue(IndexingJob(workflowID: UUID(), kind: .enrichPhotos, priority: .enrichment) {
+            events.append("enrich")
+            return .completed
+        })
+        queue.enqueue(IndexingJob(workflowID: UUID(), kind: .indexPhotos, priority: .userInitiated) {
+            events.append("photos")
+            baseFinished.fulfill()
+            return .completed
+        })
+        await fulfillment(of: [baseFinished], timeout: 1)
+        XCTAssertEqual(events, ["photos"])
+        XCTAssertTrue(queue.contains(.enrichPhotos))
+        queue.setMaintenanceSuspended(false)
+        await queue.waitUntilIdle()
+        XCTAssertEqual(events, ["photos", "enrich"])
+    }
+
     private final class Gate: Sendable {
         private struct State {
             var continuation: CheckedContinuation<Void, Never>?

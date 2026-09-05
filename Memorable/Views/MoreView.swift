@@ -9,7 +9,6 @@ enum MoreNavigationPolicy {
 struct MoreView: View {
     @ObservedObject var indexingService: IndexingService
     let searchEngine: SearchEngine
-    let captionService: PhotoCaptionService
     @ObservedObject private var proManager = ProManager.shared
     @Environment(\.database) private var database
 
@@ -39,7 +38,7 @@ struct MoreView: View {
 
                         VStack(spacing: 0) {
                             NavigationLink {
-                                OnThisDayView(captionService: captionService)
+                                OnThisDayView()
                             } label: {
                                 toolRow(
                                     icon: "photo.stack",
@@ -218,6 +217,9 @@ struct MoreView: View {
 
     private var indexStatusTitle: String {
         if !database.allowsIndexingWrites { return "Indexing unavailable" }
+        if indexingService.isReady, indexingService.progress.phase == .enrichment {
+            return "Search is ready"
+        }
         if indexingService.progress.isRunning { return "Search index updating" }
         if indexingService.isReady { return "Search index up to date" }
         if indexingService.indexRebuildRequired { return "Search index update required" }

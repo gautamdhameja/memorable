@@ -1,41 +1,13 @@
 import SwiftUI
 
 struct IndexingSlideshowView: View {
-    enum Presentation {
-        case standard
-        case initialIndexing
-
-        var horizontalPadding: CGFloat {
-            switch self {
-            case .standard: return 32
-            case .initialIndexing: return 0
-            }
-        }
-
-        var maximumHeight: CGFloat {
-            switch self {
-            case .standard: return 400
-            case .initialIndexing: return 430
-            }
-        }
-
-        var placeholderText: String {
-            switch self {
-            case .standard: return "Relive your memories..."
-            case .initialIndexing: return "Finding your first memories..."
-            }
-        }
-    }
-
-    let captionService: PhotoCaptionService
-    var presentation: Presentation = .standard
+    var onImageChange: (UIImage?) -> Void = { _ in }
     @Environment(\.database) private var database
 
     @State private var currentImage: UIImage?
     @State private var currentDate: Date?
-    @State private var currentCaption: String?
     @State private var isVisible = false
-    @State private var captionVisible = false
+    @State private var dateVisible = false
     @State private var timerTask: Task<Void, Never>?
     @State private var initialLoadTask: Task<Void, Never>?
     @State private var shownIds: Set<String> = []
@@ -49,45 +21,35 @@ struct IndexingSlideshowView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .overlay(alignment: .bottom) {
-                        VStack(spacing: 6) {
-                            if let caption = currentCaption {
-                                Text(caption)
-                                    .font(Celestial.Typography.compactMemoryCaption)
-                                    .italic()
-                                    .foregroundStyle(.white)
-                                    .multilineTextAlignment(.center)
-                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                            }
-                            if let date = currentDate {
-                                Text(date.formatted(date: .abbreviated, time: .omitted))
-                                    .font(Celestial.Typography.eyebrow)
-                                    .foregroundStyle(.white.opacity(0.8))
-                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                            }
+                        if let date = currentDate {
+                            Text(date.formatted(date: .abbreviated, time: .omitted))
+                                .font(Celestial.Typography.eyebrow)
+                                .foregroundStyle(.white.opacity(0.8))
+                                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .modifier(
+                                    GlassPanelModifier(
+                                        cornerRadius: 16,
+                                        tint: Color.black.opacity(0.14)
+                                    )
+                                )
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 10)
+                                .frame(maxWidth: .infinity)
+                                .background(
+                                    LinearGradient(
+                                        colors: [.clear, .black.opacity(0.6)],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                                .opacity(dateVisible ? 1 : 0)
+                                .animation(.easeInOut(duration: 0.6), value: dateVisible)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                        .modifier(
-                            GlassPanelModifier(
-                                cornerRadius: 16,
-                                tint: Color.black.opacity(0.14)
-                            )
-                        )
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 10)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            LinearGradient(
-                                colors: [.clear, .black.opacity(0.6)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .opacity(captionVisible ? 1 : 0)
-                        .animation(.easeInOut(duration: 0.6), value: captionVisible)
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .frame(maxWidth: .infinity, maxHeight: presentation.maximumHeight)
+                    .frame(maxWidth: .infinity, maxHeight: 430)
                     .opacity(isVisible ? 1 : 0)
             } else {
                 RoundedRectangle(cornerRadius: 16)
@@ -97,14 +59,13 @@ struct IndexingSlideshowView: View {
                         VStack(spacing: 8) {
                             ProgressView()
                                 .tint(Celestial.Colors.outlineVariant)
-                            Text(presentation.placeholderText)
+                            Text("Finding your first memories...")
                                 .font(Celestial.Typography.caption)
                                 .foregroundStyle(Celestial.Colors.outline)
                         }
                     }
             }
         }
-        .padding(.horizontal, presentation.horizontalPadding)
         .task {
             let task = Task { @MainActor in
                 await waitForIndexedPhotos()
@@ -121,6 +82,7 @@ struct IndexingSlideshowView: View {
             initialLoadTask = nil
             timerTask?.cancel()
             timerTask = nil
+            onImageChange(nil)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
             initialLoadTask?.cancel()
@@ -129,7 +91,7 @@ struct IndexingSlideshowView: View {
             timerTask = nil
             imageLoadGeneration &+= 1
             MemoryPressureReleasePolicy.release(&currentImage)
-            currentCaption = nil
+            onImageChange(nil)
             shownIds.removeAll(keepingCapacity: false)
             duplicateFilter.reset()
         }
@@ -187,7 +149,7 @@ struct IndexingSlideshowView: View {
         }
 
         // Fade out current
-        withAnimation { captionVisible = false }
+        withAnimation { dateVisible = false }
         do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }
         withAnimation { isVisible = false }
         do { try await Task.sleep(nanoseconds: 400_000_000) } catch { return }
@@ -198,22 +160,15 @@ struct IndexingSlideshowView: View {
         ) else { return }
 
         currentImage = loaded
+        onImageChange(loaded)
         currentDate = photo.creationDate
-
-        // Generate caption from the stored embedding (zero extra encoding!)
-        if let embedding = photo.embedding.validatedFloat16Embedding() {
-            currentCaption = captionService.caption(for: embedding)
-        } else {
-            logger.error("Skipped an indexing caption with a malformed embedding")
-            currentCaption = nil
-        }
 
         // Fade in photo
         withAnimation { isVisible = true }
 
-        // Caption fades in after delay
+        // Date fades in after delay
         do { try await Task.sleep(nanoseconds: 800_000_000) } catch { return }
-        withAnimation { captionVisible = true }
+        withAnimation { dateVisible = true }
     }
 
     private func loadNextEligiblePhoto(

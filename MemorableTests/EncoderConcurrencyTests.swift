@@ -36,28 +36,22 @@ final class EncoderConcurrencyTests: XCTestCase {
     private final class ControlledPredictionModel: CoreMLModelPredicting {
         private struct FailureState: Sendable {
             var remainingPredictions: Int
-            var remainingBatches: Int
         }
 
         private let embeddingKey: String
         private let embeddingDimensions: Int
-        private let batchOutputCount: Int?
         private let failures: OSAllocatedUnfairLock<FailureState>
 
         init(
             embeddingKey: String,
             embeddingDimensions: Int = EmbeddingConfig.dimensions,
-            predictionFailures: Int = 0,
-            batchFailures: Int = 0,
-            batchOutputCount: Int? = nil
+            predictionFailures: Int = 0
         ) {
             self.embeddingKey = embeddingKey
             self.embeddingDimensions = embeddingDimensions
-            self.batchOutputCount = batchOutputCount
             self.failures = OSAllocatedUnfairLock(
                 initialState: FailureState(
-                    remainingPredictions: predictionFailures,
-                    remainingBatches: batchFailures
+                    remainingPredictions: predictionFailures
                 )
             )
         }
@@ -69,31 +63,10 @@ final class EncoderConcurrencyTests: XCTestCase {
             return try makeOutputProvider()
         }
 
-        func predictions(
-            from inputBatch: MLBatchProvider,
-            options: MLPredictionOptions
-        ) throws -> MLBatchProvider {
-            if consumeBatchFailure() {
-                throw TestError.forcedPredictionFailure
-            }
-            let outputs = try (0..<(batchOutputCount ?? inputBatch.count)).map { _ in
-                try makeOutputProvider()
-            }
-            return MLArrayBatchProvider(array: outputs)
-        }
-
         private func consumePredictionFailure() -> Bool {
             failures.withLock {
                 guard $0.remainingPredictions > 0 else { return false }
                 $0.remainingPredictions -= 1
-                return true
-            }
-        }
-
-        private func consumeBatchFailure() -> Bool {
-            failures.withLock {
-                guard $0.remainingBatches > 0 else { return false }
-                $0.remainingBatches -= 1
                 return true
             }
         }
@@ -132,12 +105,6 @@ final class EncoderConcurrencyTests: XCTestCase {
             }
         }
 
-        func predictions(
-            from inputBatch: MLBatchProvider,
-            options: MLPredictionOptions
-        ) throws -> MLBatchProvider {
-            throw TestError.forcedPredictionFailure
-        }
     }
 
     func testTextEncoderConcurrentPredictionFailuresFailClosed() throws {
@@ -198,16 +165,16 @@ final class EncoderConcurrencyTests: XCTestCase {
         XCTAssertEqual(snapshot.errors.count, iterationCount)
     }
 
-    func testImageEncoderBatchPredictionFailureFailsClosed() throws {
-        let initialModel = ControlledPredictionModel(
-            embeddingKey: "image_embedding",
-            batchFailures: 1
-        )
-        let encoder = ImageEncoder(model: initialModel)
-
-        XCTAssertThrowsError(
-            try encoder.encodeBatch(images: [makeTestImage(), makeTestImage()])
-        )
+    func testImageEncoderBatchPredictionFailureFailsClosed() async {
+        let encoder = ImageEncoder(model: ControlledPredictionModel(
+            embeddingKey: "image_embedding", predictionFailures: 1
+        ))
+        do {
+            _ = try await encoder.encodeBatchCancellable(images: [makeTestImage(), makeTestImage()])
+            XCTFail("A failed prediction must fail the batch")
+        } catch {
+            XCTAssertTrue(error is TestError)
+        }
     }
 
     func testTextEncoderRejectsShortModelOutput() throws {
@@ -235,30 +202,25 @@ final class EncoderConcurrencyTests: XCTestCase {
         }
     }
 
-    func testImageEncoderBatchRejectsShortModelOutput() {
+    func testImageEncoderBatchRejectsShortModelOutput() async {
         let encoder = ImageEncoder(model: ControlledPredictionModel(
-            embeddingKey: "image_embedding",
-            embeddingDimensions: 1
+            embeddingKey: "image_embedding", embeddingDimensions: 1
         ))
-
-        XCTAssertThrowsError(try encoder.encodeBatch(images: [makeTestImage()])) { error in
+        do {
+            _ = try await encoder.encodeBatchCancellable(images: [makeTestImage()])
+            XCTFail("A malformed embedding must fail the batch")
+        } catch {
             XCTAssertEqual(error as? ImageEncoder.ImageEncoderError, .invalidEmbedding)
         }
     }
 
-    func testImageEncoderBatchRejectsShortAndExtraResultCounts() {
-        for outputCount in [1, 3] {
-            let encoder = ImageEncoder(model: ControlledPredictionModel(
-                embeddingKey: "image_embedding",
-                batchOutputCount: outputCount
-            ))
-
-            XCTAssertThrowsError(
-                try encoder.encodeBatch(images: [makeTestImage(), makeTestImage()])
-            ) { error in
-                XCTAssertEqual(error as? ImageEncoder.ImageEncoderError, .invalidEmbedding)
-            }
-        }
+    func testImageEncoderBatchReturnsOneNormalizedEmbeddingPerImage() async throws {
+        let encoder = ImageEncoder(model: ControlledPredictionModel(embeddingKey: "image_embedding"))
+        let embeddings = try await encoder.encodeBatchCancellable(images: [makeTestImage(), makeTestImage()])
+        XCTAssertEqual(embeddings.count, 2)
+        assertNormalized(embeddings)
+        let empty = try await encoder.encodeBatchCancellable(images: [])
+        XCTAssertTrue(empty.isEmpty)
     }
 
     private func assertNormalized(

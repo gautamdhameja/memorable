@@ -12,13 +12,10 @@ class SceneClassifier {
 
         do {
             return try await CancellableVisionOperation.run(request: request) {
-                try handler.perform([request])
+                try VisionRequestExecution.perform([request], using: handler)
                 try Task.checkCancellation()
                 guard let observations = request.results else { return [] }
-                return observations
-                    .filter { $0.confidence >= minConfidence }
-                    .prefix(maxLabels)
-                    .map { $0.identifier.lowercased().replacingOccurrences(of: "_", with: " ") }
+                return labels(from: observations, maxLabels: maxLabels, minConfidence: minConfidence)
             }
         } catch is CancellationError {
             return []
@@ -26,6 +23,17 @@ class SceneClassifier {
             logger.error("[SceneClassifier] Failed: \(error.safeDiagnosticCode)")
             return []
         }
+    }
+
+    static func labels(
+        from observations: [VNClassificationObservation],
+        maxLabels: Int = 5,
+        minConfidence: Float = 0.3
+    ) -> [String] {
+        observations
+            .filter { $0.confidence >= minConfidence }
+            .prefix(maxLabels)
+            .map { $0.identifier.lowercased().replacingOccurrences(of: "_", with: " ") }
     }
 
     static func labelsToString(_ labels: [String]) -> String? {

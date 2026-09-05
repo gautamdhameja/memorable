@@ -80,6 +80,7 @@ final class IndexingJobQueue {
     private var completed: [UUID: [IndexingJobKind: Date]] = [:]
     private var cancelledIDs: Set<UUID> = []
     private var sequence = 0
+    private var isMaintenanceSuspended = false
     private var wakeTask: Task<Void, Never>?
     private var idleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private let now: Clock
@@ -102,6 +103,11 @@ final class IndexingJobQueue {
 
     var retainedWorkflowCount: Int { completed.count }
     var retainedCancellationCount: Int { cancelledIDs.count }
+
+    func setMaintenanceSuspended(_ suspended: Bool) {
+        isMaintenanceSuspended = suspended
+        scheduleNextIfNeeded()
+    }
 
     func contains(_ kind: IndexingJobKind) -> Bool {
         let hasActive = active.map {
@@ -254,6 +260,9 @@ final class IndexingJobQueue {
     }
 
     private func eligibleAt(for pendingJob: PendingJob) -> Date? {
+        guard !isMaintenanceSuspended || pendingJob.job.priority == .userInitiated else {
+            return nil
+        }
         let workflowCompletions = completed[pendingJob.job.workflowID, default: [:]]
         let dependencyDates = pendingJob.job.dependencies.compactMap { workflowCompletions[$0] }
         guard dependencyDates.count == pendingJob.job.dependencies.count else { return nil }

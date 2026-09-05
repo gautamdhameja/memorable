@@ -154,66 +154,6 @@ final class ImageEncoder: Sendable {
         return array
     }
 
-    /// Batch-encode multiple images in a single Core ML prediction call.
-    /// The Neural Engine is much more efficient with batched inputs.
-    /// Returns array of L2-normalized embedding vectors (same order as input).
-    func encodeBatch(images: [UIImage]) throws -> [[Float]] {
-        guard !images.isEmpty else { return [] }
-        try Task.checkCancellation()
-
-        #if DEBUG
-        let batchStart = CFAbsoluteTimeGetCurrent()
-        #endif
-
-        // Preprocess all images into MLFeatureProviders
-        var featureProviders: [MLFeatureProvider] = []
-        for image in images {
-            try Task.checkCancellation()
-            guard let pixelBuffer = image.toPixelBuffer(width: 224, height: 224) else {
-                throw ImageEncoderError.preprocessingFailed
-            }
-            let inputArray = try pixelBufferToMLMultiArray(pixelBuffer: pixelBuffer, width: 224, height: 224)
-            let features = try MLDictionaryFeatureProvider(dictionary: [
-                "pixel_values": MLFeatureValue(multiArray: inputArray)
-            ])
-            featureProviders.append(features)
-        }
-
-        // Run batch prediction
-        let batchProvider = MLArrayBatchProvider(array: featureProviders)
-        try Task.checkCancellation()
-        let batchResults = try currentModel().predictions(
-            from: batchProvider,
-            options: MLPredictionOptions()
-        )
-        guard batchResults.count == images.count else {
-            throw ImageEncoderError.invalidEmbedding
-        }
-
-        // Extract embeddings
-        var embeddings: [[Float]] = []
-        for i in 0..<batchResults.count {
-            try Task.checkCancellation()
-            let output = batchResults.features(at: i)
-            guard let embeddingArray = output.featureValue(for: "image_embedding")?.multiArrayValue else {
-                throw ImageEncoderError.outputExtractionFailed
-            }
-
-            var embedding = embeddingArray.toFloatArray()
-            guard embedding.count == EmbeddingConfig.dimensions else {
-                throw ImageEncoderError.invalidEmbedding
-            }
-            guard embedding.l2Normalize() else { throw ImageEncoderError.invalidEmbedding }
-            embeddings.append(embedding)
-        }
-
-        #if DEBUG
-        logger.info("[ImageEncoder] Batch of \(images.count) images encoded in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - batchStart))s")
-        #endif
-
-        return embeddings
-    }
-
     enum ImageEncoderError: LocalizedError, Equatable {
         case modelNotFound
         case preprocessingFailed

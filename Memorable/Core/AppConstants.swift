@@ -299,6 +299,8 @@ enum IndexingConfig {
 
     /// Photos processed per enrichment fetch/update batch.
     static let enrichmentBatchSize = 20
+    static let enrichmentConcurrency = 2
+    static let enrichmentSearchReloadIntervalSeconds: TimeInterval = 15
 
     /// Completed items needed before speed/ETA estimates are shown.
     static let progressEstimateMinCompleted = 5

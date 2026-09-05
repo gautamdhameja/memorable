@@ -98,6 +98,7 @@ class IndexingService: ObservableObject {
     private var geocodingRetryTask: Task<Void, Never>?
     private var geocodingRetryAttempt = 0
     private var isApplicationActive = false
+    private var isUserSearchActive = false
     private var proEntitlementObservation: AnyCancellable?
     private var scheduledSavedFolderSourceIDs: Set<String> = []
     private var thermalSafetyState = ThermalIndexingState()
@@ -536,6 +537,20 @@ class IndexingService: ObservableObject {
         }
     }
 
+    func setUserSearchActive(_ active: Bool) {
+        guard isUserSearchActive != active else { return }
+        isUserSearchActive = active
+        if active {
+            jobQueue.setMaintenanceSuspended(true)
+        }
+        // Cancel current analysis and start a fresh quiet interval when the
+        // search finishes. A slow search must never outlast the pause.
+        prioritizeUserSearch()
+        if !active {
+            jobQueue.setMaintenanceSuspended(false)
+        }
+    }
+
     /// Apple location services must not begin new reverse-geocoding requests
     /// while the app is inactive. Pending work remains visible and resumes as
     /// soon as the foreground is active again.
@@ -544,6 +559,9 @@ class IndexingService: ObservableObject {
         isApplicationActive = isActive
 
         if !isActive {
+            if jobQueue.contains(.enrichPhotos) {
+                deferPostIndexingWork(workflowID: UUID())
+            }
             if isInitialIndexingExperiencePending {
                 if progress.isRunning || hasLibraryIndexingWork {
                     backgroundExecutionState = .continuingInBackground
@@ -1318,7 +1336,8 @@ class IndexingService: ObservableObject {
 
     @discardableResult
     private func reloadSearchIndex() async -> Bool {
-        guard !searchEngine.isMemoryPressureSuspended, !Task.isCancelled else {
+        guard !Task.isCancelled else { return false }
+        guard !searchEngine.isMemoryPressureSuspended else {
             isReady = false
             onIndexUnavailable?()
             return false
@@ -1336,7 +1355,8 @@ class IndexingService: ObservableObject {
             } onCancel: {
                 loadTask.cancel()
             }
-            guard !searchEngine.isMemoryPressureSuspended, !Task.isCancelled else {
+            guard !Task.isCancelled else { return false }
+            guard !searchEngine.isMemoryPressureSuspended else {
                 isReady = false
                 onIndexUnavailable?()
                 return false
@@ -1358,6 +1378,8 @@ class IndexingService: ObservableObject {
                 #endif
                 onIndexUnavailable?()
             }
+        } catch is CancellationError {
+            return false
         } catch {
             logger.error("Failed to reload search index: \(error.safeDiagnosticCode)")
             isReady = searchEngine.isIndexLoaded
@@ -1572,7 +1594,7 @@ class IndexingService: ObservableObject {
             // completion may let iOS suspend the process immediately.
             deferPostIndexingWork(workflowID: workflowID)
         }
-        persistInitialIndexingExperienceCompletion()
+        completeInitialIndexingExperience()
         if !defersPostIndexingWork {
             await enqueuePostIndexingWork(workflowID: workflowID)
         }
@@ -1808,9 +1830,16 @@ class IndexingService: ObservableObject {
             kind: .enrichPhotos,
             priority: .enrichment,
             dependencies: dependencies,
-            delayAfterDependencies: delayAfterDependencies
+            delayAfterDependencies: max(
+                delayAfterDependencies,
+                IndexingConfig.postLaunchMaintenanceDelaySeconds
+            )
         ) { [weak self] in
             guard let self, !self.progress.isRunning else { return .cancelled }
+            guard self.canScheduleAutomaticMaintenance(), !self.isUserSearchActive else {
+                self.deferPostIndexingWork(workflowID: workflowID)
+                return .cancelled
+            }
             await self.performPhotoEnrichment()
             if self.progress.phase == .enrichment {
                 self.progress.isRunning = false
@@ -2016,6 +2045,19 @@ class IndexingService: ObservableObject {
 
     // MARK: - Photo Enrichment
 
+    // Aggregate stage durations include overlapping work from two photos.
+    private var enrichmentStageSeconds: [String: TimeInterval] = [:]
+    private var hasUnpublishedEnrichment = false
+
+    private func measureEnrichment<Value>(
+        _ stage: String,
+        operation: () async -> Value
+    ) async -> Value {
+        let start = CFAbsoluteTimeGetCurrent()
+        defer { enrichmentStageSeconds[stage, default: 0] += CFAbsoluteTimeGetCurrent() - start }
+        return await operation()
+    }
+
     private func performPhotoEnrichment() async {
         let remaining: Int
         do {
@@ -2029,7 +2071,10 @@ class IndexingService: ObservableObject {
             logger.error("Failed to count photos needing enrichment: \(error.safeDiagnosticCode)")
             return
         }
-        guard remaining > 0 else { return }
+        guard remaining > 0 else {
+            await publishEnrichmentIfNeeded()
+            return
+        }
 
         progress = IndexingProgress(
             total: remaining,
@@ -2041,6 +2086,19 @@ class IndexingService: ObservableObject {
         )
 
         var completed = 0
+        var lastReload = Date()
+        enrichmentStageSeconds = [:]
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer {
+            PerformanceMetrics.shared.record(
+                "enrichment.elapsed",
+                durationSeconds: CFAbsoluteTimeGetCurrent() - startedAt
+            )
+            for (stage, seconds) in enrichmentStageSeconds.sorted(by: { $0.key < $1.key }) {
+                PerformanceMetrics.shared.record("enrichment.\(stage)", durationSeconds: seconds)
+            }
+            logger.info("[Enrichment] Saved \(completed) photo updates; concurrency=\(IndexingConfig.enrichmentConcurrency)")
+        }
         while !Task.isCancelled {
             let candidates: [PhotoEnrichmentCandidate]
             do {
@@ -2064,16 +2122,27 @@ class IndexingService: ObservableObject {
                 enrich: { [weak self] candidate in
                     await self?.enrichPhoto(candidate)
                 }
-            ), !Task.isCancelled else { return }
+            ) else { return }
 
             do {
                 let db = database
                 let batchUpdates = updates
-                try await CancellableDetachedOperation.run {
+                // Finish this bounded commit even if search cancelled analysis.
+                // The indexing queue retains ownership until the commit ends;
+                // destructive maintenance waits for that queue to drain.
+                let commit = Task.detached(priority: .utility) {
                     try db.updatePhotoEnrichment(batchUpdates)
                 }
+                try await commit.value
                 completed += batchUpdates.count
+                hasUnpublishedEnrichment = hasUnpublishedEnrichment
+                    || batchUpdates.contains { $0.outcome == .completed }
+                guard !Task.isCancelled else { return }
                 progress.completed = min(completed, progress.total)
+                if Date().timeIntervalSince(lastReload) >= IndexingConfig.enrichmentSearchReloadIntervalSeconds {
+                    await publishEnrichmentIfNeeded()
+                    lastReload = Date()
+                }
             } catch is CancellationError {
                 return
             } catch {
@@ -2082,13 +2151,20 @@ class IndexingService: ObservableObject {
             }
         }
 
-        if completed > 0, !Task.isCancelled {
-            _ = await reloadSearchIndex()
+        await publishEnrichmentIfNeeded()
+    }
+
+    private func publishEnrichmentIfNeeded() async {
+        guard hasUnpublishedEnrichment, !Task.isCancelled else { return }
+        if await reloadSearchIndex() {
+            hasUnpublishedEnrichment = false
         }
     }
 
     private func enrichPhoto(_ candidate: PhotoEnrichmentCandidate) async -> PhotoEnrichmentUpdate? {
-        let image = await loadImageForEnrichment(candidate, targetSize: CGSize(width: 224, height: 224))
+        let image = await measureEnrichment("image_load") {
+            await loadImageForEnrichment(candidate, targetSize: CGSize(width: 224, height: 224))
+        }
         guard !Task.isCancelled else { return nil }
         guard let image else {
             return PhotoEnrichmentUpdate(
@@ -2100,46 +2176,50 @@ class IndexingService: ObservableObject {
             )
         }
 
-        var ocrText: String?
-        let quickOcr = await PhotoEnrichmentTask.run {
-            await OCRService.extractTextFast(from: image)
+        let isScreenshot: Bool
+        if candidate.sourceId == PhotoSourceType.photokit.rawValue {
+            let asset = await PhotoLibrary.resolveAsset(by: candidate.localIdentifier)
+            isScreenshot = asset?.mediaSubtypes.contains(.photoScreenshot) == true
+        } else {
+            isScreenshot = OCRService.isLikelyScreenshot(
+                width: candidate.pixelWidth, height: candidate.pixelHeight
+            )
         }
         guard !Task.isCancelled else { return nil }
-
-        if OCRService.isLikelyScreenshot(width: candidate.pixelWidth, height: candidate.pixelHeight) {
-            let ocrWidth = min(candidate.pixelWidth, 2048)
-            let ocrHeight = min(candidate.pixelHeight, 2048)
-            let fullImage = await loadImageForEnrichment(
-                candidate,
-                targetSize: CGSize(width: CGFloat(ocrWidth), height: CGFloat(ocrHeight)),
-                highQuality: true
-            )
+        var ocrText: String?
+        if isScreenshot {
+            let fullImage = await measureEnrichment("image_load") {
+                await loadImageForEnrichment(
+                    candidate,
+                    targetSize: CGSize(
+                        width: CGFloat(min(candidate.pixelWidth, 2048)),
+                        height: CGFloat(min(candidate.pixelHeight, 2048))
+                    ),
+                    highQuality: true
+                )
+            }
             guard !Task.isCancelled else { return nil }
             if let fullImage {
-                ocrText = await PhotoEnrichmentTask.run {
+                ocrText = await measureEnrichment("accurate_ocr") {
                     await OCRService.extractText(from: fullImage)
-                } ?? nil
-                guard !Task.isCancelled else { return nil }
+                }
             }
         }
-
-        if ocrText == nil || (ocrText?.isEmpty ?? true) {
-            ocrText = quickOcr ?? nil
+        guard !Task.isCancelled else { return nil }
+        // Accurate screenshot OCR replaces the quick pass when successful.
+        // Other photos share one Vision handler for OCR and classification.
+        let analysis = await measureEnrichment("thumbnail_vision") {
+            await OCRService.analyzePhoto(image, recognizeText: ocrText?.isEmpty != false)
         }
-        if let text = ocrText, text.count < 3 {
-            ocrText = nil
-        }
+        guard !Task.isCancelled else { return nil }
+        if ocrText?.isEmpty != false { ocrText = analysis.ocrText }
+        if let text = ocrText, text.count < 3 { ocrText = nil }
 
-        let sharpness = await PhotoEnrichmentTask.run {
-            BlurDetector.sharpnessScore(for: image)
+        let sharpness = await measureEnrichment("sharpness") {
+            await PhotoEnrichmentTask.run { BlurDetector.sharpnessScore(for: image) }
         }
         guard let sharpness, !Task.isCancelled else { return nil }
-
-        let sceneLabels = await PhotoEnrichmentTask.run {
-            await SceneClassifier.classify(image: image)
-        }
-        guard let sceneLabels, !Task.isCancelled else { return nil }
-        let encodedSceneLabels = SceneClassifier.labelsToString(sceneLabels)
+        let encodedSceneLabels = SceneClassifier.labelsToString(analysis.sceneLabels)
 
         return PhotoEnrichmentUpdate(
             localIdentifier: candidate.localIdentifier,
