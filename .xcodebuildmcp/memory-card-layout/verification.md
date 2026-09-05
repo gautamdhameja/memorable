@@ -27,3 +27,11 @@ Screenshots: landscape.jpg, portrait.jpg, portrait-narrow.jpg, portrait-large-te
 - The final build, with all temporary QA controls removed, was installed and launched successfully on the seeded simulator.
 
 No physical-device or Release build testing was performed for this layout change.
+
+## Portrait caption refinement
+
+The portrait caption now uses a fixed 152-point panel, with the arrow inline beside the date and summary. The photo area receives the remaining width. Its foreground and blurred backdrop are explicitly bounded to preserve the full image as that area widens; landscape sizing is unchanged. The card remains 218 points high at standard text sizes, with recent searches at the same position.
+
+Verified with an existing portrait from the seeded simulator library; see portrait-compact-caption.jpg. The temporary in-memory hero selector was removed before the final tests. Full simulator suite: 897 passed, 0 failed, 1 opt-in test skipped.
+
+The final build launched successfully. The landscape card was visually unchanged. All pre-merge gates passed on retry after the public dataset endpoint initially returned HTTP 502; relevance metrics remained unchanged (recall@10 and recall@50 0.96, MRR 0.853333, fallback rate 0.26).

@@ -1059,13 +1059,14 @@ struct SearchView: View {
                     if memory.heroPhoto.pixelWidth > 0,
                        memory.heroPhoto.pixelHeight > memory.heroPhoto.pixelWidth {
                         HStack(spacing: 0) {
-                            todayMemoryImage(memory)
-                                .frame(
-                                    width: SearchHomeCardMetrics.portraitPreviewWidth,
-                                    height: SearchHomeCardMetrics.memoryCardHeight
-                                )
-                                .clipped()
-                            todayMemoryCaption(memory, besidePhoto: true)
+                            GeometryReader { geometry in
+                                todayMemoryImage(memory, bounds: geometry.size)
+                                    .frame(width: geometry.size.width, height: geometry.size.height)
+                                    .clipped()
+                            }
+                            .frame(height: SearchHomeCardMetrics.memoryCardHeight)
+                            todayMemoryCaption(memory)
+                                .frame(width: SearchHomeCardMetrics.portraitCaptionWidth)
                                 .padding(.vertical, 16)
                         }
                         .frame(minHeight: SearchHomeCardMetrics.memoryCardHeight)
@@ -1094,22 +1095,17 @@ struct SearchView: View {
         .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
     }
 
-    private func todayMemoryImage(_ memory: OnThisDaySummary) -> some View {
+    private func todayMemoryImage(_ memory: OnThisDaySummary, bounds: CGSize? = nil) -> some View {
         SearchHomePhotoImage(
             result: memory.heroPhoto.searchResult,
             targetSize: SearchHomeCardMetrics.memoryPreviewTargetSize,
-            fillsBackdrop: true
+            fillsBackdrop: true,
+            bounds: bounds
         )
     }
 
-    private func todayMemoryCaption(
-        _ memory: OnThisDaySummary,
-        besidePhoto: Bool = false
-    ) -> some View {
-        let layout = besidePhoto
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 20))
-            : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
-        return layout {
+    private func todayMemoryCaption(_ memory: OnThisDaySummary) -> some View {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(memoryTitle(memory))
                     .font(Celestial.Typography.bodyStrong)
@@ -1982,7 +1978,7 @@ private enum SearchHomeCardMetrics {
     static let memoryPreviewTargetSize = CGSize(width: 1_024, height: 1_024)
     static let captionHeight: CGFloat = 62
     static let memoryCardHeight = memoryPreviewHeight + captionHeight
-    static let portraitPreviewWidth: CGFloat = 164
+    static let portraitCaptionWidth: CGFloat = 152
     static let cornerRadius: CGFloat = 20
     static let recentThumbnailWidth: CGFloat = 64
     static let recentThumbnailHeight: CGFloat = 48
@@ -2044,6 +2040,7 @@ private struct SearchHomePhotoImage: View {
     let result: SearchResult
     let targetSize: CGSize
     var fillsBackdrop = false
+    var bounds: CGSize? = nil
     @State private var image: UIImage?
     @State private var imageLoadGeneration: UInt = 0
     @State private var imageLoadTask: Task<Void, Never>?
@@ -2057,6 +2054,7 @@ private struct SearchHomePhotoImage: View {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
+                        .frame(width: bounds?.width, height: bounds?.height)
                         .blur(radius: 20)
                         .scaleEffect(1.08)
                         .opacity(0.55)
@@ -2066,6 +2064,7 @@ private struct SearchHomePhotoImage: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
+                    .frame(width: bounds?.width, height: bounds?.height)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

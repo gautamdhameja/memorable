@@ -145,7 +145,7 @@ Photo enrichment waits for a quiet interval and pauses for the full duration of 
 
 Both slideshows show photo dates without generated or canned captions. No caption model preparation runs at startup. The progress card stays below the slideshow and uses a subtle tint from its current photo. It reuses the loaded image, clears that reference when the slideshow closes or memory runs low, and omits the tint when Reduce Transparency is enabled.
 
-The home memory card keeps a compact 218-point height at standard text sizes. Portrait previews use the full card height with the date and summary beside them; landscape and square previews keep the caption below. Photos remain uncropped. Larger accessibility text can expand the caption rather than truncate it.
+The home memory card keeps a compact 218-point height at standard text sizes. Portrait previews share the card with a compact 152-point caption panel and an inline arrow; landscape and square previews keep the caption below. Photos remain uncropped. Larger accessibility text can expand the caption rather than truncate it.
 
 Add a deterministic limit and a cancellation check before introducing any new operation whose memory or work scales with library size.
 

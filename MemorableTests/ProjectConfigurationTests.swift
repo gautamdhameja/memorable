@@ -781,7 +781,7 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertFalse(memoryCard.contains("Date.now"))
         XCTAssertFalse(memoryCard.contains("Celestial.Typography.memoryCaption"))
         XCTAssertTrue(memoryCard.contains("Celestial.Typography.bodyStrong"))
-        XCTAssertTrue(memoryCard.contains("HStackLayout(alignment: .center"))
+        XCTAssertTrue(memoryCard.contains("HStack(alignment: .center"))
         XCTAssertTrue(memoryCard.contains(
             ".frame(minHeight: SearchHomeCardMetrics.captionHeight)"
         ))
