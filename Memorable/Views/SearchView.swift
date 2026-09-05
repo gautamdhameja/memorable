@@ -1060,7 +1060,7 @@ struct SearchView: View {
                        memory.heroPhoto.pixelHeight > memory.heroPhoto.pixelWidth {
                         HStack(spacing: 0) {
                             GeometryReader { geometry in
-                                todayMemoryImage(memory, bounds: geometry.size)
+                                todayMemoryImage(memory, bounds: geometry.size, contentMode: .fill)
                                     .frame(width: geometry.size.width, height: geometry.size.height)
                                     .clipped()
                             }
@@ -1095,12 +1095,17 @@ struct SearchView: View {
         .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
     }
 
-    private func todayMemoryImage(_ memory: OnThisDaySummary, bounds: CGSize? = nil) -> some View {
+    private func todayMemoryImage(
+        _ memory: OnThisDaySummary,
+        bounds: CGSize? = nil,
+        contentMode: ContentMode = .fit
+    ) -> some View {
         SearchHomePhotoImage(
             result: memory.heroPhoto.searchResult,
             targetSize: SearchHomeCardMetrics.memoryPreviewTargetSize,
             fillsBackdrop: true,
-            bounds: bounds
+            bounds: bounds,
+            contentMode: contentMode
         )
     }
 
@@ -2041,6 +2046,7 @@ private struct SearchHomePhotoImage: View {
     let targetSize: CGSize
     var fillsBackdrop = false
     var bounds: CGSize? = nil
+    var contentMode: ContentMode = .fit
     @State private var image: UIImage?
     @State private var imageLoadGeneration: UInt = 0
     @State private var imageLoadTask: Task<Void, Never>?
@@ -2063,7 +2069,7 @@ private struct SearchHomePhotoImage: View {
 
                 Image(uiImage: image)
                     .resizable()
-                    .scaledToFit()
+                    .aspectRatio(contentMode: contentMode)
                     .frame(width: bounds?.width, height: bounds?.height)
             }
         }

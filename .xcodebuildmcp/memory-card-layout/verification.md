@@ -35,3 +35,9 @@ The portrait caption now uses a fixed 152-point panel, with the arrow inline bes
 Verified with an existing portrait from the seeded simulator library; see portrait-compact-caption.jpg. The temporary in-memory hero selector was removed before the final tests. Full simulator suite: 897 passed, 0 failed, 1 opt-in test skipped.
 
 The final build launched successfully. The landscape card was visually unchanged. All pre-merge gates passed on retry after the public dataset endpoint initially returned HTTP 502; relevance metrics remained unchanged (recall@10 and recall@50 0.96, MRR 0.853333, fallback rate 0.26).
+
+## Edge-to-edge portrait presentation
+
+Following feedback, portrait previews now use aspect fill inside the same image bounds. This removes side gaps by cropping excess image content without distorting proportions. The 218-point card height, 152-point caption panel, inline arrow, and landscape layout are unchanged. See portrait-edge-to-edge.jpg from the seeded simulator.
+
+The targeted home-card configuration test passed after removing the temporary portrait selector. The final simulator build succeeded. The full suite and relevance gate were not repeated for this display-mode-only adjustment.

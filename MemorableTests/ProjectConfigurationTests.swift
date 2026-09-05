@@ -812,7 +812,8 @@ final class ProjectConfigurationTests: XCTestCase {
             "height: SearchHomeCardMetrics.recentThumbnailHeight"
         ))
         XCTAssertTrue(homeImage.contains("PhotoLibrary.loadPreviewImage("))
-        XCTAssertTrue(homeImage.contains(".scaledToFit()"))
+        XCTAssertTrue(homeImage.contains("var contentMode: ContentMode = .fit"))
+        XCTAssertTrue(homeImage.contains(".aspectRatio(contentMode: contentMode)"))
         XCTAssertTrue(homeImage.contains("if fillsBackdrop"))
         XCTAssertTrue(homeImage.contains(".scaledToFill()"))
     }
