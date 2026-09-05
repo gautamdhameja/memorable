@@ -37,11 +37,13 @@ The one-time StoreKit 2 product `com.blockdeep.memorable.pro.v2` adds:
 - Find Similar and bounded near-duplicate detection.
 - Up to 32 newly added folder sources through security-scoped bookmarks.
 
-All tiers can search visual content and recognized text. A complete phrase found in a photo's OCR qualifies independently of its visual similarity. Text matching uses Apple's Natural Language word tokenizer, ignores case and spacing, and requires the words in order. It does not correct OCR mistakes or spelling variants. Text matches appear in a separate horizontal section; photos that also match visually appear only once. Videos currently use visual matching only.
+All tiers can search visual content and recognized text. A complete phrase found in a photo's OCR qualifies independently of its visual similarity. Text matching uses Apple's Natural Language word tokenizer, ignores case and spacing, and requires the words in order. For phrases of at least three words, it also accepts one missing final letter in a word of six or more letters when every other word matches exactly. Complete phrases rank first. This does not provide general spelling correction or spelling variants. Text matches include a highlighted excerpt in a separate horizontal section; photos that also match visually appear only once. Videos currently use visual matching only.
 
 Text matching preserves the literal query words after local filter extraction, even when smart parsing rewrites the visual description. Only explicit `-term` exclusions may reduce visual scores; model-generated exclusions are ignored.
 
 Visual results must meet the normal score threshold, including when date or location filters are active. Below-threshold results remain available under **Show closest matches** when neither search finds a match. Scene labels can improve visual ranking; OCR no longer adds a partial-word score boost. Text search uses completed enrichment and does not delay startup or trigger OCR during a search.
+
+Open a photo to see its recognized text and tap **Copy text** to copy the full stored text. **Around this time** shows other indexed photos taken within one hour before or after it. The gallery shows at most the 100 closest photos in chronological order and respects folder access. It requires a stored capture date and does not infer events.
 
 ## Understand the privacy boundary
 
@@ -111,7 +113,7 @@ python3 scripts/premerge.py
 
 The pre-merge script verifies bundled model artifacts, checks migration deletion safety, and runs the real-model relevance gate. The relevance gate may need its pinned external dataset when the local cache is incomplete; model verification itself is strictly offline.
 
-The simulator relevance baseline uses a 0.26 fallback-query rate after removing automatic threshold relaxation (previously 0.16). In the 50-caption fixture, five additional queries now require **Show closest matches**. This is an intentional presentation change; the existing per-query recall and reciprocal-rank requirements, aggregate ranking requirements, and 0.02 tolerance remain unchanged. Regression tests separately verify complete OCR phrases, partial-text rejection, and weak visual results staying out of the main grid.
+The simulator relevance baseline uses a 0.26 fallback-query rate after removing automatic threshold relaxation (previously 0.16). In the 50-caption fixture, five additional queries now require **Show closest matches**. This is an intentional presentation change; the existing per-query recall and reciprocal-rank requirements, aggregate ranking requirements, and 0.02 tolerance remain unchanged. Regression tests separately verify complete OCR phrases, narrowly permitted OCR truncation, partial-text rejection, and weak visual results staying out of the main grid. The everyday-query gate adds short visual queries, business names, a generated booking screenshot, and no-answer searches; it reports two known fallback-only cases separately from main-result success. See [relevance evaluation](docs/RELEVANCE_EVALUATION.md).
 
 Before shipping a release, run the complete automated gate:
 

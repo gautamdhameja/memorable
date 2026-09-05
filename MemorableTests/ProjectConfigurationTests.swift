@@ -204,7 +204,11 @@ final class ProjectConfigurationTests: XCTestCase {
         )
         XCTAssertFalse(photoSharing.contains("renderMetadataStrippedShareItem"))
         XCTAssertFalse(sources.contains(".quickLookPreview"))
-        XCTAssertFalse(sources.contains("UIPasteboard"))
+        XCTAssertEqual(sources.components(separatedBy: "UIPasteboard.general").count - 1, 1)
+        XCTAssertNotNil(viewer.range(
+            of: #"Button\s*\{\s*UIPasteboard\.general\.setObjects\(\[text as NSString\], localOnly: true, expirationDate: nil\)"#,
+            options: .regularExpression
+        ), "Copying recognized text must require a button tap and disable Universal Clipboard.")
         XCTAssertTrue(privacyPolicy.contains("only after you tap Share"))
         XCTAssertTrue(privacyPolicy.contains("choose a destination"))
         XCTAssertTrue(privacyPolicy.contains("GPS, camera, date, and other embedded metadata"))

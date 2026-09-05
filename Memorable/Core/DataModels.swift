@@ -289,7 +289,8 @@ struct SearchResult: Identifiable, Equatable {
     let bestFramePosition: Double?
     let sourceId: String
     let filePath: String?
-    let isTextMatch: Bool
+    var isTextMatch: Bool { textMatch != nil }
+    let textMatch: OCRTextMatch?
     var supportsFindSimilar: Bool { !isVideo }
 
     init(
@@ -301,7 +302,7 @@ struct SearchResult: Identifiable, Equatable {
         bestFramePosition: Double?,
         sourceId: String = PhotoSourceType.photokit.rawValue,
         filePath: String? = nil,
-        isTextMatch: Bool = false
+        textMatch: OCRTextMatch? = nil
     ) {
         self.id = id
         self.score = score
@@ -311,7 +312,7 @@ struct SearchResult: Identifiable, Equatable {
         self.bestFramePosition = bestFramePosition
         self.sourceId = sourceId
         self.filePath = filePath
-        self.isTextMatch = isTextMatch
+        self.textMatch = textMatch
     }
 }
 

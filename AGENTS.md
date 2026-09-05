@@ -199,6 +199,7 @@ User query
   → Negative term penalty (-30% of negative similarity)
   → Visual score threshold >= 0.12, with no automatic threshold relaxation
   → Independently accept complete OCR phrases using Apple's NLTokenizer word boundaries
+  → Accept one missing final letter in a word of 6+ letters only with 2+ exact phrase anchors; rank complete phrases first
   → Video dedup (best frame per video only)
   → Merge bounded photo + video results; label text matches separately and remove duplicates
 ```

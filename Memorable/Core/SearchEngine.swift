@@ -1,5 +1,4 @@
 import Foundation
-import NaturalLanguage
 import Accelerate
 import os
 
@@ -1325,7 +1324,7 @@ final class SearchEngine: Sendable {
                     for: page.photos,
                     row: row,
                     score: photoScoring.scores[row],
-                    isTextMatch: photoScoring.textMatches[row]
+                    textMatch: photoScoring.textMatches[row]
                 ))
             }
         }
@@ -1630,11 +1629,9 @@ final class SearchEngine: Sendable {
             ))
         }
         let queryWords = hints.textQuery.lowercased().split(separator: " ").map(String.init)
-        // Local to this scoring call: NLTokenizer must not be shared across threads.
-        let wordTokenizer = NLTokenizer(unit: .word)
         let phraseQuery = hints.textMatchQuery ?? (hints.hasVisualQuery ? hints.textQuery : "")
-        let phraseWords = searchWords(in: phraseQuery, tokenizer: wordTokenizer)
-        var textMatches = [Bool](repeating: false, count: index.count)
+        let textMatcher = OCRTextMatcher(query: phraseQuery)
+        var textMatches = [OCRTextMatch?](repeating: nil, count: index.count)
         let calendar = Calendar.current
         var scores = rawScores
 
@@ -1669,9 +1666,8 @@ final class SearchEngine: Sendable {
                 for negativeScores in negativeScoreSets {
                     score -= negativeScores[row] * SearchConfig.negativeTermWeight
                 }
-                if !phraseWords.isEmpty, let text = index.ocrTexts[row] {
-                    let words = searchWords(in: text, tokenizer: wordTokenizer)
-                    textMatches[row] = words.indices.contains { words[$0...].starts(with: phraseWords) }
+                if let text = index.ocrTexts[row] {
+                    textMatches[row] = textMatcher.match(in: text)
                 }
                 score += photoSceneLabelBoost(index: index, row: row, queryWords: queryWords)
 
@@ -1696,17 +1692,6 @@ final class SearchEngine: Sendable {
             if value { count += 1 }
         }
         return count
-    }
-
-    private func searchWords(in text: String, tokenizer: NLTokenizer) -> [String] {
-        guard !text.isEmpty else { return [] }
-        let normalized = text.folding(
-            options: [.caseInsensitive, .widthInsensitive],
-            locale: Locale(identifier: "en_US_POSIX")
-        )
-        tokenizer.string = normalized
-        return tokenizer.tokens(for: normalized.startIndex..<normalized.endIndex)
-            .map { String(normalized[$0]) }
     }
 
     private func photoSceneLabelBoost(

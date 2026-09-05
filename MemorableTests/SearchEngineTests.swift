@@ -4,6 +4,32 @@ import os
 
 final class SearchEngineTests: XCTestCase {
 
+    func testOCRTruncationRequiresTwoExactAnchorsAndRanksBelowCompletePhrase() throws {
+        for residentLimit in [1, 8_000] {
+            let texts = [
+                "exact": "Welcome to Pulse Heart Centre",
+                "truncated": "Pulse Heart Centr Appointment confirmation",
+                "two-errors": "Puls Heart Centr",
+                "short-word": "Pulse Hear Centre",
+                "extra-letter": "Pulse Heart Centres",
+                "wrong-word": "Pulse Heart Central",
+                "reordered": "Heart Pulse Centr",
+            ]
+            let database = SearchFixtureDatabase(photos: texts.map { id, text in
+                FixturePhoto(id: id, localIdentifier: id, date: nil, ocrText: text,
+                             embedding: float16Vector(first: id == "exact" ? -0.5 : -0.1))
+            })
+            let engine = SearchEngine(
+                textEncoder: FakeTextEncoder(["pulse heart centre": floatVector(first: 1)]),
+                database: database, residentMediaLimit: residentLimit
+            )
+            try engine.loadIndex()
+            let response = try engine.hybridSearch(hints: hints(text: "pulse heart centre"))
+            XCTAssertEqual(response.results.map(\.id), ["exact", "truncated"])
+            XCTAssertTrue(response.results.allSatisfy(\.isTextMatch))
+        }
+    }
+
     func testTextAndVisualMatchesQualifyIndependentlyWithoutDuplicates() async throws {
         for residentLimit in [1, 8_000] {
             let database = SearchFixtureDatabase(photos: [
@@ -47,6 +73,24 @@ final class SearchEngineTests: XCTestCase {
         }
     }
 
+    func testCompletePhraseSurvivesMoreThanOnePageOfPartialMatches() throws {
+        for residentLimit in [1, 8_000] {
+            var photos = (0..<520).map {
+                FixturePhoto(id: "partial-\($0)", localIdentifier: "partial-\($0)", date: nil,
+                             ocrText: "Pulse Heart Centr", embedding: float16Vector(first: 0.5))
+            }
+            photos.append(FixturePhoto(id: "exact", localIdentifier: "exact", date: nil,
+                                       ocrText: "Pulse Heart Centre", embedding: float16Vector(first: -0.5)))
+            let engine = SearchEngine(textEncoder: FakeTextEncoder(["pulse heart centre": floatVector(first: 1)]),
+                                      database: SearchFixtureDatabase(photos: photos), residentMediaLimit: residentLimit)
+            try engine.loadIndex()
+            let results = try engine.hybridSearch(hints: hints(text: "pulse heart centre")).results
+            XCTAssertEqual(results.count, SearchConfig.locationResultsCap)
+            XCTAssertEqual(results.first?.id, "exact")
+            XCTAssertTrue(results.dropFirst().allSatisfy { $0.textMatch?.kind == .truncatedWord })
+        }
+    }
+
     func testTextMatchingRequiresCompleteWordsInOrder() throws {
         let texts = [
             "exact": "Welcome to PULSE\nHEART   CENTRE.",
@@ -77,9 +121,9 @@ final class SearchEngineTests: XCTestCase {
                 .init(id: "wrong-date", localIdentifier: "wrong-date", date: Date(timeIntervalSince1970: 300),
                       city: "Berlin", ocrText: "pulse heart centre", embedding: float16Vector(first: -0.1)),
                 .init(id: "wrong-place", localIdentifier: "wrong-place", date: Date(timeIntervalSince1970: 100),
-                      city: "Paris", ocrText: "pulse heart centre", embedding: float16Vector(first: -0.1)),
+                      city: "Paris", ocrText: "pulse heart centr", embedding: float16Vector(first: -0.1)),
                 .init(id: "folder", localIdentifier: "folder", date: Date(timeIntervalSince1970: 100),
-                      sourceId: "folder-source", city: "Berlin", ocrText: "pulse heart centre",
+                      sourceId: "folder-source", city: "Berlin", ocrText: "pulse heart centr",
                       embedding: float16Vector(first: -0.1)),
             ])
             let engine = SearchEngine(

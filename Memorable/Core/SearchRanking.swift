@@ -16,7 +16,7 @@ struct SearchIndexSnapshot: Sendable {
 struct ScoredMedia {
     let rawScores: [Float]
     let scores: [Float]
-    let textMatches: [Bool]
+    let textMatches: [OCRTextMatch?]
 }
 
 enum SearchCancellation {
@@ -142,7 +142,9 @@ enum SearchResultRanking {
     static let maximumRetainedResults = SearchConfig.locationResultsCap
 
     static func isPreferred(_ lhs: SearchResult, _ rhs: SearchResult) -> Bool {
-        if lhs.isTextMatch != rhs.isTextMatch { return lhs.isTextMatch }
+        let lhsTextRank = lhs.textMatch?.kind.rawValue ?? 0
+        let rhsTextRank = rhs.textMatch?.kind.rawValue ?? 0
+        if lhsTextRank != rhsTextRank { return lhsTextRank > rhsTextRank }
         if lhs.score != rhs.score { return lhs.score > rhs.score }
         let lhsDate = lhs.creationDate ?? .distantPast
         let rhsDate = rhs.creationDate ?? .distantPast
@@ -189,19 +191,19 @@ enum SearchResultRanking {
         scores: [Float],
         threshold: Float,
         sortByScore: Bool = true,
-        textMatches: [Bool]? = nil
+        textMatches: [OCRTextMatch?]? = nil
     ) throws -> [SearchResult] {
         switch index.kind {
         case .photo:
             let rows = try BoundedTopK.rows(
                 count: index.count,
                 limit: maximumRetainedResults,
-                includes: { scores[$0] >= threshold || textMatches?[$0] == true },
+                includes: { scores[$0] >= threshold || textMatches?[$0] != nil },
                 isPreferred: sortByScore
                     ? { lhs, rhs in
-                        if let textMatches, textMatches[lhs] != textMatches[rhs] {
-                            return textMatches[lhs]
-                        }
+                        let lhsRank = textMatches?[lhs]?.kind.rawValue ?? 0
+                        let rhsRank = textMatches?[rhs]?.kind.rawValue ?? 0
+                        if lhsRank != rhsRank { return lhsRank > rhsRank }
                         return preferredScoredRow(lhs, rhs, scores: scores, in: index)
                     }
                     : { preferredLocationRow($0, $1, in: index) },
@@ -212,7 +214,7 @@ enum SearchResultRanking {
             for (resultIndex, row) in rows.enumerated() {
                 try SearchCancellation.check(resultIndex)
                 results.append(try result(for: index, row: row, score: scores[row],
-                                          isTextMatch: textMatches?[row] == true))
+                                          textMatch: textMatches?[row]))
             }
             return results
 
@@ -259,7 +261,7 @@ enum SearchResultRanking {
         for index: MediaIndex,
         row: Int,
         score: Float,
-        isTextMatch: Bool = false
+        textMatch: OCRTextMatch? = nil
     ) throws -> SearchResult {
         switch index.kind {
         case .photo:
@@ -268,7 +270,7 @@ enum SearchResultRanking {
                 localIdentifier: index.localIdentifiers[row],
                 creationDate: index.dates[row], isVideo: false,
                 bestFramePosition: nil, sourceId: index.sourceIds[row],
-                filePath: index.filePaths[row], isTextMatch: isTextMatch
+                filePath: index.filePaths[row], textMatch: textMatch
             )
         case .videoFrame:
             guard let framePosition = index.framePositions[row] else {

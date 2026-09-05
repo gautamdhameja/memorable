@@ -22,6 +22,18 @@ The isolated `MemorableRelevanceTests` scheme uses the production `ImageEncoder`
 
 The baseline also limits the fraction of queries that return only near-miss fallback results. This check prevents a threshold regression from preserving recall by moving the result set out of the primary response.
 
+## Everyday queries
+
+The same command also runs `EverydaySearchTests` against the 50 pinned photos, four committed text-search fixtures, and a deterministic booking screenshot rendered with UIKit. It uses the production image and text encoders, Apple Vision OCR, and a real in-memory GRDB database. Screenshot text uses accurate OCR; the other fixtures use fast OCR. Scene labels are omitted to isolate visual and text retrieval.
+
+`MemorableRelevanceTests/Fixtures/everyday-queries.json` defines 12 queries: short visual descriptions, business names, document text, a reservation number, and two searches with no correct answer. Each positive query names known relevant assets. These labels are retrieval checks, not exhaustive precision annotations.
+
+The test reports the first relevant rank in **main results** and **optional closest matches** separately. It requires a known relevant photo in the first five main results, with two explicit exceptions: `dog` and `black cat` currently rank correctly only in optional results. These are known misses, not main-result successes. The exceptions require a relevant optional result in the first five and accept a future improvement to main results. No-answer queries must keep the main grid empty. Required text matches and result uniqueness are checked separately.
+
+The latest diagnostic ranking is written to `.relevance-cache/everyday-search-report.txt`. The original 50-caption baseline remains unchanged. Do not lower its relevance gates or add fallback exceptions to make a regression pass.
+
+The small fixture does not establish relevance across all personal libraries. In particular, the short-query scores overlap a nonsense query's score, so this change preserves the production visual cutoff rather than lowering it globally.
+
 ## Verify bundled model artifacts offline
 
 Run the model verifier before building or evaluating:

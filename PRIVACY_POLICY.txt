@@ -1,5 +1,5 @@
 **Privacy policy for Memorable: AI Photo Search**
-Last updated: September 5, 2026
+Last updated: September 6, 2026
 
 Memorable analyzes photos, videos, and search queries on your iPhone. The developer does not receive them or collect usage data. The app has no accounts, ads, tracking, or analytics. Technical logs stay on your device; the app does not upload them.
 
@@ -24,6 +24,8 @@ Apple processes Pro purchases and restores, and verifies purchase status. Its se
 **Sharing and playback**
 
 A photo is shared only after you tap Share and choose a destination. The copy can include GPS, camera, date, and other embedded metadata. The destination's privacy policy applies to its use of the photo.
+
+Copy text puts recognized text on this iPhone's clipboard. You choose where to paste it. Memorable does not send copied text to other devices through Universal Clipboard.
 
 If you choose an AirPlay destination, Apple and that destination handle playback.
 

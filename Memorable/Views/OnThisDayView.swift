@@ -316,6 +316,8 @@ private enum MemoryThumbnailRecoveryCoordinator {
 struct MemoryThumbnail: View {
     let photo: IndexedPhotoReference
     var groupPhotos: [IndexedPhotoReference] = []
+    var searchEngine: SearchEngine? = nil
+    var accessibilityTitle: String? = nil
     @State private var thumbnail: UIImage?
     @State private var imageLoadGeneration: UInt = 0
     @State private var imageLoadTask: Task<Void, Never>?
@@ -356,12 +358,13 @@ struct MemoryThumbnail: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(creationDate.map { "Memory from \(DateFormatter.mediumDate.string(from: $0))" } ?? "Memory photo")
+        .accessibilityLabel(accessibilityTitle ?? creationDate.map { "Memory from \(DateFormatter.mediumDate.string(from: $0))" } ?? "Memory photo")
         .accessibilityAddTraits(.isImage)
         .fullScreenCover(item: $selectedResult) { result in
             SearchResultsViewer(
                 initialResult: result,
-                allResults: groupPhotos.map(\.searchResult)
+                allResults: groupPhotos.map(\.searchResult),
+                searchEngine: searchEngine
             )
         }
         .task(id: photo.id) {

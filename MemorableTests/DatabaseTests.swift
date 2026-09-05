@@ -32,6 +32,52 @@ private final class FailingResetFileManager: FileManager, @unchecked Sendable {
 
 final class DatabaseTests: XCTestCase {
 
+    func testNearbyPhotosAreBoundedChronologicalAndRespectTimeAndEntitlements() throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        var anchor = makePhoto(localIdentifier: "anchor")
+        anchor.creationDate = Date(timeIntervalSince1970: 10_000)
+        try database.insertPhoto(anchor)
+        for (id, offset, source) in [
+            ("before", -3_600.0, "photokit"), ("after", 3_600.0, "photokit"),
+            ("outside", 3_600.1, "photokit"), ("folder", 1.0, "folder"),
+        ] {
+            var photo = makePhoto(localIdentifier: id, sourceId: source)
+            photo.creationDate = anchor.creationDate?.addingTimeInterval(offset)
+            try database.insertPhoto(photo)
+        }
+        var undated = makePhoto(localIdentifier: "undated")
+        undated.creationDate = nil
+        try database.insertPhoto(undated)
+        XCTAssertEqual(try database.photosAround(anchor.searchResult, isPro: false).map(\.localIdentifier),
+                       ["before", "after"])
+        XCTAssertEqual(try database.photosAround(anchor.searchResult, isPro: true).map(\.localIdentifier),
+                       ["before", "folder", "after"])
+        XCTAssertTrue(try database.photosAround(undated.searchResult, isPro: true).isEmpty)
+        for index in 0..<120 {
+            var photo = makePhoto(localIdentifier: "burst-\(index)")
+            photo.creationDate = anchor.creationDate?.addingTimeInterval(Double(index + 2))
+            try database.insertPhoto(photo)
+        }
+        let closest = try database.photosAround(anchor.searchResult, isPro: false)
+        XCTAssertEqual(closest.count, 100)
+        XCTAssertEqual(closest.first?.localIdentifier, "burst-0")
+        XCTAssertEqual(closest.last?.localIdentifier, "burst-99")
+    }
+
+    func testRecognizedTextIsBoundedAndCannotExposeLockedFolderText() throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        var photo = makePhoto(localIdentifier: "text", sourceId: "folder")
+        photo.ocrText = String(repeating: "a", count: 5_000)
+        try database.insertPhoto(photo)
+        XCTAssertNil(try database.recognizedText(photoID: photo.id, isPro: false))
+        XCTAssertEqual(try database.recognizedText(photoID: photo.id, isPro: true)?.count,
+                       OCRTextPolicy.maximumCharacters)
+        XCTAssertTrue(try database.photosAround(photo.searchResult, isPro: false).isEmpty)
+        XCTAssertNil(try database.recognizedText(photoID: "missing", isPro: true))
+    }
+
     func testSmartAlbumWriteFailuresPropagateAndPreserveSavedAlbums() throws {
         let database = AppDatabase(openQueue: { try DatabaseQueue() },
                                    migrate: { try AppDatabase.migrator.migrate($0) })

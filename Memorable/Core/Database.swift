@@ -581,6 +581,8 @@ protocol DatabaseProtocol: Sendable {
     ) throws -> Int
 
     // Queries
+    func recognizedText(photoID: String, isPro: Bool) throws -> String?
+    func photosAround(_ photo: SearchResult, isPro: Bool) throws -> [IndexedPhotoReference]
     func onThisDayPhotos() throws -> [(year: Int, photos: [IndexedPhotoReference])]
     func onThisDaySummary() throws -> OnThisDaySummary?
 
@@ -619,6 +621,14 @@ enum FolderSourceDeletionError: LocalizedError, Equatable {
 }
 
 extension DatabaseProtocol {
+    func recognizedText(photoID: String, isPro: Bool) throws -> String? {
+        throw DatabaseCapabilityError.unavailable
+    }
+
+    func photosAround(_ photo: SearchResult, isPro: Bool) throws -> [IndexedPhotoReference] {
+        throw DatabaseCapabilityError.unavailable
+    }
+
     func indexedPhotoVersions(in localIdentifiers: [String]) throws -> [String: IndexedMediaVersion] {
         Dictionary(uniqueKeysWithValues: try existingPhotoIdentifiers(in: localIdentifiers).map {
             ($0, IndexedMediaVersion(id: $0, indexedAt: .distantFuture))

@@ -1749,13 +1749,25 @@ struct SearchView: View {
                         .font(Celestial.Typography.button)
                         .foregroundStyle(Celestial.Colors.onSurface)
                     ScrollView(.horizontal) {
-                        LazyHStack(spacing: 8) {
+                        LazyHStack(alignment: .top, spacing: 8) {
                             ForEach(textMatches) { result in
-                                resultTile(result: result)
-                                    .frame(width: 112, height: 112)
-                                    .clipped()
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                                    .accessibilityLabel("Photo containing matching text")
+                                VStack(alignment: .leading, spacing: 6) {
+                                    resultTile(result: result)
+                                        .frame(width: 144, height: 112)
+                                        .clipped()
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                        .accessibilityLabel("Photo containing matching text")
+                                    if let match = result.textMatch {
+                                        MatchedTextExcerpt(match: match, reservesSpace: true)
+                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                        Text("Partial text match")
+                                            .font(Celestial.Typography.caption)
+                                            .foregroundStyle(Celestial.Colors.outline)
+                                            .opacity(match.kind == .truncatedWord ? 1 : 0)
+                                            .accessibilityHidden(match.kind != .truncatedWord)
+                                    }
+                                }
+                                .frame(width: 144, alignment: .leading)
                             }
                         }
                     }

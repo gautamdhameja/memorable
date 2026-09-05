@@ -178,6 +178,13 @@ struct SearchResultsViewer: View {
     let allResults: [SearchResult]
     var searchEngine: SearchEngine? = nil
 
+    @Environment(\.database) private var database
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var nearbyPhoto: SearchResult?
+    @State private var recognizedText: String?
+    @State private var recognizedTextPhotoID: String?
+    @State private var textError: String?
+    @State private var copiedText = false
     @State private var currentIndex: Int = 0
     @State private var displayedResults: [SearchResult] = []
     @State private var showControls: Bool = true
@@ -241,8 +248,14 @@ struct SearchResultsViewer: View {
                 VStack(spacing: 0) {
                     HStack {
                         Button(action: { dismiss() }) {
-                            Label("Results", systemImage: "chevron.left")
-                                .font(Celestial.Typography.body)
+                            Group {
+                                if dynamicTypeSize.isAccessibilitySize {
+                                    Image(systemName: "chevron.left")
+                                } else {
+                                    Label("Results", systemImage: "chevron.left")
+                                }
+                            }
+                            .font(Celestial.Typography.body)
                         }
                         .celestialGlassCapsuleButtonStyle(
                             tint: Color.black.opacity(0.16),
@@ -252,7 +265,10 @@ struct SearchResultsViewer: View {
                         Spacer()
                         if displayedResults.count > 1 {
                             Text("\(currentIndex + 1) of \(displayedResults.count)")
-                                .font(Celestial.Typography.supporting)
+                                .font(dynamicTypeSize.isAccessibilitySize ? Celestial.Typography.caption : Celestial.Typography.supporting)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                                .fixedSize(horizontal: true, vertical: false)
                                 .foregroundStyle(.white.opacity(0.82))
                                 .padding(.horizontal, 11)
                                 .frame(minHeight: 34)
@@ -294,36 +310,18 @@ struct SearchResultsViewer: View {
                     if currentIndex < displayedResults.count {
                         let result = displayedResults[currentIndex]
                         let showsFindSimilar = searchEngine != nil && result.supportsFindSimilar
-                        if result.creationDate != nil || showsFindSimilar {
-                            HStack(alignment: .center, spacing: 16) {
-                                if let date = result.creationDate {
-                                    Text(date.formatted(date: .long, time: .shortened))
-                                        .font(Celestial.Typography.bodyStrong)
-                                        .foregroundStyle(.white.opacity(0.94))
-                                        .lineLimit(2)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .layoutPriority(1)
-                                }
-
-                                Spacer(minLength: 12)
-
-                                if showsFindSimilar {
-                                    Button(action: handleFindSimilar) {
-                                        HStack(spacing: 8) {
-                                            if isFindingSimilar {
-                                                ProgressView()
-                                                    .controlSize(.small)
-                                                    .tint(Celestial.Colors.amber)
-                                            }
-                                            Text(proManager.isPro ? "Find similar" : "Find similar · Pro")
-                                                .font(Celestial.Typography.button)
-                                                .foregroundStyle(Celestial.Colors.amber)
-                                        }
-                                        .frame(minHeight: 44)
+                        if result.creationDate != nil || showsFindSimilar || (recognizedTextPhotoID == result.id && recognizedText?.isEmpty == false) || textError != nil {
+                            Group {
+                                if dynamicTypeSize.isAccessibilitySize {
+                                    ScrollView {
+                                        photoDetails(result: result, showsFindSimilar: showsFindSimilar)
                                     }
-                                    .fixedSize(horizontal: true, vertical: false)
+                                    .frame(height: 300)
+                                } else {
+                                    photoDetails(result: result, showsFindSimilar: showsFindSimilar)
                                 }
                             }
+                            .foregroundStyle(.white.opacity(0.94))
                             .frame(minHeight: 44)
                             .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                             .padding(.vertical, 6)
@@ -343,6 +341,33 @@ struct SearchResultsViewer: View {
         }
         .statusBar(hidden: true)
         .sheet(isPresented: $showUpgrade) { UpgradeView() }
+        .sheet(item: $nearbyPhoto) { AroundThisTimeView(photo: $0, searchEngine: searchEngine) }
+        .task(id: "\(currentResultID ?? ""):\(proManager.isPro)") {
+            recognizedText = nil
+            recognizedTextPhotoID = nil
+            textError = nil
+            copiedText = false
+            guard currentIndex < displayedResults.count else { return }
+            let result = displayedResults[currentIndex]
+            guard !result.isVideo else { return }
+            do {
+                let database = database
+                let isPro = proManager.isPro
+                let text = try await CancellableDetachedOperation.run {
+                    try database.recognizedText(photoID: result.id, isPro: isPro)
+                }
+                try Task.checkCancellation()
+                guard currentResultID == result.id else { return }
+                recognizedText = text
+                recognizedTextPhotoID = result.id
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled, currentResultID == result.id else { return }
+                logger.error("Photo text failed: \(error.safeDiagnosticCode)")
+                textError = "Text couldn't be loaded."
+            }
+        }
         .sheet(item: $shareCoordinator.preparedItem) { item in
             PhotoShareSheet(item: item) {
                 shareCoordinator.completePresentation(itemID: item.id)
@@ -387,6 +412,75 @@ struct SearchResultsViewer: View {
                 cancelFindSimilar()
             }
             enforceFolderEntitlement()
+        }
+    }
+
+    private func photoDetails(result: SearchResult, showsFindSimilar: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if recognizedTextPhotoID == result.id, let text = recognizedText, !text.isEmpty,
+               FolderResultAccessPolicy.allows(sourceId: result.sourceId, isPro: proManager.isPro) {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let match = result.textMatch {
+                        MatchedTextExcerpt(match: match)
+                        if match.kind == .truncatedWord {
+                            Text("Partial text match").font(Celestial.Typography.caption)
+                        }
+                    } else {
+                        Text(String(text.prefix(180)))
+                            .font(Celestial.Typography.caption)
+                            .lineLimit(3)
+                    }
+                    Button {
+                        UIPasteboard.general.setObjects([text as NSString], localOnly: true, expirationDate: nil)
+                        copiedText = true
+                    } label: {
+                        Label(copiedText ? "Copied" : "Copy text",
+                              systemImage: copiedText ? "checkmark" : "doc.on.doc")
+                    }
+                    .font(Celestial.Typography.button)
+                    .frame(minHeight: 44)
+                }
+            } else if let textError {
+                Text(textError).font(Celestial.Typography.caption)
+            }
+            if let date = result.creationDate {
+                Text(date.formatted(date: .long, time: .shortened))
+                    .font(Celestial.Typography.supporting)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 20) {
+                    photoActions(result: result, showsFindSimilar: showsFindSimilar)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: 4) {
+                    photoActions(result: result, showsFindSimilar: showsFindSimilar)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func photoActions(result: SearchResult, showsFindSimilar: Bool) -> some View {
+        if showsFindSimilar {
+            Button(action: handleFindSimilar) {
+                HStack(spacing: 8) {
+                    if isFindingSimilar { ProgressView().tint(Celestial.Colors.amber) }
+                    Text(proManager.isPro ? "Find similar" : "Find similar · Pro")
+                }
+            }
+            .disabled(isFindingSimilar)
+            .foregroundStyle(Celestial.Colors.amber)
+            .frame(minHeight: 44)
+        }
+        if !result.isVideo, result.creationDate != nil {
+            Button { nearbyPhoto = result } label: {
+                Label("Around this time", systemImage: "clock.arrow.circlepath")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(minHeight: 44)
         }
     }
 
