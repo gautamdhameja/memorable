@@ -1089,7 +1089,7 @@ struct SearchView: View {
                 .contentShape(SearchHomeCardMetrics.cardShape)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Today in Your Memories, \(memoryTitle(memory))")
+            .accessibilityLabel("Today in Your Memories, \(Self.memoryTitle)")
             .accessibilityHint("Opens memories from this day")
         }
         .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
@@ -1112,7 +1112,7 @@ struct SearchView: View {
     private func todayMemoryCaption(_ memory: OnThisDaySummary) -> some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(memoryTitle(memory))
+                Text(Self.memoryTitle)
                     .font(Celestial.Typography.bodyStrong)
                     .foregroundStyle(Celestial.Colors.onSurface)
                 Text(memorySummary(memory))
@@ -1906,11 +1906,7 @@ struct SearchView: View {
         }
     }
 
-    private func memoryTitle(_ memory: OnThisDaySummary) -> String {
-        let currentYear = Calendar.current.component(.year, from: Date())
-        let yearsAgo = max(1, currentYear - memory.mostRecentYear)
-        return "\(yearsAgo) \(yearsAgo == 1 ? "year" : "years") ago today"
-    }
+    private static let memoryTitle = "Memories from this date"
 
     private func memorySummary(_ memory: OnThisDaySummary) -> String {
         let photos = "\(memory.photoCount.formatted()) \(memory.photoCount == 1 ? "photo" : "photos")"
