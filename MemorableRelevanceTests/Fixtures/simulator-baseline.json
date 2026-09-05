@@ -7,7 +7,7 @@
     "recallAt10": 0.96,
     "recallAt50": 0.96,
     "meanReciprocalRank": 0.853333,
-    "fallbackQueryRate": 0.16
+    "fallbackQueryRate": 0.26
   },
   "queries": [
     {

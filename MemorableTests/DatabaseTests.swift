@@ -2655,9 +2655,23 @@ final class DatabaseTests: XCTestCase {
             Data([7, 8, 9]),
             forKey: AppKeys.folderBookmark(sourceId: sourceID)
         )
+        let preview = RecentSearchPreview(
+            query: "before reset",
+            result: SearchResult(id: "old-photo", score: 1, localIdentifier: "folder-photo-before-reset",
+                                 creationDate: nil, isVideo: false, bestFramePosition: nil),
+            resultCount: 1
+        )
+        try database.addSearchHistory(preview.query, preview: preview)
+        XCTAssertEqual(try database.loadSearchHistoryPreviews(limit: 20).count, 1)
+        let album = SmartAlbum(id: "saved-album", name: "Dogs", query: "dog", createdAt: Date())
+        try database.saveSmartAlbum(album)
 
         try database.resetIndexedMedia()
 
+        XCTAssertEqual(try database.loadSmartAlbums().map(\.id), [album.id])
+
+        XCTAssertTrue(try database.loadSearchHistory().isEmpty)
+        XCTAssertTrue(try database.loadSearchHistoryPreviews(limit: 20).isEmpty)
         XCTAssertEqual(try database.listSources().map(\.id), [sourceID])
         XCTAssertEqual(
             UserDefaults.standard.data(forKey: AppKeys.folderBookmark(sourceId: sourceID)),
@@ -2668,6 +2682,23 @@ final class DatabaseTests: XCTestCase {
         let preservedSource = try XCTUnwrap(database.listSources().first)
         XCTAssertEqual(preservedSource.photoCount, 0)
         XCTAssertNil(preservedSource.lastIndexedAt)
+    }
+
+    func testFailedIndexResetRollsBackHistoryAndMediaTogether() throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        try database.insertPhoto(makePhoto(localIdentifier: "keep-photo"))
+        try database.addSearchHistory("keep query")
+        try database.dbQueue.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_history_reset BEFORE DELETE ON search_history
+                BEGIN SELECT RAISE(ABORT, 'injected history reset failure'); END;
+                """)
+        }
+        XCTAssertThrowsError(try database.resetIndexedMedia())
+        XCTAssertEqual(try database.indexedCount(), 1)
+        XCTAssertEqual(try database.loadSearchHistory(), ["keep query"])
+        XCTAssertFalse(try database.indexRebuildRequired())
     }
 
     func testFolderLocalIdentifierUsesSourceAndRelativePath() {

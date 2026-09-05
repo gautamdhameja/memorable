@@ -15,7 +15,8 @@ During initial setup, the app indexes photos first so search becomes available a
 ```text
 Query -> Parse date, location, and exclusions -> Encode visual text locally
       -> Filter local metadata -> Score local embeddings -> Apply local boosts
-      -> Merge bounded photo and video results
+      -> Also match complete phrases in stored OCR
+      -> Merge bounded results, displaying text matches separately
 ```
 
 Memorable supports queries such as:
@@ -36,7 +37,11 @@ The one-time StoreKit 2 product `com.blockdeep.memorable.pro.v2` adds:
 - Find Similar and bounded near-duplicate detection.
 - Up to 32 newly added folder sources through security-scoped bookmarks.
 
-All tiers can use locally generated OCR and scene labels to improve basic visual ranking.
+All tiers can search visual content and recognized text. A complete phrase found in a photo's OCR qualifies independently of its visual similarity. Text matching uses Apple's Natural Language word tokenizer, ignores case and spacing, and requires the words in order. It does not correct OCR mistakes or spelling variants. Text matches appear in a separate horizontal section; photos that also match visually appear only once. Videos currently use visual matching only.
+
+Text matching preserves the literal query words after local filter extraction, even when smart parsing rewrites the visual description. Only explicit `-term` exclusions may reduce visual scores; model-generated exclusions are ignored.
+
+Visual results must meet the normal score threshold, including when date or location filters are active. Below-threshold results remain available under **Show closest matches** when neither search finds a match. Scene labels can improve visual ranking; OCR no longer adds a partial-word score boost. Text search uses completed enrichment and does not delay startup or trigger OCR during a search.
 
 ## Understand the privacy boundary
 
@@ -106,6 +111,8 @@ python3 scripts/premerge.py
 
 The pre-merge script verifies bundled model artifacts, checks migration deletion safety, and runs the real-model relevance gate. The relevance gate may need its pinned external dataset when the local cache is incomplete; model verification itself is strictly offline.
 
+The simulator relevance baseline uses a 0.26 fallback-query rate after removing automatic threshold relaxation (previously 0.16). In the 50-caption fixture, five additional queries now require **Show closest matches**. This is an intentional presentation change; the existing per-query recall and reciprocal-rank requirements, aggregate ranking requirements, and 0.02 tolerance remain unchanged. Regression tests separately verify complete OCR phrases, partial-text rejection, and weak visual results staying out of the main grid.
+
 Before shipping a release, run the complete automated gate:
 
 ```bash
@@ -130,11 +137,11 @@ Keep high-cost work bounded and cancellable:
 - A memory warning cancels indexing work, drops the search index, and blocks an in-flight reload from restoring it until explicit work resumes.
 - Background-task expiration cancels the active indexing workflow.
 
-Rebuilding the index preserves saved folder registrations and bookmarks. A confirmed Pro downgrade removes derived folder index rows but preserves those registrations. After a rebuild or confirmed Pro restoration, the app automatically schedules saved folders that need indexing.
+Rebuilding the index clears recent search history and its result previews. Saved albums, folder registrations, and bookmarks are preserved. A confirmed Pro downgrade removes derived folder index rows but preserves those registrations. After a rebuild or confirmed Pro restoration, the app automatically schedules saved folders that need indexing.
 
 Initial indexing and later indexing runs show a memory slideshow while no query is displayed. Progress stays in the indexing card; counts describe searchable media, not the size of the photo library. During later runs, you can search the available index and clear the query to return to the slideshow.
 
-Photo enrichment waits for a quiet interval and pauses for the full duration of text and similarity searches. It processes at most two photos at a time, retains completed work when interrupted, and publishes metadata periodically. Screenshots use PhotoKit metadata and accurate OCR first; other photos group fast OCR and scene classification through Apple Vision. A dismissible status appears on the normal search screen while analysis runs.
+Photo enrichment waits for a quiet interval and pauses for the full duration of text and similarity searches. It processes at most two photos at a time, retains completed work when interrupted, and publishes metadata periodically. Screenshots use PhotoKit metadata and accurate OCR first; other photos group fast OCR and scene classification through Apple Vision. A dismissible status appears on the normal search screen while analysis runs; search history, saved albums, and memories remain available.
 
 Both slideshows show photo dates without generated or canned captions. No caption model preparation runs at startup. The progress card stays below the slideshow and uses a subtle tint from its current photo. It reuses the loaded image, clears that reference when the slideshow closes or memory runs low, and omits the tint when Reduce Transparency is enabled.
 

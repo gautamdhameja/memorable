@@ -4,6 +4,158 @@ import os
 
 final class SearchEngineTests: XCTestCase {
 
+    func testTextAndVisualMatchesQualifyIndependentlyWithoutDuplicates() async throws {
+        for residentLimit in [1, 8_000] {
+            let database = SearchFixtureDatabase(photos: [
+                .init(id: "visual", localIdentifier: "visual", date: Date(timeIntervalSince1970: 300),
+                      embedding: float16Vector(first: 0.3)),
+                .init(id: "partial", localIdentifier: "partial", date: Date(timeIntervalSince1970: 200),
+                      ocrText: "Pulse and heart surgery at the centre", embedding: float16Vector(first: 0.09)),
+                .init(id: "text", localIdentifier: "text", date: Date(timeIntervalSince1970: 100),
+                      ocrText: "PULSE\nHEART   CENTRE", embedding: float16Vector(first: -0.05)),
+                .init(id: "both", localIdentifier: "both", date: nil,
+                      ocrText: "Welcome to Pulse Heart Centre.", embedding: float16Vector(first: 0.4)),
+            ])
+            let engine = SearchEngine(
+                textEncoder: FakeTextEncoder(["pulse heart centre": floatVector(first: 1)]),
+                database: database, residentMediaLimit: residentLimit
+            )
+            try engine.loadIndex()
+            let response = try await engine.search(query: "pulse heart centre")
+            XCTAssertEqual(Set(response.results.map(\.id)), ["visual", "text", "both"])
+            XCTAssertEqual(response.results.count, 3)
+            XCTAssertEqual(Set(response.results.filter(\.isTextMatch).map(\.id)), ["text", "both"])
+            XCTAssertEqual(response.results.filter { !$0.isTextMatch }.map(\.id), ["visual"])
+            XCTAssertTrue(response.fallbackResults.isEmpty)
+        }
+    }
+
+    func testWeakQueryDoesNotPromoteUnrelatedClusters() async throws {
+        for residentLimit in [1, 8_000] {
+            let database = SearchFixtureDatabase(photos: [0.097, 0.092, 0.089].enumerated().map {
+                FixturePhoto(id: "photo-\($0.offset)", localIdentifier: "photo-\($0.offset)",
+                             date: nil, embedding: float16Vector(first: Float($0.element)))
+            })
+            let engine = SearchEngine(
+                textEncoder: FakeTextEncoder(["pulse heart centre": floatVector(first: 1)]),
+                database: database, residentMediaLimit: residentLimit
+            )
+            try engine.loadIndex()
+            let response = try await engine.search(query: "pulse heart centre")
+            XCTAssertTrue(response.results.isEmpty)
+            XCTAssertEqual(response.fallbackResults.count, 3)
+        }
+    }
+
+    func testTextMatchingRequiresCompleteWordsInOrder() throws {
+        let texts = [
+            "exact": "Welcome to PULSE\nHEART   CENTRE.",
+            "width": "ＰＵＬＳＥ ＨＥＡＲＴ ＣＥＮＴＲＥ",
+            "substring": "Repulse heart centres",
+            "partial": "Pulse heart care",
+            "reordered": "Centre heart pulse",
+            "separated": "Pulse and heart surgery at the centre",
+        ]
+        let database = SearchFixtureDatabase(photos: texts.map { id, text in
+            FixturePhoto(id: id, localIdentifier: id, date: nil, ocrText: text,
+                         embedding: float16Vector(first: -0.1))
+        })
+        let engine = SearchEngine(
+            textEncoder: FakeTextEncoder(["pulse heart centre": floatVector(first: 1)]), database: database
+        )
+        try engine.loadIndex()
+        let response = try engine.hybridSearch(hints: hints(text: "pulse heart centre"))
+        XCTAssertEqual(Set(response.results.map(\.id)), ["exact", "width"])
+        XCTAssertTrue(response.results.allSatisfy(\.isTextMatch))
+    }
+
+    func testTextMatchesRespectDateLocationAndSourceRestrictions() throws {
+        for residentLimit in [1, 8_000] {
+            let database = SearchFixtureDatabase(photos: [
+                .init(id: "match", localIdentifier: "match", date: Date(timeIntervalSince1970: 100),
+                      city: "Berlin", ocrText: "pulse heart centre", embedding: float16Vector(first: -0.1)),
+                .init(id: "wrong-date", localIdentifier: "wrong-date", date: Date(timeIntervalSince1970: 300),
+                      city: "Berlin", ocrText: "pulse heart centre", embedding: float16Vector(first: -0.1)),
+                .init(id: "wrong-place", localIdentifier: "wrong-place", date: Date(timeIntervalSince1970: 100),
+                      city: "Paris", ocrText: "pulse heart centre", embedding: float16Vector(first: -0.1)),
+                .init(id: "folder", localIdentifier: "folder", date: Date(timeIntervalSince1970: 100),
+                      sourceId: "folder-source", city: "Berlin", ocrText: "pulse heart centre",
+                      embedding: float16Vector(first: -0.1)),
+            ])
+            let engine = SearchEngine(
+                textEncoder: FakeTextEncoder(["pulse heart centre": floatVector(first: 1)]),
+                database: database, residentMediaLimit: residentLimit
+            )
+            try engine.loadIndex()
+            let constrained = try engine.hybridSearch(hints: hints(
+                text: "pulse heart centre",
+                dateRange: DateRange(start: Date(timeIntervalSince1970: 50), end: Date(timeIntervalSince1970: 150)),
+                locationHint: "Berlin"
+            ), featurePolicy: .pro)
+            XCTAssertEqual(Set(constrained.results.map(\.id)), ["match", "folder"])
+            let basic = try engine.hybridSearch(hints: hints(text: "pulse heart centre"), featurePolicy: .basic)
+            XCTAssertFalse(basic.results.contains { $0.id == "folder" })
+            XCTAssertTrue(basic.results.allSatisfy(\.isTextMatch))
+        }
+    }
+
+    func testTextMatchingUsesLiteralPhraseInsteadOfRewrittenVisualQuery() throws {
+        for residentLimit in [1, 8_000] {
+            let database = SearchFixtureDatabase(photos: [
+                .init(id: "literal", localIdentifier: "literal", date: nil,
+                      ocrText: "Pulse Heart Centre", embedding: float16Vector(first: -0.1)),
+                .init(id: "rewritten", localIdentifier: "rewritten", date: nil,
+                      ocrText: "hospital sign", embedding: float16Vector(first: -0.1)),
+            ])
+            let engine = SearchEngine(
+                textEncoder: FakeTextEncoder(["hospital sign": floatVector(first: 1)]),
+                database: database, residentMediaLimit: residentLimit
+            )
+            try engine.loadIndex()
+            var query = hints(text: "hospital sign")
+            query.textMatchQuery = "pulse heart centre"
+            let response = try engine.hybridSearch(hints: query, featurePolicy: .pro)
+            XCTAssertEqual(response.results.map(\.id), ["literal"])
+            XCTAssertTrue(response.results.allSatisfy(\.isTextMatch))
+        }
+    }
+
+    func testWeakFilteredVisualResultsAreNotPromoted() throws {
+        for residentLimit in [1, 8_000] {
+            let database = SearchFixtureDatabase(photos: (0..<10).map { index in
+                FixturePhoto(id: "photo-\(index)", localIdentifier: "photo-\(index)", date: nil,
+                             city: "Berlin", embedding: float16Vector(first: 0.08))
+            })
+            let engine = SearchEngine(textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+                                      database: database, residentMediaLimit: residentLimit)
+            try engine.loadIndex()
+            let response = try engine.hybridSearch(hints: hints(text: "dog", locationHint: "Berlin"),
+                                                   featurePolicy: .pro)
+            XCTAssertTrue(response.results.isEmpty)
+            XCTAssertEqual(response.fallbackResults.count, 10)
+        }
+    }
+
+    func testLowVisualScoreTextMatchSurvivesBoundedCandidateRetention() throws {
+        for residentLimit in [1, 8_000] {
+            var photos = (0..<520).map { index in
+                FixturePhoto(id: "visual-\(index)", localIdentifier: "visual-\(index)",
+                             date: Date(timeIntervalSince1970: TimeInterval(index + 1)),
+                             embedding: float16Vector(first: 0.5))
+            }
+            photos.append(FixturePhoto(id: "text", localIdentifier: "text", date: nil,
+                                       ocrText: "pulse heart centre", embedding: float16Vector(first: -0.5)))
+            let engine = SearchEngine(textEncoder: FakeTextEncoder(["pulse heart centre": floatVector(first: 1)]),
+                                      database: SearchFixtureDatabase(photos: photos),
+                                      residentMediaLimit: residentLimit)
+            try engine.loadIndex()
+            let response = try engine.hybridSearch(hints: hints(text: "pulse heart centre"))
+            XCTAssertEqual(response.results.count, SearchConfig.locationResultsCap)
+            XCTAssertEqual(response.results.first?.id, "text")
+            XCTAssertEqual(response.results.filter(\.isTextMatch).count, 1)
+        }
+    }
+
     func testDateFilterDescriptionsOnlyAbbreviateCompleteCalendarPeriods() throws {
         let calendar = Calendar.current
         func date(_ month: Int, _ day: Int, year: Int = 2022) throws -> Date {
@@ -2329,7 +2481,7 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(response.results.first?.bestFramePosition, 0.8)
     }
 
-    func testAdaptiveFallbackClusterIsFinalizedAcrossAllPages() throws {
+    func testBelowThresholdClusterRemainsOptionalAcrossAllPages() throws {
         let database = SearchFixtureDatabase(photos: (1...3).map { number in
             FixturePhoto(
                 id: "photo-\(number)",
@@ -2347,8 +2499,8 @@ final class SearchEngineTests: XCTestCase {
         try engine.loadIndex()
         let response = try engine.hybridSearch(hints: hints(text: "abstract"))
 
-        XCTAssertEqual(response.results.count, 3)
-        XCTAssertTrue(response.fallbackResults.isEmpty)
+        XCTAssertTrue(response.results.isEmpty)
+        XCTAssertEqual(response.fallbackResults.count, 3)
     }
 
     func testMemoryPressureCancelsSearchWhileLoadingLaterPage() async throws {

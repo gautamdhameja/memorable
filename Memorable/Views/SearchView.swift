@@ -368,6 +368,12 @@ struct SearchView: View {
 
         let lifecycleContent = presentedContent
             .onAppear {
+                indexingService.onIndexResetStarted = { [weak viewModel] in
+                    viewModel?.beginIndexReset()
+                }
+                indexingService.onIndexResetFinished = { [weak viewModel] didReset in
+                    viewModel?.finishIndexReset(didReset: didReset)
+                }
                 isViewVisible = true
                 viewModel.setSortMode(rawValue: sortModeRaw)
                 if indexingService.isReady {
@@ -720,7 +726,7 @@ struct SearchView: View {
     }
 
     private var hasHomeContent: Bool {
-        guard !indexingService.progress.isRunning, indexingService.isReady else { return false }
+        guard indexingService.isReady else { return false }
         return (canShowValidatedSuggestions && viewModel.shouldShowDiscoverySuggestions)
             || !smartAlbums.isEmpty
             || !viewModel.searchHistory.isEmpty
@@ -1309,7 +1315,8 @@ struct SearchView: View {
                             runRelaxedSearch(summary: summary, dropLocation: true)
                         }
                     }
-                    if !summary.visualQuery.isEmpty {
+                    if !summary.visualQuery.isEmpty,
+                       summary.dateDescription != nil || summary.locationDescription != nil {
                         relaxationButton("Search “\(summary.visualQuery)” only") {
                             viewModel.setQueryText(summary.visualQuery)
                             performSearch(saveToHistory: true)
@@ -1320,13 +1327,7 @@ struct SearchView: View {
                 .padding(.top, Celestial.Spacing.sectionGap)
 
                 if !viewModel.fallbackResults.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("CLOSE TO WHAT YOU DESCRIBED")
-                            .font(Celestial.Typography.eyebrow)
-                            .tracking(0.6)
-                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                            .padding(.top, Celestial.Spacing.sectionGap)
-
+                    DisclosureGroup("Show closest matches") {
                         let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
                         LazyVGrid(columns: columns, spacing: 8) {
                             ForEach(viewModel.fallbackResults) { result in
@@ -1347,7 +1348,11 @@ struct SearchView: View {
                                 .accessibilityLabel(result.isVideo ? "Video result" : "Photo result")
                             }
                         }
+                        .padding(.top, 12)
                     }
+                    .font(Celestial.Typography.button)
+                    .tint(Celestial.Colors.primary)
+                    .padding(.top, Celestial.Spacing.sectionGap)
                 }
             } else {
                 Text("No matching photos")
@@ -1701,9 +1706,39 @@ struct SearchView: View {
         filteredResults: [SearchResult]? = nil
     ) -> some View {
         let filtered = filteredResults ?? viewModel.filteredResults(results)
-        let visible = Array(filtered.prefix(viewModel.visibleCount))
-        let hasMore = filtered.count > visible.count
+        let textMatches = filtered.filter(\.isTextMatch)
+        let visualMatches = filtered.filter { !$0.isTextMatch }
+        let visible = Array(visualMatches.prefix(viewModel.visibleCount))
+        let hasMore = visualMatches.count > visible.count
         return VStack(alignment: .leading, spacing: 0) {
+            if !textMatches.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Text matches · \(textMatches.count)")
+                        .font(Celestial.Typography.button)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: 8) {
+                            ForEach(textMatches) { result in
+                                resultTile(result: result)
+                                    .frame(width: 112, height: 112)
+                                    .clipped()
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                                    .accessibilityLabel("Photo containing matching text")
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+                }
+                .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                .padding(.vertical, 16)
+                if !visualMatches.isEmpty {
+                    Text("Visual matches")
+                        .font(Celestial.Typography.button)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                        .padding(.bottom, 8)
+                }
+            }
             if viewModel.sortMode == .recent {
                 let groups = ResultGrouper.groupByMonth(results: visible)
                 ForEach(groups) { group in
@@ -1733,9 +1768,9 @@ struct SearchView: View {
             if hasMore {
                 Button {
                     Haptics.light()
-                    viewModel.showAllResults(count: filtered.count)
+                    viewModel.showAllResults(count: visualMatches.count)
                 } label: {
-                    Text("Show all \(filtered.count) matching results")
+                    Text("Show all \(visualMatches.count) matching results")
                         .font(Celestial.Typography.button)
                         .foregroundStyle(Celestial.Colors.primary)
                 }
@@ -1743,7 +1778,7 @@ struct SearchView: View {
                 .frame(maxWidth: .infinity)
             }
 
-            if !visible.isEmpty {
+            if !filtered.isEmpty {
                 Text(AppCopy.aiDisclaimer)
                     .font(Celestial.Typography.micro)
                     .foregroundStyle(Celestial.Colors.outline)
@@ -1865,7 +1900,6 @@ struct SearchView: View {
         let canStart = todayMemoryLoadTask == nil
             && isViewVisible
             && indexingService.isReady
-            && !indexingService.progress.isRunning
             && viewModel.queryText.isEmpty
             && viewModel.results.isEmpty
             && viewModel.lastResults.isEmpty
@@ -2082,6 +2116,9 @@ enum SearchResultsPresentation {
         if summary.locationDescription != nil, geocodingProgress != nil {
             return "Still resolving photo locations"
         }
+        if summary.dateDescription == nil, summary.locationDescription == nil {
+            return "No confident matches"
+        }
         return "Nothing matches all of that"
     }
 
@@ -2089,6 +2126,9 @@ enum SearchResultsPresentation {
         summary: FilterSummary,
         geocodingProgress: GeocodingProgressState?
     ) -> String {
+        if summary.dateDescription == nil, summary.locationDescription == nil {
+            return "Try a different description or fewer words."
+        }
         var details = [summary.visualQuery.isEmpty ? "matching photos" : "\(summary.visualQuery) photos"]
         if let location = summary.locationDescription { details.append("near \(location)") }
         if let date = summary.dateDescription { details.append("from \(date)") }

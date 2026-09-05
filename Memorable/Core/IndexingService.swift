@@ -117,6 +117,8 @@ class IndexingService: ObservableObject {
 
     var onIndexReady: (() -> Void)?
     var onIndexUnavailable: (() -> Void)?
+    var onIndexResetStarted: (() -> Void)?
+    var onIndexResetFinished: ((Bool) -> Void)?
 
     var canShowValidatedSearchSuggestions: Bool {
         SearchSuggestionVisibilityPolicy.shouldShow(
@@ -969,22 +971,32 @@ class IndexingService: ObservableObject {
         try await runTrackedStorageMutation { [weak self] in
             guard let self else { throw CancellationError() }
             self.stopIndexing(preserveThermalResume: false)
-            let db = self.database
-            try await IndexingStorageMutation.run(
-                waitForIdle: { await self.jobQueue.waitUntilIdle() },
-                mutation: { try db.resetIndexedMedia() },
-                completion: {
-                    self.indexRebuildRequired = true
-                    self.searchEngine.dropIndex()
-                    self.isReady = false
-                    self.onIndexUnavailable?()
-                    guard !self.searchEngine.isMemoryPressureSuspended else {
-                        throw CancellationError()
-                    }
-                    self.startIndexing()
-                }
-            )
+            await self.jobQueue.waitUntilIdle()
+            try await self.resetMediaIndex()
+            try Task.checkCancellation()
+            guard !self.searchEngine.isMemoryPressureSuspended else {
+                throw CancellationError()
+            }
+            self.startIndexing()
         }
+    }
+
+    private func resetMediaIndex() async throws {
+        try Task.checkCancellation()
+        onIndexResetStarted?()
+        var didReset = false
+        defer { onIndexResetFinished?(didReset) }
+        let db = database
+        // Once the transaction starts, drain it and publish its outcome even
+        // if the caller is cancelled. History and the index must agree.
+        try await Task.detached(priority: .userInitiated) {
+            try db.resetIndexedMedia()
+        }.value
+        didReset = true
+        indexRebuildRequired = true
+        searchEngine.dropIndex()
+        isReady = false
+        onIndexUnavailable?()
     }
 
     private func runTrackedStorageMutation(
@@ -1459,10 +1471,7 @@ class IndexingService: ObservableObject {
 
             if rebuildRequired {
                 do {
-                    let db = self.database
-                    try await CancellableDetachedOperation.run {
-                        try db.resetIndexedMedia()
-                    }
+                    try await self.resetMediaIndex()
                     try Task.checkCancellation()
                 } catch is CancellationError {
                     self.progress.isRunning = false
@@ -1476,8 +1485,6 @@ class IndexingService: ObservableObject {
                     self.clearThermalResumeIntent(ifOwnedBy: resumeIntentID)
                     return .cancelled
                 }
-                self.searchEngine.dropIndex()
-                self.isReady = false
             }
 
             self.beginBackgroundTask()

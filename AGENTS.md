@@ -195,11 +195,12 @@ User query
   → Match location text locally against stored metadata and bundled GPS geometry
   → Direct text encoding via SigLIP2 (no prompt templates, raw query only)
   → Score the resident fast window, then any remaining 512-media database pages
-  → Location/time-of-day/OCR/scene-label boosts (additive, tuned for SigLIP2)
+  → Time-of-day/scene-label boosts (additive, tuned for SigLIP2)
   → Negative term penalty (-30% of negative similarity)
-  → Score threshold >= 0.12
+  → Visual score threshold >= 0.12, with no automatic threshold relaxation
+  → Independently accept complete OCR phrases using Apple's NLTokenizer word boundaries
   → Video dedup (best frame per video only)
-  → Merge bounded photo + video results, sort, return the highest-ranked matches
+  → Merge bounded photo + video results; label text matches separately and remove duplicates
 ```
 
 **Note on prompt templates:** SigLIP2 uses sigmoid loss and was trained on raw web captions. Unlike CLIP (softmax loss), "a photo of X" templates hurt retrieval quality by diluting compositional queries. The text encoder receives the raw visual query directly.

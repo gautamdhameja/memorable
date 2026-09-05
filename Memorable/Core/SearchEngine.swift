@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 import Accelerate
 import os
 
@@ -946,6 +947,7 @@ final class SearchEngine: Sendable {
         // PHASE 6: RANK AND RETURN
         // =====================================================================
 
+        #if DEBUG
         let topScoredRows = try BoundedTopK.rows(
             count: scores.count,
             limit: SearchConfig.topK,
@@ -955,31 +957,15 @@ final class SearchEngine: Sendable {
             },
             cancellationCheck: SearchCancellation.check
         )
+        #endif
 
-        // Adaptive thresholding for abstract/compound queries.
-        // When no filters are active and zero candidates pass the hard
-        // threshold, check whether the top candidates form a meaningful
-        // cluster just below it (e.g. "family vacation" scoring 0.08-0.11).
-        // If so, use a relaxed threshold derived from the top score so the
-        // cluster lands in the main grid instead of near-miss fallback.
-        var effectiveThreshold = minimumScoreThreshold
-        if !filtersActive {
-            let aboveThreshold = topScoredRows.filter { scores[$0] >= minimumScoreThreshold }.count
-            if aboveThreshold == 0, let firstRow = topScoredRows.first, scores[firstRow] >= 0.06 {
-                let topScore = scores[firstRow]
-                let clusterCount = topScoredRows.filter { scores[$0] >= topScore * 0.8 }.count
-                if clusterCount >= 3 {
-                    effectiveThreshold = topScore * 0.6
-                }
-            }
-        }
-
-        // No topK cap here — return every above-threshold candidate. The UI
-        // layer windows to an initial visible count and lets the user expand.
+        // Text matches qualify independently of visual scores. Keep both in
+        // the bounded result set; the UI displays each photo in one section.
         let photoResults = try SearchResultRanking.results(
             for: photos,
             scores: scores,
-            threshold: effectiveThreshold
+            threshold: minimumScoreThreshold,
+            textMatches: photoScoring.textMatches
         )
         let videoResults = try SearchResultRanking.results(
             for: videos,
@@ -1010,7 +996,8 @@ final class SearchEngine: Sendable {
         let photoResultCount = photoResults.count
         let videoResultCount = videoResults.count
         let thresholdVal = self.minimumScoreThreshold
-        logger.info("[Results] \(photoResultCount) photos + \(videoResultCount) videos = \(allResults.count) total (threshold=\(String(format: "%.2f", thresholdVal)))")
+        let textResultCount = allResults.filter(\.isTextMatch).count
+        logger.info("[Results] \(photoResultCount) photos + \(videoResultCount) videos = \(allResults.count) total (visual threshold=\(String(format: "%.2f", thresholdVal)), text matches=\(textResultCount))")
 
         // Top 10 results with type and score
         for (rank, r) in allResults.prefix(10).enumerated() {
@@ -1044,75 +1031,6 @@ final class SearchEngine: Sendable {
             }
         }
         #endif
-
-        // Sparse CLIP fallback: merge location results when CLIP matched very few candidates
-        // Threshold: fewer than 5 results AND less than 10% of candidates matched
-        // Skip when CLIP is confident (top score well above threshold) — the small
-        // result count is genuine, not a scoring artifact.
-        let topResultScore = allResults.first?.score ?? 0
-        let clipIsConfident = topResultScore >= minimumScoreThreshold * 1.25
-        let clipMatchedTooFew = allResults.count < SearchConfig.sparseClipMinResults && candidateCount > 0
-            && Double(allResults.count) / Double(candidateCount) < SearchConfig.sparseClipMaxRatio
-        if clipMatchedTooFew && filtersActive && !clipIsConfident {
-            // All candidates have CLIP scores from the GPU matmul.
-            // Retain the best bounded candidate window by CLIP score, including
-            // candidates below the normal threshold.
-            // This way "old town" photos that scored 0.16 rank above random
-            // San Diego photos that scored 0.08.
-            let photoCandidateRows = try BoundedTopK.rows(
-                count: photos.count,
-                limit: SearchConfig.locationResultsCap,
-                includes: { photoCandidateMask[$0] },
-                isPreferred: { lhs, rhs in
-                    if scores[lhs] != scores[rhs] { return scores[lhs] > scores[rhs] }
-                    if photos.localIdentifiers[lhs] != photos.localIdentifiers[rhs] {
-                        return photos.localIdentifiers[lhs] < photos.localIdentifiers[rhs]
-                    }
-                    return lhs < rhs
-                },
-                cancellationCheck: SearchCancellation.check
-            )
-            var candidateResults = photoCandidateRows.map { i in
-                SearchResult(
-                    id: photos.ids[i],
-                    score: scores[i],
-                    localIdentifier: photos.localIdentifiers[i],
-                    creationDate: photos.dates[i],
-                    isVideo: false,
-                    bestFramePosition: nil,
-                    sourceId: photos.sourceIds[i],
-                    filePath: photos.filePaths[i]
-                )
-            }
-
-            // Also include the best frame for each video candidate, including
-            // positive scores below the normal result threshold.
-            candidateResults.append(contentsOf: try makeVideoNearMissResults())
-
-            // Keep the top bounded CLIP-ranked candidates, including results
-            // below the normal threshold.
-            let merged = try BoundedTopK.select(
-                from: candidateResults,
-                limit: SearchConfig.locationResultsCap,
-                isPreferred: SearchResultRanking.isPreferred,
-                cancellationCheck: SearchCancellation.check
-            )
-
-            let summary = FilterSummary(
-                dateDescription: hints.dateRange.map { formatDateRange($0) },
-                locationDescription: hints.locationHint,
-                visualQuery: hints.textQuery
-            )
-
-            // If the best candidate score is too low, the visual concept simply
-            // doesn't exist in this location. Demote to fallback instead of
-            // filling the main grid with irrelevant photos.
-            let topScore = merged.first?.score ?? 0
-            if topScore < SearchConfig.sparseClipMinScore {
-                return SearchResponse(results: [], fallbackResults: merged, filtersApplied: summary)
-            }
-            return SearchResponse(results: merged, fallbackResults: [], filtersApplied: summary)
-        }
 
         let appliedSummary: FilterSummary? = filtersActive
             ? FilterSummary(
@@ -1406,7 +1324,8 @@ final class SearchEngine: Sendable {
                 accumulator.retainPhoto(try SearchResultRanking.result(
                     for: page.photos,
                     row: row,
-                    score: photoScoring.scores[row]
+                    score: photoScoring.scores[row],
+                    isTextMatch: photoScoring.textMatches[row]
                 ))
             }
         }
@@ -1466,43 +1385,13 @@ final class SearchEngine: Sendable {
             accumulator.videoCandidates,
             isPreferred: SearchResultRanking.isPreferred
         )
-        var effectivePhotoThreshold = minimumScoreThreshold
-        if !filtersActive {
-            let photoTop = Array(sortedPhotos.prefix(SearchConfig.topK))
-            if !photoTop.contains(where: { $0.score >= minimumScoreThreshold }),
-               let topScore = photoTop.first?.score,
-               topScore >= 0.06,
-               photoTop.filter({ $0.score >= topScore * 0.8 }).count >= 3 {
-                effectivePhotoThreshold = topScore * 0.6
-            }
-        }
-
         let main = try BoundedTopK.select(
-            from: sortedPhotos.filter { $0.score >= effectivePhotoThreshold }
+            from: sortedPhotos.filter { $0.isTextMatch || $0.score >= minimumScoreThreshold }
                 + sortedVideos.filter { $0.score >= minimumScoreThreshold },
             limit: Self.maximumRetainedResults,
             isPreferred: SearchResultRanking.isPreferred,
             cancellationCheck: SearchCancellation.check
         )
-
-        let topResultScore = main.first?.score ?? 0
-        let clipIsConfident = topResultScore >= minimumScoreThreshold * 1.25
-        let clipMatchedTooFew = main.count < SearchConfig.sparseClipMinResults
-            && accumulator.photoCandidateCount > 0
-            && Double(main.count) / Double(accumulator.photoCandidateCount)
-                < SearchConfig.sparseClipMaxRatio
-        if filtersActive && clipMatchedTooFew && !clipIsConfident {
-            let merged = try BoundedTopK.select(
-                from: sortedPhotos + sortedVideos,
-                limit: SearchConfig.locationResultsCap,
-                isPreferred: SearchResultRanking.isPreferred,
-                cancellationCheck: SearchCancellation.check
-            )
-            if (merged.first?.score ?? 0) < SearchConfig.sparseClipMinScore {
-                return SearchResponse(results: [], fallbackResults: merged, filtersApplied: summary)
-            }
-            return SearchResponse(results: merged, fallbackResults: [], filtersApplied: summary)
-        }
 
         if main.isEmpty && hints.hasVisualQuery {
             let nearMiss = try BoundedTopK.select(
@@ -1741,6 +1630,11 @@ final class SearchEngine: Sendable {
             ))
         }
         let queryWords = hints.textQuery.lowercased().split(separator: " ").map(String.init)
+        // Local to this scoring call: NLTokenizer must not be shared across threads.
+        let wordTokenizer = NLTokenizer(unit: .word)
+        let phraseQuery = hints.textMatchQuery ?? (hints.hasVisualQuery ? hints.textQuery : "")
+        let phraseWords = searchWords(in: phraseQuery, tokenizer: wordTokenizer)
+        var textMatches = [Bool](repeating: false, count: index.count)
         let calendar = Calendar.current
         var scores = rawScores
 
@@ -1775,7 +1669,10 @@ final class SearchEngine: Sendable {
                 for negativeScores in negativeScoreSets {
                     score -= negativeScores[row] * SearchConfig.negativeTermWeight
                 }
-                score += photoOCRBoost(index: index, row: row, queryWords: queryWords)
+                if !phraseWords.isEmpty, let text = index.ocrTexts[row] {
+                    let words = searchWords(in: text, tokenizer: wordTokenizer)
+                    textMatches[row] = words.indices.contains { words[$0...].starts(with: phraseWords) }
+                }
                 score += photoSceneLabelBoost(index: index, row: row, queryWords: queryWords)
 
             case .videoFrame:
@@ -1789,7 +1686,7 @@ final class SearchEngine: Sendable {
             scores[row] = score
         }
 
-        return ScoredMedia(rawScores: rawScores, scores: scores)
+        return ScoredMedia(rawScores: rawScores, scores: scores, textMatches: textMatches)
     }
 
     private func trueCount(in values: [Bool]) throws -> Int {
@@ -1801,18 +1698,15 @@ final class SearchEngine: Sendable {
         return count
     }
 
-    private func photoOCRBoost(
-        index: MediaIndex,
-        row: Int,
-        queryWords: [String]
-    ) -> Float {
-        guard !queryWords.isEmpty else { return 0 }
-        guard let ocrText = index.ocrTexts[row] else { return 0 }
-        let text = ocrText.lowercased()
-        let matchCount = queryWords.filter { text.contains($0) }.count
-        guard matchCount > 0 else { return 0 }
-        return SearchConfig.ocrBoostPerWord
-            * Float(matchCount) / Float(queryWords.count)
+    private func searchWords(in text: String, tokenizer: NLTokenizer) -> [String] {
+        guard !text.isEmpty else { return [] }
+        let normalized = text.folding(
+            options: [.caseInsensitive, .widthInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
+        tokenizer.string = normalized
+        return tokenizer.tokens(for: normalized.startIndex..<normalized.endIndex)
+            .map { String(normalized[$0]) }
     }
 
     private func photoSceneLabelBoost(

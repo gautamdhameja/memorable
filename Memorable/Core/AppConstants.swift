@@ -92,21 +92,8 @@ enum SearchConfig {
     /// Max results per search
     static let topK = 50
 
-    /// Max results for location-only and sparse CLIP fallback queries
+    /// Maximum retained search results, including location-only queries.
     static let locationResultsCap = 500
-
-    /// Sparse CLIP fallback: minimum result count below which fallback triggers
-    static let sparseClipMinResults = 5
-
-    /// Sparse CLIP fallback: max ratio of results to candidates for fallback to trigger
-    static let sparseClipMaxRatio = 0.1
-
-    /// Sparse CLIP fallback: minimum top-candidate score to show results in the
-    /// main grid. Below this, results are demoted to the "Other X photos" fallback
-    /// section. Prevents irrelevant location-filtered photos from filling the grid
-    /// when no actual visual matches exist (e.g., "dog in California" with no dog
-    /// photos in California).
-    static let sparseClipMinScore: Float = 0.07
 
     // Time-of-day boost (boost only, no penalty for wrong time)
     static let timeOfDayMatchBoost: Float = 0.03
@@ -114,14 +101,11 @@ enum SearchConfig {
     // Negative term penalty weight (multiplier on negative similarity)
     static let negativeTermWeight: Float = 0.3
 
-    // OCR text boost per matching word (scaled by match ratio)
-    static let ocrBoostPerWord: Float = 0.08
-
     // Scene label boost per matching label (additive on top of similarity)
     static let sceneLabelBoostPerMatch: Float = 0.04
 
-    // Video frames lack scene labels, OCR text, and location-name boosts
-    // that photos receive. This flat compensation partially offsets the
+    // Video frames lack the scene-label enrichment that photos receive.
+    // This flat compensation partially offsets the
     // asymmetry so that a genuinely relevant video isn't buried under
     // photos whose scores were inflated by non-similarity boosts.
     static let videoRelevanceCompensation: Float = 0.03

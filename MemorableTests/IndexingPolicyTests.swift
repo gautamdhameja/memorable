@@ -1595,6 +1595,38 @@ final class IndexingPolicyTests: XCTestCase {
     }
 
     @MainActor
+    func testCommittedIndexResetPublishesHistoryResetBeforeCancellationStopsReindexing() async throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        try database.insertPhoto(makeOrphanPolicyPhoto(localIdentifier: "before-reset"))
+        try database.addSearchHistory("old query")
+        let engine = SearchEngine(textEncoder: FakeTextEncoder([:]), database: database)
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: engine, database: database
+        )
+        var events: [String] = []
+        service.onIndexResetStarted = { events.append("started") }
+        service.onIndexResetFinished = { didReset in
+            events.append(didReset ? "committed" : "failed")
+            withUnsafeCurrentTask { $0?.cancel() }
+        }
+        let reset = Task { try await service.rebuildLibraryIndex() }
+        do {
+            try await reset.value
+            XCTFail("Cancellation must stop the subsequent reindex")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(events, ["started", "committed"])
+        XCTAssertTrue(try database.loadSearchHistory().isEmpty)
+        XCTAssertEqual(try database.indexedCount(), 0)
+        XCTAssertTrue(service.indexRebuildRequired)
+        XCTAssertFalse(service.isReady)
+        XCTAssertFalse(service.progress.isRunning)
+    }
+
+    @MainActor
     func testStorageMutationWaitsForIdleAndRunsOffMainThread() async throws {
         let gate = AsyncMutationGate()
         let state = OSAllocatedUnfairLock(initialState: (mutated: false, mainThread: true))

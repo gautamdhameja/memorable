@@ -91,6 +91,7 @@ struct SearchFeaturePolicy: Equatable, Sendable {
         }
         var bounded = hints
         bounded.textQuery = QueryInputPolicy.bounded(hints.textQuery)
+        bounded.textMatchQuery = hints.textMatchQuery.map { QueryInputPolicy.bounded($0) }
         bounded.negativeTerms = Array(hints.negativeTerms
             .prefix(QueryInputPolicy.maximumNegativeTerms)
             .map {
@@ -143,6 +144,9 @@ struct QueryHints {
     var negativeTerms: [String] = []
     var timeOfDayHours: (start: Int, end: Int)?
     var hasVisualQuery: Bool = true
+    // Preserve literal search words when the smart parser rewrites visual text.
+    // nil uses textQuery; an empty string disables literal matching.
+    var textMatchQuery: String? = nil
 }
 
 struct DateRange {

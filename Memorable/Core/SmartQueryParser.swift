@@ -6,8 +6,6 @@ enum SmartQueryOutputPolicy {
     static let maximumVisualCharacters = QueryInputPolicy.maximumCharacterCount
     static let maximumLocationCharacters = 200
     static let maximumDateCharacters = 64
-    static let maximumNegativeTerms = QueryInputPolicy.maximumNegativeTerms
-    static let maximumNegativeTermCharacters = QueryInputPolicy.maximumNegativeTermScalars
     private static let genericMediaNouns: Set<String> = [
         "image", "images", "photo", "photos", "photograph", "photographs",
         "picture", "pictures",
@@ -367,15 +365,9 @@ struct SmartQueryParser: Sendable {
             logger.info("[SmartParser] Parsed query; visual=\(hasVisual), location=\(locationHint != nil), date=\(dateRange != nil)")
             #endif
 
-            let negativeTerms = parsed.negativeTerms
-                .prefix(SmartQueryOutputPolicy.maximumNegativeTerms)
-                .map {
-                    SmartQueryOutputPolicy.bounded(
-                        $0,
-                        maximumCharacters: SmartQueryOutputPolicy.maximumNegativeTermCharacters
-                    )
-                }
-                .filter { !$0.isEmpty }
+            // Exclusions change result eligibility. Only explicit user terms
+            // may penalize results; the model can invent or omit exclusions.
+            let negativeTerms = fallbackHints.negativeTerms
 
             return QueryHints(
                 textQuery: hasVisual ? visual : "a photo",
@@ -387,7 +379,8 @@ struct SmartQueryParser: Sendable {
                 locationCountryName: locationHint == nil ? nil : fallbackHints.locationCountryName,
                 negativeTerms: negativeTerms,
                 timeOfDayHours: timeOfDayHours,
-                hasVisualQuery: hasVisual
+                hasVisualQuery: hasVisual,
+                textMatchQuery: fallbackHints.hasVisualQuery ? fallbackHints.textQuery : ""
             )
         } catch {
             switch error {

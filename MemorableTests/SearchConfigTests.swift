@@ -56,10 +56,6 @@ final class SearchConfigTests: XCTestCase {
             "Negative term weight should be moderate, not total elimination")
     }
 
-    func testOCRBoostPositive() {
-        XCTAssertGreaterThan(SearchConfig.ocrBoostPerWord, 0)
-    }
-
     func testSceneLabelBoostPositive() {
         XCTAssertGreaterThan(SearchConfig.sceneLabelBoostPerMatch, 0)
     }
@@ -83,8 +79,6 @@ final class SearchConfigTests: XCTestCase {
         let threshold = SearchConfig.minimumScoreThreshold
         XCTAssertLessThan(SearchConfig.timeOfDayMatchBoost, threshold,
             "Time-of-day boost should not alone push a result over threshold")
-        XCTAssertLessThan(SearchConfig.ocrBoostPerWord, threshold,
-            "OCR boost should not alone push a result over threshold")
         XCTAssertLessThan(SearchConfig.sceneLabelBoostPerMatch, threshold,
             "Scene label boost should not alone push a result over threshold")
         XCTAssertLessThan(SearchConfig.videoRelevanceCompensation, threshold,

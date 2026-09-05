@@ -91,6 +91,58 @@ final class SmartQueryParserConcurrencyTests: XCTestCase {
         XCTAssertEqual(hints.locationCountryName, "united states")
     }
 
+    func testModelCannotInventExclusionsForPositiveQuery() async {
+        let parser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "mountains and rivers",
+                startDate: nil,
+                endDate: nil,
+                locationName: nil,
+                negativeTerms: ["mountains", "rivers"]
+            ))
+        }
+
+        let hints = await parser.parse(query: "mountains and rivers")
+
+        XCTAssertTrue(hints.negativeTerms.isEmpty)
+    }
+
+    func testTextMatchingPreservesLiteralWordsWhenModelRewritesVisualQuery() async {
+        let parser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "hospital sign",
+                startDate: nil,
+                endDate: nil,
+                locationName: nil,
+                negativeTerms: []
+            ))
+        }
+
+        let hints = await parser.parse(query: "pulse heart centre -night")
+
+        XCTAssertEqual(hints.textQuery, "hospital sign")
+        XCTAssertEqual(hints.textMatchQuery, "pulse heart centre")
+        XCTAssertEqual(hints.negativeTerms, ["night"])
+    }
+
+    func testExplicitExclusionsSurviveModelOmissionOrReplacement() async {
+        for modelTerms in [[], ["dog"]] {
+            let parser = SmartQueryParser(isAvailable: true) {
+                FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                    visualDescription: "dog",
+                    startDate: nil,
+                    endDate: nil,
+                    locationName: nil,
+                    negativeTerms: modelTerms
+                ))
+            }
+
+            let hints = await parser.parse(query: "dog -night")
+
+            XCTAssertEqual(hints.negativeTerms, ["night"])
+        }
+    }
+
     private actor ConcurrencyProbe {
         private var activeByResponder: [UUID: Int] = [:]
         private var responderIDs: Set<UUID> = []
@@ -381,10 +433,7 @@ final class SmartQueryParserConcurrencyTests: XCTestCase {
 
         XCTAssertLessThanOrEqual(hints.textQuery.count, SmartQueryOutputPolicy.maximumVisualCharacters)
         XCTAssertLessThanOrEqual(hints.locationHint?.count ?? 0, SmartQueryOutputPolicy.maximumLocationCharacters)
-        XCTAssertEqual(hints.negativeTerms.count, SmartQueryOutputPolicy.maximumNegativeTerms)
-        XCTAssertTrue(hints.negativeTerms.allSatisfy {
-            $0.count <= SmartQueryOutputPolicy.maximumNegativeTermCharacters
-        })
+        XCTAssertTrue(hints.negativeTerms.isEmpty)
     }
 
     func testLiteralNullLocationFallsBackToLocalLocationParsing() async {

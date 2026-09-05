@@ -68,6 +68,50 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testIndexResetPreventsLateSearchAndInitialLoadFromRestoringHistory() async {
+        let searcher = ControlledSearcher()
+        var saves = 0
+        let returned = expectation(description: "old search returned")
+        let model = makeModel(search: { query in
+            defer { returned.fulfill() }
+            return try await searcher.search(query: query)
+        }, addHistory: { _, _, _ in saves += 1 })
+        let preview = RecentSearchPreview(query: "old query", result: Self.result(id: "old"), resultCount: 1)
+        model.setSearchHistory(["old query"], previews: [preview])
+        model.setQueryText("dogs")
+        model.submitSearch(saveToHistory: true)
+        await searcher.waitUntilCalled(with: "dogs")
+
+        model.beginIndexReset()
+        XCTAssertEqual(model.searchHistory, ["old query"], "Preserve history until the reset commits")
+        model.setQueryText("blocked")
+        model.submitSearch(saveToHistory: true)
+        XCTAssertFalse(model.isSearching)
+        model.finishIndexReset(didReset: true)
+        model.applyInitialSearchHistory(["old query"], previews: [preview])
+        await searcher.complete(query: "dogs", with: response(id: "old-result"))
+        await fulfillment(of: [returned], timeout: 1)
+        XCTAssertEqual(saves, 0)
+        XCTAssertTrue(model.searchHistory.isEmpty)
+        XCTAssertTrue(model.recentSearchPreviews.isEmpty)
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertTrue(model.lastResults.isEmpty)
+    }
+
+    @MainActor
+    func testFailedIndexResetKeepsHistoryAndAllowsSearchingAgain() async {
+        let model = makeModel(search: { _ in Self.response(ids: ["new-result"]) })
+        model.setSearchHistory(["saved query"], previews: [])
+        model.beginIndexReset()
+        model.finishIndexReset(didReset: false)
+        XCTAssertEqual(model.searchHistory, ["saved query"])
+        model.setQueryText("new query")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(model.results.map(\.id), ["new-result"])
+    }
+
+    @MainActor
     func testEditingTextDoesNotCancelSubmittedSearch() async throws {
         let searcher = ControlledSearcher()
         let model = makeModel(search: searcher.search)

@@ -152,7 +152,7 @@ struct MoreView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This clears derived search data and rebuilds locally available Apple Photos. Saved folders stay registered and are indexed again when Pro is active. Search is unavailable during indexing.")
+                Text("This clears the search index and search history, then rebuilds locally available Apple Photos. Saved folders stay registered and are indexed again when Pro is active. Search is unavailable during indexing.")
             }
             .alert(
                 "Couldn't re-index",

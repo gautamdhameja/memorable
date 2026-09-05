@@ -4,14 +4,15 @@ import GRDB
 extension AppDatabase {
     // MARK: - Index Maintenance
 
-    /// Removes derived media index data while preserving user-selected folder
-    /// sources and their security-scoped bookmarks for the subsequent rebuild.
+    /// Removes derived media index data and recent searches while preserving
+    /// folder sources and their security-scoped bookmarks for the rebuild.
     func resetIndexedMedia() throws {
         try dbQueue.write { db in
             try Self.markIndexRebuildRequired(in: db)
             _ = try IndexedPhoto.deleteAll(db)
             _ = try db.execute(sql: "DELETE FROM indexed_video_frames")
             _ = try IndexedVideo.deleteAll(db)
+            try db.execute(sql: "DELETE FROM search_history")
             try db.execute(
                 sql: "UPDATE photo_sources SET photoCount = 0, lastIndexedAt = NULL"
             )

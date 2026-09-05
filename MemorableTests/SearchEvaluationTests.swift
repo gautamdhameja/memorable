@@ -51,7 +51,7 @@ final class SearchEvaluationTests: XCTestCase {
         XCTAssertEqual(response.results.map(\.id), ["paris"])
     }
 
-    func testMixedVisualLocationKeepsFallbackWhenVisualScoreIsSparse() throws {
+    func testMixedVisualLocationDoesNotSuggestZeroSimilarityPhotos() throws {
         let database = SearchFixtureDatabase(photos: [
             .init(id: "berlin-distractor", localIdentifier: "local-berlin", date: nil, city: "Berlin", embedding: float16Vector(second: 1)),
             .init(id: "paris-dog", localIdentifier: "local-paris", date: nil, city: "Paris", embedding: float16Vector(first: 1)),
@@ -65,7 +65,7 @@ final class SearchEvaluationTests: XCTestCase {
         )
 
         XCTAssertTrue(response.results.isEmpty)
-        XCTAssertEqual(response.fallbackResults.map(\.id), ["berlin-distractor"])
+        XCTAssertTrue(response.fallbackResults.isEmpty)
     }
 
     func testNegativeTermLowersMatchingNegativeResult() throws {

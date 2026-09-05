@@ -79,6 +79,7 @@ final class SearchViewModel: ObservableObject {
     private(set) var activeSearchID: Int?
 
     private let dependencies: Dependencies
+    private var isIndexResetting = false
     private var searchSequence = 0
     private var validationSequence = 0
     private var screenshotSequence = 0
@@ -211,6 +212,20 @@ final class SearchViewModel: ObservableObject {
         setSearchHistory(history, previews: previews)
     }
 
+    func beginIndexReset() {
+        isIndexResetting = true
+        setQueryText("")
+        cancelRecentSearchPreviewBackfill()
+        dismissLastResults()
+    }
+
+    func finishIndexReset(didReset: Bool) {
+        if didReset {
+            setSearchHistory([])
+        }
+        isIndexResetting = false
+    }
+
     func clearSearchHistory() {
         dependencies.clearHistory()
         setSearchHistory([])
@@ -266,6 +281,7 @@ final class SearchViewModel: ObservableObject {
     /// Similarity and text requests share the same generation and task so
     /// clearing, a newer request, or entitlement revocation invalidates both.
     func submitSimilaritySearch(operation: @escaping () async -> [SearchResult]) {
+        guard !isIndexResetting else { return }
         let searchID = beginSearch(isSimilarity: true)
         let startTime = dependencies.now()
         searchTask = Task { [weak self] in
@@ -306,7 +322,7 @@ final class SearchViewModel: ObservableObject {
 
     func submitSearch(saveToHistory: Bool = false) {
         let query = normalizedQuery
-        guard !query.isEmpty else { return }
+        guard !isIndexResetting, !query.isEmpty else { return }
 
         let searchID = beginSearch(isSimilarity: false)
         let startTime = dependencies.now()
@@ -386,6 +402,7 @@ final class SearchViewModel: ObservableObject {
     }
 
     func startRecentSearchPreviewBackfill() {
+        guard !isIndexResetting else { return }
         guard recentSearchPreviewBackfillTask == nil,
               normalizedQuery.isEmpty,
               isSearchHistoryLoaded,
