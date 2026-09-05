@@ -1055,33 +1055,29 @@ struct SearchView: View {
             NavigationLink {
                 OnThisDayView()
             } label: {
-                VStack(alignment: .leading, spacing: 0) {
-                    SearchHomePhotoImage(
-                        result: memory.heroPhoto.searchResult,
-                        targetSize: SearchHomeCardMetrics.memoryPreviewTargetSize,
-                        fillsBackdrop: true
-                    )
-                    .frame(height: SearchHomeCardMetrics.memoryPreviewHeight)
-                    .clipped()
-
-                    HStack(alignment: .center, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(memoryTitle(memory))
-                                .font(Celestial.Typography.bodyStrong)
-                                .foregroundStyle(Celestial.Colors.onSurface)
-                            Text(memorySummary(memory))
-                                .font(Celestial.Typography.caption)
-                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                Group {
+                    if memory.heroPhoto.pixelWidth > 0,
+                       memory.heroPhoto.pixelHeight > memory.heroPhoto.pixelWidth {
+                        HStack(spacing: 0) {
+                            todayMemoryImage(memory)
+                                .frame(
+                                    width: SearchHomeCardMetrics.portraitPreviewWidth,
+                                    height: SearchHomeCardMetrics.memoryCardHeight
+                                )
+                                .clipped()
+                            todayMemoryCaption(memory, besidePhoto: true)
+                                .padding(.vertical, 16)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        Image(systemName: "chevron.right")
-                            .font(Celestial.Typography.microStrong)
-                            .foregroundStyle(Celestial.Colors.outlineVariant)
-                            .accessibilityHidden(true)
+                        .frame(minHeight: SearchHomeCardMetrics.memoryCardHeight)
+                    } else {
+                        VStack(alignment: .leading, spacing: 0) {
+                            todayMemoryImage(memory)
+                                .frame(height: SearchHomeCardMetrics.memoryPreviewHeight)
+                                .clipped()
+                            todayMemoryCaption(memory)
+                                .frame(minHeight: SearchHomeCardMetrics.captionHeight)
+                        }
                     }
-                    .frame(minHeight: SearchHomeCardMetrics.captionHeight)
-                    .padding(.horizontal, 16)
                 }
                 .background(Celestial.Colors.surfaceContainerLow.opacity(0.74))
                 .clipShape(SearchHomeCardMetrics.cardShape)
@@ -1096,6 +1092,41 @@ struct SearchView: View {
             .accessibilityHint("Opens memories from this day")
         }
         .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+    }
+
+    private func todayMemoryImage(_ memory: OnThisDaySummary) -> some View {
+        SearchHomePhotoImage(
+            result: memory.heroPhoto.searchResult,
+            targetSize: SearchHomeCardMetrics.memoryPreviewTargetSize,
+            fillsBackdrop: true
+        )
+    }
+
+    private func todayMemoryCaption(
+        _ memory: OnThisDaySummary,
+        besidePhoto: Bool = false
+    ) -> some View {
+        let layout = besidePhoto
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 20))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
+        return layout {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(memoryTitle(memory))
+                    .font(Celestial.Typography.bodyStrong)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text(memorySummary(memory))
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Image(systemName: "chevron.right")
+                .font(Celestial.Typography.microStrong)
+                .foregroundStyle(Celestial.Colors.outlineVariant)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, 16)
     }
 
     private var searchHistoryView: some View {
@@ -1950,6 +1981,8 @@ private enum SearchHomeCardMetrics {
     static let memoryPreviewHeight: CGFloat = 156
     static let memoryPreviewTargetSize = CGSize(width: 1_024, height: 1_024)
     static let captionHeight: CGFloat = 62
+    static let memoryCardHeight = memoryPreviewHeight + captionHeight
+    static let portraitPreviewWidth: CGFloat = 164
     static let cornerRadius: CGFloat = 20
     static let recentThumbnailWidth: CGFloat = 64
     static let recentThumbnailHeight: CGFloat = 48
