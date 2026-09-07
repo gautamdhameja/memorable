@@ -138,6 +138,13 @@ final class SemanticSearchRuntime: ObservableObject {
         _ = startWarmup(priority: .userInitiatedSearch)
     }
 
+    func retryIndexLoading() {
+        // A failed background reload may still have an older usable snapshot.
+        // Explicit retry must reload it even when that snapshot reports ready.
+        readiness.markIndexUnavailable()
+        startUserInitiatedWarmup()
+    }
+
     func prepareForSearch() async throws {
         try Task.checkCancellation()
         if readiness.isSemanticSearchReady {

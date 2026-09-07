@@ -6,6 +6,54 @@ final class SemanticSearchRuntimeTests: XCTestCase {
     private enum LoaderError: Error { case failedDuringCancellation }
 
     @MainActor
+    func testExplicitIndexRetryReloadsEvenWhenAnOlderSnapshotIsReady() async throws {
+        let runtime = SemanticSearchRuntime()
+        runtime.markSemanticModelReady()
+        runtime.markIndexReady()
+        var loads = 0
+        runtime.setWarmupLoader { _ in
+            loads += 1
+            runtime.markSemanticModelReady()
+            runtime.markIndexReady()
+        }
+
+        runtime.retryIndexLoading()
+        XCTAssertFalse(runtime.readiness.isSemanticSearchReady)
+        try await runtime.prepareForSearch()
+        XCTAssertEqual(loads, 1)
+        XCTAssertEqual(runtime.phase, .ready)
+    }
+
+    @MainActor
+    func testIndexLoadErrorIsVisibleAndCanRecoverOnRetry() async throws {
+        let runtime = SemanticSearchRuntime()
+        let message = "Your search index couldn’t be loaded. Try again."
+        var attempts = 0
+        runtime.setWarmupLoader { _ in
+            attempts += 1
+            runtime.markSemanticModelReady()
+            if attempts == 1 {
+                runtime.markIndexUnavailable()
+                throw SearchIndexLoadError(message: message)
+            }
+            runtime.markIndexReady()
+        }
+
+        do {
+            try await runtime.prepareForSearch()
+            XCTFail("The failed index load must not be reported as successful preparation")
+        } catch {
+            XCTAssertEqual((error as? SearchIndexLoadError)?.message, message)
+        }
+        XCTAssertEqual(runtime.phase, .failed(message))
+        XCTAssertFalse(runtime.readiness.isSemanticSearchReady)
+        runtime.retryIndexLoading()
+        try await runtime.prepareForSearch()
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(runtime.phase, .ready)
+    }
+
+    @MainActor
     func testCancelledLoaderReturningSuccessCannotReportSearchReady() async {
         let runtime = SemanticSearchRuntime()
         let started = expectation(description: "loader started")

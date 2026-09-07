@@ -104,6 +104,15 @@ enum FolderPendingBatch {
 }
 
 enum FolderScanCompletionPolicy {
+    static func warningOutcome(
+        directoryScanWasComplete: Bool,
+        failedFileCount: Int,
+        successfullyHandledFileCount: Int
+    ) -> FolderIndexingOutcome? {
+        guard !directoryScanWasComplete || failedFileCount > 0 else { return nil }
+        return successfullyHandledFileCount > 0 ? .completedWithWarnings : .failed
+    }
+
     static func isComplete(
         directoryScanWasComplete: Bool,
         failedFileCount: Int,
@@ -462,12 +471,20 @@ final class FolderIndexingWorker {
             return .failed
         }
 
-        guard failedFileCount == 0 else {
-            callbacks.reportError("Memorable skipped \(failedFileCount) unreadable photo(s). You can refresh this folder later.")
+        if let warningOutcome = FolderScanCompletionPolicy.warningOutcome(
+            directoryScanWasComplete: scan.isComplete,
+            failedFileCount: failedFileCount,
+            successfullyHandledFileCount: successfullyHandledFileCount
+        ) {
+            callbacks.reportError(
+                scan.isComplete
+                    ? "Memorable skipped \(failedFileCount) unreadable photo(s). You can refresh this folder later."
+                    : "Memorable could not scan the entire folder. Some photos were not checked. Try refreshing it or choose a smaller folder."
+            )
             if reloadSearchIndex {
                 guard await callbacks.reloadSearchIndex() else { return .failed }
             }
-            return successfullyHandledFileCount > 0 ? .completedWithWarnings : .failed
+            return warningOutcome
         }
 
         guard !Task.isCancelled else {

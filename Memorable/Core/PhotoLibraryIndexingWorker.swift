@@ -5,6 +5,7 @@ import UIKit
 
 enum VideoIndexingOutcome: Equatable, Sendable {
     case notPersisted
+    case retryableFailure
     case persisted(completedRequiredRebuild: Bool)
 
     var persisted: Bool {
@@ -134,18 +135,19 @@ final class PhotoLibraryIndexingWorker {
         let videoAssets: PHFetchResult<PHAsset>
         let isPro: Bool
         let startedAt: CFAbsoluteTime
-        let hasMediaCandidates: Bool
         let indexedAt: Date
         let forcedVideoRefreshIDs: Set<String>
         var indexedMediaCount: Int
         var hitFreeLimit: Bool
         var wasInterrupted = false
+        // Failed required work must not certify the durable initial-pass checkpoint.
+        // Missing local-only media remains a skip, not a failed pass.
+        var hasRetryableFailure = false
 
         init(
             videoAssets: PHFetchResult<PHAsset>,
             isPro: Bool,
             startedAt: CFAbsoluteTime,
-            hasMediaCandidates: Bool,
             indexedMediaCount: Int,
             hitFreeLimit: Bool = false,
             indexedAt: Date = Date(),
@@ -154,7 +156,6 @@ final class PhotoLibraryIndexingWorker {
             self.videoAssets = videoAssets
             self.isPro = isPro
             self.startedAt = startedAt
-            self.hasMediaCandidates = hasMediaCandidates
             self.indexedMediaCount = indexedMediaCount
             self.hitFreeLimit = hitFreeLimit
             self.indexedAt = indexedAt
@@ -183,17 +184,22 @@ final class PhotoLibraryIndexingWorker {
     private let database: DatabaseProtocol
     private let batchSize: Int
     private let callbacks: Callbacks
+    private let authorizationStatus: @Sendable () -> PHAuthorizationStatus
 
     init(
         imageEncoder: ImageEncoder,
         database: DatabaseProtocol,
         batchSize: Int = IndexingConfig.batchInsertSize,
-        callbacks: Callbacks
+        callbacks: Callbacks,
+        authorizationStatus: @escaping @Sendable () -> PHAuthorizationStatus = {
+            PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        }
     ) {
         self.imageEncoder = imageEncoder
         self.database = database
         self.batchSize = batchSize
         self.callbacks = callbacks
+        self.authorizationStatus = authorizationStatus
     }
 
     func indexPhotos(
@@ -238,11 +244,19 @@ final class PhotoLibraryIndexingWorker {
             videoAssets: videoAssets,
             isPro: isPro,
             startedAt: startedAt,
-            hasMediaCandidates: photoAssets.count > 0 || videoAssets.count > 0,
             indexedMediaCount: indexedMediaCount,
             indexedAt: indexedAt,
             forcedVideoRefreshIDs: forcedVideoRefreshIDs
         )
+
+        guard hasPhotoLibraryAccess else {
+            populatedSession.hasRetryableFailure = true
+            return populatedSession
+        }
+        if case .failure = persistedIndexedMediaCount {
+            populatedSession.hasRetryableFailure = true
+            return populatedSession
+        }
 
         #if DEBUG
         logger.info("[IndexingService] Library breakdown: \(photoAssets.count) photos, \(videoAssets.count) videos, \(indexedMediaCount) media already indexed")
@@ -304,6 +318,7 @@ final class PhotoLibraryIndexingWorker {
                 }.value
             } catch {
                 logger.error("Failed to check indexed photo batch: \(error.safeDiagnosticCode)")
+                populatedSession.hasRetryableFailure = true
                 return []
             }
             var newCount = 0
@@ -406,7 +421,7 @@ final class PhotoLibraryIndexingWorker {
                     guard i < embeddings.count else { break }
                     if let replacement = batchReplacements[loadedImage.asset.localIdentifier] {
                         await replacePhoto(asset: loadedImage.asset, embedding: embeddings[i],
-                                           version: replacement, indexedAt: indexedAt)
+                                           version: replacement, indexedAt: indexedAt, session: populatedSession)
                         continue
                     }
                     guard FreeTier.canIndexMore(
@@ -438,14 +453,13 @@ final class PhotoLibraryIndexingWorker {
                         break
                     }
                     do {
-                        let encoder = imageEncoder
-                        let embedding = try await encoder.encodeCancellable(
-                            image: loadedImage.image
+                        let embedding = try await encodeFallbackPhoto(
+                            loadedImage.image, session: populatedSession
                         )
                         try Task.checkCancellation()
                         if let replacement {
                             await replacePhoto(asset: loadedImage.asset, embedding: embedding,
-                                               version: replacement, indexedAt: indexedAt)
+                                               version: replacement, indexedAt: indexedAt, session: populatedSession)
                         } else {
                             batch.append(makeIndexedPhoto(asset: loadedImage.asset, embedding: embedding, indexedAt: indexedAt))
                         }
@@ -464,7 +478,7 @@ final class PhotoLibraryIndexingWorker {
                 isPro: isPro
             )
             if batch.count >= batchSize || pendingFillsCapacity {
-                let persistedCount = await persistPhotoBatch(batch)
+                let persistedCount = await persistPhotoBatch(batch, session: populatedSession)
                 populatedSession.indexedMediaCount = Self.updatedMediaCount(
                     current: populatedSession.indexedMediaCount,
                     persistedPhotoCount: persistedCount
@@ -496,7 +510,7 @@ final class PhotoLibraryIndexingWorker {
 
         if populatedSession.wasInterrupted {
             let persistedCount = await Self.persistInterruptedPhotoBatch(batch) { [self] photos in
-                await persistPhotoBatch(photos)
+                await persistPhotoBatch(photos, session: populatedSession)
             }
             populatedSession.indexedMediaCount = Self.updatedMediaCount(
                 current: populatedSession.indexedMediaCount,
@@ -511,7 +525,7 @@ final class PhotoLibraryIndexingWorker {
             return populatedSession
         }
         if !batch.isEmpty {
-            let persistedCount = await persistPhotoBatch(batch)
+            let persistedCount = await persistPhotoBatch(batch, session: populatedSession)
             populatedSession.indexedMediaCount = Self.updatedMediaCount(
                 current: populatedSession.indexedMediaCount,
                 persistedPhotoCount: persistedCount
@@ -529,6 +543,10 @@ final class PhotoLibraryIndexingWorker {
     }
 
     func indexVideos(session: Session) async {
+        guard hasPhotoLibraryAccess else {
+            session.hasRetryableFailure = true
+            return
+        }
         var indexed = 0
         var currentProgress = callbacks.currentProgress()
         var progressPublisher = IndexingProgressPublisher()
@@ -572,6 +590,7 @@ final class PhotoLibraryIndexingWorker {
                     }.value
                 } catch {
                     logger.error("Failed to check indexed video batch: \(error.safeDiagnosticCode)")
+                    session.hasRetryableFailure = true
                     return
                 }
             }
@@ -592,6 +611,7 @@ final class PhotoLibraryIndexingWorker {
                 continue
             }
             let outcome = await indexVideo(asset: asset, replacing: existingVersion, indexedAt: session.indexedAt)
+            if outcome == .retryableFailure { session.hasRetryableFailure = true }
             if outcome.completedRequiredRebuild {
                 callbacks.completeRequiredRebuild()
             }
@@ -616,6 +636,10 @@ final class PhotoLibraryIndexingWorker {
             isCancelled: Task.isCancelled,
             wasInterrupted: session.wasInterrupted
         ) else { return }
+        guard hasPhotoLibraryAccess else {
+            session.hasRetryableFailure = true
+            return
+        }
         currentProgress.searchableCount = callbacks.searchableCount()
         currentProgress.isRunning = false
         progressPublisher.publish(currentProgress, force: true, using: callbacks.setProgress)
@@ -623,6 +647,13 @@ final class PhotoLibraryIndexingWorker {
         #if DEBUG
         logger.info("[IndexingService] Indexing complete in \(String(format: "%.1f", CFAbsoluteTimeGetCurrent() - session.startedAt))s")
         #endif
+    }
+
+    // A permission-filtered empty fetch is not evidence of an empty library.
+    // Recheck at completion because access may change while a pass is running.
+    private var hasPhotoLibraryAccess: Bool {
+        let status = authorizationStatus()
+        return status == .authorized || status == .limited
     }
 
     private func makeIndexedPhoto(asset: PHAsset, embedding: [Float], indexedAt: Date) -> IndexedPhoto {
@@ -645,7 +676,7 @@ final class PhotoLibraryIndexingWorker {
     }
 
     private func replacePhoto(
-        asset: PHAsset, embedding: [Float], version: IndexedMediaVersion, indexedAt: Date
+        asset: PHAsset, embedding: [Float], version: IndexedMediaVersion, indexedAt: Date, session: Session
     ) async {
         var photo = makeIndexedPhoto(asset: asset, embedding: embedding, indexedAt: indexedAt)
         photo.id = version.id
@@ -658,6 +689,20 @@ final class PhotoLibraryIndexingWorker {
             return
         } catch {
             logger.error("Failed to refresh indexed photo: \(error.safeDiagnosticCode)")
+            session.hasRetryableFailure = true
+        }
+    }
+
+    /// A failed batch is recoverable when each single-image retry succeeds.
+    /// Only an unrecovered encoding error makes the run incomplete.
+    func encodeFallbackPhoto(_ image: UIImage, session: Session) async throws -> [Float] {
+        do {
+            return try await imageEncoder.encodeCancellable(image: image)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            session.hasRetryableFailure = true
+            throw error
         }
     }
 
@@ -665,7 +710,7 @@ final class PhotoLibraryIndexingWorker {
         callbacks.setHitFreeLimit(!isPro)
     }
 
-    private func persistPhotoBatch(_ photos: [IndexedPhoto]) async -> Int {
+    func persistPhotoBatch(_ photos: [IndexedPhoto], session: Session) async -> Int {
         do {
             let completedRequiredRebuild = try await persistPhotos(photos)
             if completedRequiredRebuild {
@@ -691,6 +736,7 @@ final class PhotoLibraryIndexingWorker {
                     break
                 } catch {
                     logger.error("Failed to insert a photo: \(error.safeDiagnosticCode)")
+                    session.hasRetryableFailure = true
                 }
             }
             return persistedCount
@@ -833,7 +879,7 @@ final class PhotoLibraryIndexingWorker {
             return .notPersisted
         } catch {
             logger.error("Failed to persist indexed video: \(error.safeDiagnosticCode)")
-            return .notPersisted
+            return .retryableFailure
         }
     }
 }

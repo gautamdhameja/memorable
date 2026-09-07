@@ -116,6 +116,10 @@ final class SearchViewModel: ObservableObject {
         return []
     }
 
+    var photoViewerResults: [SearchResult] {
+        filteredResults(currentDisplayedResults).filter { !$0.isVideo }
+    }
+
     var shouldShowDiscoverySuggestions: Bool {
         isSearchHistoryLoaded && searchHistory.isEmpty
     }
@@ -398,7 +402,8 @@ final class SearchViewModel: ObservableObject {
     func validateVisibleResults(reason: String) {
         let currentResults = results
         let currentLastResults = lastResults
-        guard !currentResults.isEmpty || !currentLastResults.isEmpty else {
+        let currentFallbackResults = fallbackResults
+        guard !currentResults.isEmpty || !currentLastResults.isEmpty || !currentFallbackResults.isEmpty else {
             #if DEBUG
             logger.info("[SearchViewModel] visible-result validation skipped reason='\(reason)' because no visible results exist")
             #endif
@@ -409,8 +414,9 @@ final class SearchViewModel: ObservableObject {
         let validationID = validationSequence
         let resultIDs = Set(currentResults.map(\.id))
         let lastResultIDs = Set(currentLastResults.map(\.id))
+        let fallbackResultIDs = Set(currentFallbackResults.map(\.id))
         var seenCandidateIDs = Set<String>()
-        let candidates = (currentResults + currentLastResults).filter {
+        let candidates = (currentResults + currentLastResults + currentFallbackResults).filter {
             seenCandidateIDs.insert($0.id).inserted
         }
 
@@ -421,7 +427,8 @@ final class SearchViewModel: ObservableObject {
             guard !Task.isCancelled,
                   validationID == validationSequence,
                   Set(results.map(\.id)) == resultIDs,
-                  Set(lastResults.map(\.id)) == lastResultIDs else {
+                  Set(lastResults.map(\.id)) == lastResultIDs,
+                  Set(fallbackResults.map(\.id)) == fallbackResultIDs else {
                 #if DEBUG
                 logger.info("[SearchViewModel] visible-result validation skipped reason='\(reason)' because results changed")
                 #endif
@@ -430,9 +437,13 @@ final class SearchViewModel: ObservableObject {
 
             let updatedResults = currentResults.filter { validIDs.contains($0.id) }
             let updatedLastResults = currentLastResults.filter { validIDs.contains($0.id) }
+            let updatedFallbackResults = currentFallbackResults.filter { validIDs.contains($0.id) }
             if updatedResults != currentResults || updatedLastResults != currentLastResults {
                 results = updatedResults
                 lastResults = updatedLastResults
+            }
+            if updatedFallbackResults != currentFallbackResults {
+                fallbackResults = updatedFallbackResults
             }
         }
     }
@@ -570,6 +581,9 @@ final class SearchViewModel: ObservableObject {
             mediaFilter = .all
             searchTimeMs = Int((dependencies.now() - startTime) * 1_000)
             startScreenshotDetection(for: response.results)
+            // Search results are ready even if an earlier history write is
+            // still draining. Persistence must not keep the result spinner up.
+            isSearching = false
 
             if !response.results.isEmpty {
                 lastQuery = query

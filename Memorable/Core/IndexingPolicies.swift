@@ -12,15 +12,21 @@ enum SearchSuggestionVisibilityPolicy {
 }
 
 enum IndexingHomePresentationPolicy {
-    static func showsSlideshow(
-        isInitialLibraryWorkflowActive: Bool,
+    static func showsNormalHome(
+        hasKnownExistingIndex: Bool,
+        isReady: Bool,
         isRunning: Bool,
         isPaused: Bool,
-        hasQuery: Bool,
+        rebuildRequired: Bool
+    ) -> Bool {
+        !rebuildRequired && (hasKnownExistingIndex || isReady || isRunning || isPaused)
+    }
+
+    static func showsSlideshow(
+        isInitialLibraryWorkflowActive: Bool,
         phase: IndexingPhase = .photos
     ) -> Bool {
-        phase != .enrichment
-            && (isInitialLibraryWorkflowActive || ((isRunning || isPaused) && !hasQuery))
+        isInitialLibraryWorkflowActive && phase != .enrichment
     }
 }
 
@@ -30,11 +36,20 @@ enum InitialIndexingExperienceStore {
     }
 
     static func begin(in defaults: UserDefaults = .standard) {
+        defaults.set(false, forKey: AppKeys.initialIndexingExperienceCompleted)
         defaults.set(true, forKey: AppKeys.initialIndexingExperiencePending)
     }
 
     static func isCompleted(in defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: AppKeys.initialIndexingExperienceCompleted)
+        !isPending(in: defaults)
+            && defaults.bool(forKey: AppKeys.initialIndexingExperienceCompleted)
+    }
+
+    /// Stop ends this request without certifying completion. A later launch
+    /// may resume existing partial work, just like an explicit start.
+    static func stop(in defaults: UserDefaults = .standard) {
+        defaults.set(false, forKey: AppKeys.initialIndexingExperienceCompleted)
+        defaults.set(false, forKey: AppKeys.initialIndexingExperiencePending)
     }
 
     static func complete(in defaults: UserDefaults = .standard) {
@@ -45,15 +60,9 @@ enum InitialIndexingExperienceStore {
 
 enum InitialIndexingExperiencePolicy {
     static func shouldBegin(
-        hasKnownExistingIndex: Bool,
-        hasCompletedInitialExperience: Bool,
-        isReady: Bool,
-        searchableCount: Int
+        hasCompletedInitialExperience: Bool
     ) -> Bool {
         !hasCompletedInitialExperience
-            && !hasKnownExistingIndex
-            && !isReady
-            && searchableCount == 0
     }
 
     static func shouldShow(

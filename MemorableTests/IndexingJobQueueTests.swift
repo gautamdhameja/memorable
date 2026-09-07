@@ -592,21 +592,6 @@ final class IndexingJobQueueTests: XCTestCase {
         )
     }
 
-    func testRequiredRebuildCompletesOnlyForAnActuallyEmptyLibrary() {
-        XCTAssertTrue(IndexingService.shouldCompleteEmptyRequiredRebuild(
-            rebuildRequired: true,
-            hasMediaCandidates: false
-        ))
-        XCTAssertFalse(IndexingService.shouldCompleteEmptyRequiredRebuild(
-            rebuildRequired: true,
-            hasMediaCandidates: true
-        ))
-        XCTAssertFalse(IndexingService.shouldCompleteEmptyRequiredRebuild(
-            rebuildRequired: false,
-            hasMediaCandidates: false
-        ))
-    }
-
     func testCancelAllCancelsActiveAndPendingJobs() async {
         let queue = IndexingJobQueue()
         var activeCancelled = false

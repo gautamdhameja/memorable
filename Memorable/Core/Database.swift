@@ -408,6 +408,7 @@ struct GeocodingCounts {
 enum DatabaseCapabilityError: LocalizedError, Equatable {
     case unavailable
     case indexingUnavailableInFallback
+    case incompatibleIndexRemains
 
     var errorDescription: String? {
         switch self {
@@ -415,6 +416,8 @@ enum DatabaseCapabilityError: LocalizedError, Equatable {
             return "Local search storage is unavailable. Close and reopen Memorable, then try again."
         case .indexingUnavailableInFallback:
             return "Memorable cannot update the search index right now. Close and reopen the app, then try again."
+        case .incompatibleIndexRemains:
+            return "The search index still needs to be rebuilt. Try rebuilding it again."
         }
     }
 }
@@ -1549,6 +1552,11 @@ final class AppDatabase: DatabaseProtocol, Sendable {
     func clearIndexRebuildRequired() throws {
         try dbQueue.write { db in
             guard try db.tableExists("app_state") else { return }
+            // This path finishes an empty/local-only pass. Nonempty rebuilds
+            // clear the marker atomically with their first compatible write.
+            guard try Self.embeddingCount(in: db) == 0 else {
+                throw DatabaseCapabilityError.incompatibleIndexRemains
+            }
             try Self.clearIndexRebuildRequired(in: db)
         }
     }

@@ -18,6 +18,7 @@ final class SearchViewModelTests: XCTestCase {
         model.submitSearch(saveToHistory: true)
         await writer.waitUntilCalled(with: "write")
         XCTAssertEqual(model.results.map(\.id), ["photo"])
+        XCTAssertFalse(model.isSearching, "Completed results must replace the spinner before history persistence finishes")
         // The main actor can still accept input while persistence is pending.
         model.setQueryText("rivers")
         XCTAssertEqual(model.queryText, "rivers")
@@ -665,6 +666,66 @@ final class SearchViewModelTests: XCTestCase {
         await model.waitForVisibleResultValidation()
 
         XCTAssertEqual(model.results.map(\.id), ["second-result"])
+    }
+
+    @MainActor
+    func testFallbackOnlyResultsAreValidatedAfterLibraryChanges() async {
+        var validatedIDs: Set<String> = []
+        let model = makeModel(search: { _ in
+            SearchResponse(results: [], fallbackResults: [Self.result(id: "kept"), Self.result(id: "removed")], filtersApplied: nil)
+        }, validate: { candidates in
+            validatedIDs = Set(candidates.map(\.id))
+            return ["kept"]
+        })
+        model.setQueryText("trip")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        model.validateVisibleResults(reason: "foreground return")
+        await model.waitForVisibleResultValidation()
+        XCTAssertEqual(validatedIDs, ["kept", "removed"])
+        XCTAssertEqual(model.fallbackResults.map(\.id), ["kept"])
+    }
+
+    @MainActor
+    func testStaleValidationCannotOverwriteNewFallbackResults() async {
+        let validator = ControlledValidator()
+        let model = makeModel(search: { query in
+            SearchResponse(results: [], fallbackResults: [Self.result(id: query)], filtersApplied: nil)
+        }, validate: validator.validate)
+        model.setQueryText("first")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        model.validateVisibleResults(reason: "foreground return")
+        await validator.waitUntilCalled()
+        model.setQueryText("second")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        await validator.complete(validIDs: [])
+        await model.waitForVisibleResultValidation()
+        XCTAssertEqual(model.fallbackResults.map(\.id), ["second"])
+    }
+
+    @MainActor
+    func testPhotoViewerUsesCurrentMediaFilterAndSortOrder() async {
+        let model = makeModel(search: { _ in
+            SearchResponse(results: [
+                Self.result(id: "old", date: Date(timeIntervalSince1970: 1)),
+                Self.result(id: "video", date: Date(timeIntervalSince1970: 4), isVideo: true),
+                Self.result(id: "screen", date: Date(timeIntervalSince1970: 3)),
+                Self.result(id: "recent", date: Date(timeIntervalSince1970: 2)),
+            ], fallbackResults: [], filtersApplied: nil)
+        }, detectScreenshots: { _ in ["screen"] })
+        model.setQueryText("trip")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        await model.waitForScreenshotDetection()
+        model.selectSortMode(.recent)
+        model.setMediaFilter(.photos)
+        XCTAssertEqual(model.photoViewerResults.map(\.id), ["recent", "old"])
+        model.setMediaFilter(.screenshots)
+        XCTAssertEqual(model.photoViewerResults.map(\.id), ["screen"])
+        model.setMediaFilter(.all)
+        XCTAssertEqual(model.photoViewerResults.map(\.id), ["screen", "recent", "old"])
     }
 
     @MainActor

@@ -336,6 +336,10 @@ struct SmartQueryParser: Sendable {
                 visualDesc = fallbackHints.hasVisualQuery
                     ? SmartQueryOutputPolicy.removingGenericMediaNouns(from: fallbackHints.textQuery)
                     : ""
+            } else if visualDesc.isEmpty, fallbackHints.hasVisualQuery {
+                // A valid model response can still omit the subject. Preserve
+                // the user's local visual query instead of disabling search.
+                visualDesc = fallbackHints.textQuery
             }
 
             var visual = visualDesc.isEmpty ? "" : visualDesc.lowercased()

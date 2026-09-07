@@ -53,6 +53,8 @@ class IndexingService: ObservableObject {
     }
     @Published private(set) var isThermallyPaused = false
     @Published private(set) var folderIndexingError: String?
+    @Published private(set) var libraryIndexingError: String?
+    @Published private(set) var indexLoadError: String?
     // Deferred reverse-geocoding state. Nil only when all eligible media is
     // complete or location work was intentionally cancelled.
     @Published private(set) var geocodingProgress: GeocodingProgressState? {
@@ -104,7 +106,7 @@ class IndexingService: ObservableObject {
     private var proEntitlementObservation: AnyCancellable?
     private var scheduledSavedFolderSourceIDs: Set<String> = []
     private var thermalSafetyState = ThermalIndexingState()
-    private var hasKnownExistingIndex = false
+    @Published private var hasKnownExistingIndex = false
     private var hasDeferredSearchIndexReload = false
     private var deferredPostIndexingWorkflowID: UUID?
     private var hasCompletedInitialIndexCheck = false
@@ -133,6 +135,18 @@ class IndexingService: ObservableObject {
     var shouldShowInitialIndexingExperience: Bool {
         InitialIndexingExperiencePolicy.shouldShow(
             isInitialLibraryWorkflowActive: isInitialLibraryIndexingActive
+        )
+    }
+
+    /// A temporarily unavailable resident snapshot does not make an existing
+    /// library a first-time setup. The search controls still require readiness.
+    var shouldKeepSearchHomeVisible: Bool {
+        IndexingHomePresentationPolicy.showsNormalHome(
+            hasKnownExistingIndex: hasKnownExistingIndex || hasCompletedInitialIndexingExperience,
+            isReady: isReady,
+            isRunning: progress.isRunning,
+            isPaused: isThermallyPaused || backgroundExecutionState == .pausedAwaitingForeground,
+            rebuildRequired: indexRebuildRequired
         )
     }
 
@@ -246,7 +260,11 @@ class IndexingService: ObservableObject {
         #endif
         let loaded = await loadExistingIndexIfAvailable(loadPriority: loadPriority)
         guard !Task.isCancelled else { return false }
+        guard indexLoadError == nil else { return false }
         startObservingPhotoChanges()
+        if scheduleAutoResume, loaded, shouldUseInitialIndexingExperience() {
+            activateInitialIndexingExperience(isUserInitiated: false)
+        }
         if loaded {
             await refreshGeocodingProgress(
                 phase: scheduleAutoResume ? .queued : .waitingToResume
@@ -259,7 +277,7 @@ class IndexingService: ObservableObject {
         ) {
             resumeIndexingAutomatically()
         }
-        if scheduleAutoResume && loaded {
+        if scheduleAutoResume && (loaded || hasCompletedInitialIndexingExperience) {
             enqueueLibraryIndexing(
                 isAutoResume: true,
                 delayAfterDependencies: IndexingConfig.postLaunchAutoResumeDelaySeconds
@@ -287,6 +305,7 @@ class IndexingService: ObservableObject {
 
     @discardableResult
     func loadExistingIndexIfAvailable(loadPriority: TaskPriority = .utility) async -> Bool {
+        indexLoadError = nil
         do {
             #if DEBUG
             logger.info("[IndexingService] loadExistingIndexIfAvailable start priority=\(String(describing: loadPriority))")
@@ -297,6 +316,9 @@ class IndexingService: ObservableObject {
             }
             indexRebuildRequired = rebuildRequired
             if rebuildRequired {
+                hasCompletedInitialIndexingExperience = false
+                isInitialIndexingExperiencePending = true
+                InitialIndexingExperienceStore.begin(in: initialIndexingDefaults)
                 searchEngine.dropIndex()
                 isReady = false
                 progress = IndexingProgress(total: 0, completed: 0, isRunning: false)
@@ -313,10 +335,6 @@ class IndexingService: ObservableObject {
 
             if totalIndexed > 0 {
                 hasKnownExistingIndex = true
-                if !isInitialIndexingExperiencePending,
-                   !hasCompletedInitialIndexingExperience {
-                    completeInitialIndexingExperience()
-                }
                 #if DEBUG
                 logger.info("[IndexingService] Found \(photoCount) indexed photos and \(videoCount) indexed videos, loading index")
                 #endif
@@ -390,6 +408,7 @@ class IndexingService: ObservableObject {
             return false
         } catch {
             logger.error("Failed to load existing index: \(error.safeDiagnosticCode)")
+            indexLoadError = "Search couldn’t load. Try again to open your existing index."
         }
         isReady = false
         onIndexUnavailable?()
@@ -412,6 +431,7 @@ class IndexingService: ObservableObject {
     }
 
     private func startIndexing(isUserInitiated: Bool) {
+        libraryIndexingError = nil
         let usesInitialExperience = shouldUseInitialIndexingExperience()
         let resume: () -> Void = { [weak self] in self?.resumeIndexingAutomatically() }
         let intent = ThermalResumeIntent(id: UUID(), action: resume)
@@ -434,6 +454,11 @@ class IndexingService: ObservableObject {
     }
 
     func indexNewPhotosOnly() {
+        if shouldUseInitialIndexingExperience() {
+            startIndexing()
+            return
+        }
+        libraryIndexingError = nil
         let resume: () -> Void = { [weak self] in self?.indexNewPhotosOnly() }
         let intent = ThermalResumeIntent(id: UUID(), action: resume)
         guard canStartIndexing(resumeWhenCool: intent) else { return }
@@ -451,6 +476,7 @@ class IndexingService: ObservableObject {
     }
 
     private func rebuildRequiredIndex(isUserInitiated: Bool) {
+        libraryIndexingError = nil
         let resume: () -> Void = { [weak self] in
             self?.rebuildRequiredIndex(isUserInitiated: false)
         }
@@ -464,9 +490,7 @@ class IndexingService: ObservableObject {
 
         stopIndexing(preserveThermalResume: true)
         guard markRunningIfIdle() else { return }
-        if isInitialIndexingExperiencePending {
-            activateInitialIndexingExperience(isUserInitiated: isUserInitiated)
-        }
+        activateInitialIndexingExperience(isUserInitiated: isUserInitiated)
         thermalResumeIntent = intent
         hideValidatedSearchSuggestions()
         SurpriseQueries.clearValidated()
@@ -478,7 +502,12 @@ class IndexingService: ObservableObject {
             || isInitialIndexingExperiencePending
         stopIndexing(preserveThermalResume: false)
         if stoppedInitialIndexing {
-            completeInitialIndexingExperience(systemTaskSuccess: false)
+            isInitialIndexingExperiencePending = false
+            hasCompletedInitialIndexingExperience = false
+            backgroundExecutionState = .foreground
+            InitialIndexingExperienceStore.stop(in: initialIndexingDefaults)
+            InitialIndexingInterruptionStore.clear(in: initialIndexingDefaults)
+            BackgroundIndexingController.shared.initialIndexingWasStopped()
         }
     }
 
@@ -1008,6 +1037,9 @@ class IndexingService: ObservableObject {
         }.value
         didReset = true
         indexRebuildRequired = true
+        hasCompletedInitialIndexingExperience = false
+        isInitialIndexingExperiencePending = true
+        InitialIndexingExperienceStore.begin(in: initialIndexingDefaults)
         searchEngine.dropIndex()
         isReady = false
         onIndexUnavailable?()
@@ -1160,21 +1192,17 @@ class IndexingService: ObservableObject {
     }
 
     private func shouldUseInitialIndexingExperience() -> Bool {
-        isInitialIndexingExperiencePending || InitialIndexingExperiencePolicy.shouldBegin(
-            hasKnownExistingIndex: hasKnownExistingIndex,
-            hasCompletedInitialExperience: hasCompletedInitialIndexingExperience,
-            isReady: isReady,
-            searchableCount: searchEngine.totalSize
+        indexRebuildRequired || isInitialIndexingExperiencePending || InitialIndexingExperiencePolicy.shouldBegin(
+            hasCompletedInitialExperience: hasCompletedInitialIndexingExperience
         )
     }
 
     private func activateInitialIndexingExperience(isUserInitiated: Bool) {
         isInitialLibraryIndexingActive = true
         backgroundExecutionState = isApplicationActive ? .foreground : .continuingInBackground
-        if !isInitialIndexingExperiencePending {
-            isInitialIndexingExperiencePending = true
-            InitialIndexingExperienceStore.begin(in: initialIndexingDefaults)
-        }
+        hasCompletedInitialIndexingExperience = false
+        isInitialIndexingExperiencePending = true
+        InitialIndexingExperienceStore.begin(in: initialIndexingDefaults)
         InitialIndexingInterruptionStore.clear(in: initialIndexingDefaults)
         BackgroundIndexingController.shared.initialIndexingDidStart(
             isApplicationActive: isApplicationActive,
@@ -1182,12 +1210,8 @@ class IndexingService: ObservableObject {
         )
     }
 
-    private func completeInitialIndexingExperience(systemTaskSuccess: Bool = true) {
+    private func completeInitialIndexingExperience() {
         isInitialLibraryIndexingActive = false
-        persistInitialIndexingExperienceCompletion(systemTaskSuccess: systemTaskSuccess)
-    }
-
-    private func persistInitialIndexingExperienceCompletion(systemTaskSuccess: Bool = true) {
         guard isInitialIndexingExperiencePending || !hasCompletedInitialIndexingExperience else {
             return
         }
@@ -1196,11 +1220,7 @@ class IndexingService: ObservableObject {
         backgroundExecutionState = .foreground
         InitialIndexingExperienceStore.complete(in: initialIndexingDefaults)
         InitialIndexingInterruptionStore.clear(in: initialIndexingDefaults)
-        if systemTaskSuccess {
-            BackgroundIndexingController.shared.initialIndexingDidComplete()
-        } else {
-            BackgroundIndexingController.shared.initialIndexingWasStopped()
-        }
+        BackgroundIndexingController.shared.initialIndexingDidComplete()
     }
 
     private func dismissInterruptedInitialPresentationIfNeeded() {
@@ -1389,6 +1409,7 @@ class IndexingService: ObservableObject {
             }
             isReady = didLoad
             if didLoad {
+                indexLoadError = nil
                 hasInvalidatedMediaReplacements = false
                 hasKnownExistingIndex = true
                 indexVersion += 1
@@ -1408,6 +1429,7 @@ class IndexingService: ObservableObject {
             return false
         } catch {
             logger.error("Failed to reload search index: \(error.safeDiagnosticCode)")
+            indexLoadError = "Search couldn’t refresh. Try again to load your latest index."
             isReady = searchEngine.isIndexLoaded
             if isReady {
                 onIndexReady?()
@@ -1422,6 +1444,7 @@ class IndexingService: ObservableObject {
         case noIndex
         case complete
         case resume
+        case unavailable
     }
 
     private func didReplaceIndexedMedia(_ identifier: String) {
@@ -1463,11 +1486,17 @@ class IndexingService: ObservableObject {
             guard let self else { return .cancelled }
             if isAutoResume {
                 switch await self.autoResumeDecision(totalInLibrary: autoResumeLibraryCount) {
+                case .unavailable:
+                    guard !Task.isCancelled else { return .cancelled }
+                    self.pauseAfterLibraryIndexingFailure()
+                    return .cancelled
                 case .noIndex:
-                    guard self.isInitialIndexingExperiencePending else { return .completed }
+                    guard self.isInitialIndexingExperiencePending || self.hasCompletedInitialIndexingExperience else { return .completed }
                     self.cancelEnrichmentWork()
                     guard self.markRunningIfIdle() else { return .cancelled }
-                    self.activateInitialIndexingExperience(isUserInitiated: false)
+                    if self.shouldUseInitialIndexingExperience() {
+                        self.activateInitialIndexingExperience(isUserInitiated: false)
+                    }
                 case .complete:
                     await self.completeBaseIndexingAndSchedulePostIndexingWork(
                         workflowID: workflowID
@@ -1476,7 +1505,7 @@ class IndexingService: ObservableObject {
                 case .resume:
                     self.cancelEnrichmentWork()
                     guard self.markRunningIfIdle() else { return .cancelled }
-                    if self.isInitialIndexingExperiencePending {
+                    if self.shouldUseInitialIndexingExperience() {
                         self.activateInitialIndexingExperience(isUserInitiated: false)
                     }
                     self.newPhotosAvailable = false
@@ -1549,11 +1578,12 @@ class IndexingService: ObservableObject {
                 self.dismissInterruptedInitialPresentationIfNeeded()
                 return .cancelled
             }
+            guard !session.hasRetryableFailure else {
+                self.pauseAfterLibraryIndexingFailure()
+                return .cancelled
+            }
             self.progress.isRunning = false
-            if Self.shouldCompleteEmptyRequiredRebuild(
-                rebuildRequired: self.indexRebuildRequired,
-                hasMediaCandidates: session.hasMediaCandidates
-            ) {
+            if self.indexRebuildRequired {
                 do {
                     let db = self.database
                     try await CancellableDetachedOperation.run {
@@ -1566,6 +1596,8 @@ class IndexingService: ObservableObject {
                     return .cancelled
                 } catch {
                     logger.error("Failed to complete empty index rebuild: \(error.safeDiagnosticCode)")
+                    self.pauseAfterLibraryIndexingFailure()
+                    return .cancelled
                 }
             }
             await self.completeBaseIndexingAndSchedulePostIndexingWork(workflowID: workflowID)
@@ -1573,11 +1605,15 @@ class IndexingService: ObservableObject {
         })
     }
 
-    static func shouldCompleteEmptyRequiredRebuild(
-        rebuildRequired: Bool,
-        hasMediaCandidates: Bool
-    ) -> Bool {
-        rebuildRequired && !hasMediaCandidates
+    private func pauseAfterLibraryIndexingFailure() {
+        progress.isRunning = false
+        dismissInterruptedInitialPresentationIfNeeded()
+        libraryIndexingError = "Some items couldn’t be indexed. Your indexed photos and videos are still available."
+        if isInitialIndexingExperiencePending {
+            InitialIndexingInterruptionStore.markInterrupted(in: initialIndexingDefaults)
+            backgroundExecutionState = .pausedAwaitingForeground
+            BackgroundIndexingController.shared.initialIndexingWasInterrupted()
+        }
     }
 
     private func enqueuePostIndexingJobs(
@@ -1865,9 +1901,6 @@ class IndexingService: ObservableObject {
             if self.progress.phase == .enrichment {
                 self.progress.isRunning = false
             }
-            if self.isInitialLibraryIndexingActive, !Task.isCancelled {
-                self.completeInitialIndexingExperience()
-            }
             return Task.isCancelled ? .cancelled : .completed
         })
     }
@@ -2006,6 +2039,10 @@ class IndexingService: ObservableObject {
 
     /// Checks whether interrupted indexing should resume after launch.
     private func autoResumeDecision(totalInLibrary providedTotal: Int? = nil) async -> AutoResumeDecision {
+        let authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard authorization == .authorized || authorization == .limited else {
+            return .unavailable
+        }
         let totalInLibrary: Int
         if let providedTotal {
             totalInLibrary = providedTotal
@@ -2015,10 +2052,10 @@ class IndexingService: ObservableObject {
                     PhotoLibrary.fetchAllMedia().count
                 }
             } catch is CancellationError {
-                return .noIndex
+                return .unavailable
             } catch {
                 logger.error("Failed to read photo library size: \(error.safeDiagnosticCode)")
-                return .noIndex
+                return .unavailable
             }
         }
 
@@ -2029,10 +2066,10 @@ class IndexingService: ObservableObject {
                 try db.photoLibraryIndexedMediaCounts()
             }
         } catch is CancellationError {
-            return .noIndex
+            return .unavailable
         } catch {
             logger.error("Failed to check index completeness: \(error.safeDiagnosticCode)")
-            return .noIndex
+            return .unavailable
         }
 
         let totalIndexed = counts.total
@@ -2050,10 +2087,10 @@ class IndexingService: ObservableObject {
                 }
                 return needsIndexing ? .resume : .complete
             } catch is CancellationError {
-                return .noIndex
+                return .unavailable
             } catch {
                 logger.error("Failed to reconcile indexed asset versions: \(error.safeDiagnosticCode)")
-                return .noIndex
+                return .unavailable
             }
         }
 

@@ -253,6 +253,16 @@ struct SearchView: View {
                         .padding(.bottom, Celestial.Spacing.stackedContainerGap)
                     }
 
+                    if let message = searchPreparationError {
+                        recoveryNotice(message: message) {
+                            semanticRuntime.retryIndexLoading()
+                        }
+                    } else if let message = indexingService.libraryIndexingError {
+                        recoveryNotice(message: message) {
+                            indexingService.startIndexing()
+                        }
+                    }
+
                     // Sticky controls panel (above scroll)
                     if !indexingService.shouldShowInitialIndexingExperience,
                        !viewModel.queryText.isEmpty,
@@ -309,8 +319,14 @@ struct SearchView: View {
                                 }
 
                                 // Content
-                                if semanticRuntime.isCheckingIndexAvailability {
+                                if semanticRuntime.isCheckingIndexAvailability,
+                                   !indexingService.shouldKeepSearchHomeVisible {
                                     indexReadinessCheckingState
+                                } else if searchPreparationError != nil,
+                                          !indexingService.shouldKeepSearchHomeVisible {
+                                    // A failed load does not establish that an
+                                    // index is absent. Keep setup actions hidden.
+                                    EmptyView()
                                 } else if viewModel.isSearching {
                                     searchingState
                                 } else if let error = viewModel.searchError {
@@ -326,7 +342,7 @@ struct SearchView: View {
                                     lastResultsView
                                 } else if viewModel.results.isEmpty,
                                           viewModel.queryText.isEmpty {
-                                    if hasHomeContent {
+                                    if indexingService.shouldKeepSearchHomeVisible {
                                         homeView
                                     } else {
                                         emptyState
@@ -354,7 +370,7 @@ struct SearchView: View {
                 } else {
                     SearchResultsViewer(
                         initialResult: result,
-                        allResults: viewModel.currentDisplayedResults.filter { !$0.isVideo },
+                        allResults: viewModel.photoViewerResults,
                         searchEngine: searchEngine
                     )
                 }
@@ -627,10 +643,6 @@ struct SearchView: View {
     private var shouldShowIndexingExperience: Bool {
         IndexingHomePresentationPolicy.showsSlideshow(
             isInitialLibraryWorkflowActive: indexingService.shouldShowInitialIndexingExperience,
-            isRunning: indexingService.progress.isRunning,
-            isPaused: indexingService.isThermallyPaused
-                || indexingService.backgroundExecutionState == .pausedAwaitingForeground,
-            hasQuery: !viewModel.queryText.isEmpty,
             phase: indexingService.progress.phase
         )
     }
@@ -709,6 +721,34 @@ struct SearchView: View {
         }
     }
 
+    private var searchPreparationError: String? {
+        if let message = indexingService.indexLoadError { return message }
+        if case .failed(let message) = semanticRuntime.phase { return message }
+        return nil
+    }
+
+    private func recoveryNotice(
+        message: String,
+        retry: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(message)
+                .font(Celestial.Typography.supporting)
+                .foregroundStyle(Celestial.Colors.onSurface)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Try Again", action: retry)
+                .font(Celestial.Typography.button)
+                .foregroundStyle(Celestial.Colors.primary)
+                .frame(minHeight: 44)
+                .disabled(!database.allowsIndexingWrites)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Celestial.Spacing.surfaceContentInset)
+        .modifier(GlassPanelModifier(cornerRadius: 16))
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
+    }
+
     // MARK: - Banners
 
     private var upgradeBanner: some View {
@@ -750,15 +790,6 @@ struct SearchView: View {
 
     private var canShowValidatedSuggestions: Bool {
         indexingService.canShowValidatedSearchSuggestions
-    }
-
-    private var hasHomeContent: Bool {
-        guard indexingService.isReady else { return false }
-        return (canShowValidatedSuggestions && viewModel.shouldShowDiscoverySuggestions)
-            || !smartAlbums.isEmpty
-            || !viewModel.searchHistory.isEmpty
-            || todayMemory != nil
-            || !isTodayMemoryResolved
     }
 
     private var homeView: some View {

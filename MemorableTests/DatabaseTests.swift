@@ -441,6 +441,24 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(try database.loadSearchHistoryPreviews(limit: 3).isEmpty)
     }
 
+    func testRemovingSearchHistoryAtInvalidIndicesPreservesStoredRows() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        try database.addSearchHistory("dog")
+
+        for index in [Int.min, -1, 1, Int.max] {
+            try database.removeSearchHistory(at: index)
+            XCTAssertEqual(try database.loadSearchHistory(), ["dog"])
+        }
+
+        try database.removeSearchHistory(at: 0)
+        XCTAssertTrue(try database.loadSearchHistory().isEmpty)
+        try database.removeSearchHistory(at: -1)
+        XCTAssertTrue(try database.loadSearchHistory().isEmpty)
+    }
+
     func testSearchHistoryPreviewMigrationsPreserveLegacyRows() throws {
         let queue = try DatabaseQueue()
         try AppDatabase.migrator.migrate(
@@ -2818,6 +2836,21 @@ final class DatabaseTests: XCTestCase {
 
         XCTAssertEqual(try database.indexedCount(), 0)
         XCTAssertTrue(try database.indexRebuildRequired())
+        try database.clearIndexRebuildRequired()
+        XCTAssertFalse(try database.indexRebuildRequired())
+    }
+
+    func testEmptyRebuildCompletionCannotClearMarkerWhileEmbeddingsRemain() throws {
+        let queue = try DatabaseQueue()
+        let database = AppDatabase(openQueue: { queue }, migrate: { try AppDatabase.migrator.migrate($0) })
+        try database.insertPhoto(makePhoto(localIdentifier: "old-embedding"))
+        try queue.write { try AppDatabase.markIndexRebuildRequired(in: $0) }
+        XCTAssertThrowsError(try database.clearIndexRebuildRequired()) { error in
+            XCTAssertEqual(error as? DatabaseCapabilityError, .incompatibleIndexRemains)
+        }
+        XCTAssertTrue(try database.indexRebuildRequired())
+        XCTAssertEqual(try database.indexedCount(), 1)
+        try database.resetIndexedMedia()
         try database.clearIndexRebuildRequired()
         XCTAssertFalse(try database.indexRebuildRequired())
     }

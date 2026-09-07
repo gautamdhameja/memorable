@@ -12,6 +12,10 @@ Memorable uses [SigLIP2](https://arxiv.org/abs/2502.14786) (Google, Apache 2.0) 
 
 During initial setup, the app indexes photos first so search becomes available at progressive checkpoints. It then indexes video frames. The main indexing screen ends after photos and videos; optional photo analysis continues later without blocking search.
 
+The initial-completion flag is set only after the base photo and video passes finish without unrecovered processing or storage errors. Starting a rebuild clears it. Stopping a run ends that request without marking it complete; a later start or relaunch resumes the unfinished initial run. Deferred enrichment does not change this flag.
+
+The slideshow appears during fresh indexing, resumed initial indexing, and index rebuilds. Incremental updates for new photos and videos keep the normal home screen and show only the compact indexing progress box. A temporary index check or reload does not replace an existing library's home screen with the setup prompt; search controls wait until search is ready.
+
 Search history, saved albums, folder bookmarks, and PhotoKit asset resolution run off the main actor. History writes stay ordered, and an index reset drains pending history persistence before clearing it. Text search and Find Similar in photo viewers pause maintenance until the last active search finishes. Photo-library change handling and share cancellation keep disk work outside locks needed by the UI.
 
 ```text
@@ -143,7 +147,7 @@ Keep high-cost work bounded and cancellable:
 
 Rebuilding the index clears recent search history and its result previews. Saved albums, folder registrations, and bookmarks are preserved. A confirmed Pro downgrade removes derived folder index rows but preserves those registrations. After a rebuild or confirmed Pro restoration, the app automatically schedules saved folders that need indexing.
 
-Initial indexing and later indexing runs show a memory slideshow while no query is displayed. Progress stays in the indexing card; counts describe searchable media, not the size of the photo library. During later runs, you can search the available index and clear the query to return to the slideshow.
+Fresh indexing, resumed initial indexing, and rebuilds show a memory slideshow. Incremental updates keep the normal home screen, memories, and recent searches visible. Progress stays in the indexing card; counts describe searchable media, not the size of the photo library.
 
 Photo enrichment waits for a quiet interval and pauses for the full duration of text and similarity searches. It processes at most two photos at a time, retains completed work when interrupted, and publishes metadata periodically. Screenshots use PhotoKit metadata and accurate OCR first; other photos group fast OCR and scene classification through Apple Vision. A dismissible status appears on the normal search screen while analysis runs; search history, saved albums, and memories remain available.
 

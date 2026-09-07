@@ -75,10 +75,16 @@ struct MainTabView: View {
     let retrySemanticWarmup: () -> Void
 
     @State private var navigation = MainTabNavigationState()
+    @State private var hasPresentedTabs = false
+
+    private var canPresentTabs: Bool {
+        indexingService != nil && searchEngine != nil
+            && (!semanticRuntime.isCheckingIndexAvailability || hasPresentedTabs)
+    }
 
     var body: some View {
         TabView(selection: $navigation.destination) {
-            if let indexingService, let searchEngine, !semanticRuntime.isCheckingIndexAvailability {
+            if let indexingService, let searchEngine, canPresentTabs {
                 SearchView(
                     indexingService: indexingService,
                     searchEngine: searchEngine,
@@ -92,7 +98,7 @@ struct MainTabView: View {
                     .tag(MainTabDestination.search)
             }
 
-            if let indexingService, let searchEngine, !semanticRuntime.isCheckingIndexAvailability {
+            if let indexingService, let searchEngine, canPresentTabs {
                 MoreView(
                     indexingService: indexingService,
                     searchEngine: searchEngine
@@ -109,6 +115,11 @@ struct MainTabView: View {
             bottomDock
         }
         .preferredColorScheme(.dark)
+        .onChange(of: canPresentTabs, initial: true) { _, canPresent in
+            // Only bootstrap replaces the tabs with a preparation shell.
+            // Later reloads must preserve navigation, queries and presentations.
+            if canPresent { hasPresentedTabs = true }
+        }
         .environment(\.userSearchActivity, { [weak indexingService] active, id in
             indexingService?.setUserSearchActive(active, id: id)
         })

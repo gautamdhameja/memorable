@@ -4,6 +4,11 @@ import os
 
 let logger = Logger(subsystem: "com.blockdeep.memorable", category: "app")
 
+struct SearchIndexLoadError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 struct ForegroundOnboardingIndexIntent {
     private var isPending = false
 
@@ -476,6 +481,9 @@ class AppState: ObservableObject {
                 loadPriority: effectivePriority == .userInitiatedSearch ? .userInitiated : .utility
             )
             try Task.checkCancellation()
+            if let message = indexing.indexLoadError {
+                throw SearchIndexLoadError(message: message)
+            }
             startPendingOnboardingIndexIfNeeded(using: indexing)
 
             #if DEBUG || STARTUP_METRICS
@@ -500,7 +508,7 @@ class AppState: ObservableObject {
             #endif
             throw CancellationError()
         } catch {
-            logger.error("Model loading failed: \(error.safeDiagnosticCode)")
+            logger.error("Search preparation failed: \(error.safeDiagnosticCode)")
             let message = UserFacingErrorMessage.message(
                 for: error,
                 fallback: "Search couldn't be prepared. Close and reopen Memorable, then try again."

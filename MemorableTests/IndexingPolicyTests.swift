@@ -3,42 +3,307 @@ import GRDB
 import CoreML
 import CoreLocation
 import os
+import SwiftUI
+import Vision
 @testable import Memorable
 
 final class IndexingPolicyTests: XCTestCase {
-    func testIndexingHomeShowsSlideshowThroughInitialWorkflowAndReindexing() {
-        // First-run presentation must survive gaps between indexing phases.
-        XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
-            isInitialLibraryWorkflowActive: true,
-            isRunning: false, isPaused: false, hasQuery: false
+    @MainActor
+    func testPartialRowsDoNotCertifyInitialCompletionAndBothEntryPointsResume() async throws {
+        for incrementalEntry in [false, true] {
+            let suite = "PartialInitialIndex.\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let database = SearchFixtureDatabase(photos: [surpriseFixturePhoto()])
+            let service = makeSurpriseLaunchService(
+                database: database,
+                cachedState: SurpriseQueryCache.State(validatedQueries: [], lastValidatedCount: 0),
+                initialIndexingDefaults: defaults
+            )
+            let loaded = await service.loadExistingIndexIfAvailable()
+            XCTAssertTrue(loaded)
+            XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+            if incrementalEntry { service.indexNewPhotosOnly() } else { service.startIndexing() }
+            XCTAssertTrue(service.shouldShowInitialIndexingExperience)
+            XCTAssertTrue(InitialIndexingExperienceStore.isPending(in: defaults))
+            service.stopIndexing()
+            XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+        }
+    }
+
+    @MainActor
+    func testLibraryPersistenceFailureDoesNotCertifyCompletion() async throws {
+        let suite = "FailedInitialIndex.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let queue = try DatabaseQueue()
+        let database = AppDatabase(openQueue: { queue }, migrate: { try AppDatabase.migrator.migrate($0) })
+        try await queue.write { try $0.execute(sql: "DROP TABLE indexed_photos") }
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: SearchEngine(database: database), database: database,
+            initialIndexingDefaults: defaults
+        )
+        defer { service.stopIndexing() }
+        service.startIndexing()
+        for _ in 0..<200 where service.libraryIndexingError == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(service.libraryIndexingError)
+        XCTAssertFalse(service.progress.isRunning)
+        XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+        XCTAssertTrue(InitialIndexingExperienceStore.isPending(in: defaults))
+    }
+
+    @MainActor
+    func testIndexLoadFailureIsRecoverableAndDoesNotStartAnotherScan() async throws {
+        let suite = "FailedIndexLoad.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        InitialIndexingExperienceStore.begin(in: defaults)
+        let queue = try DatabaseQueue()
+        let database = AppDatabase(openQueue: { queue }, migrate: { try AppDatabase.migrator.migrate($0) })
+        try await queue.write { try $0.execute(sql: "ALTER TABLE indexed_photos RENAME TO saved_photos") }
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: SearchEngine(database: database), database: database,
+            initialIndexingDefaults: defaults
+        )
+        defer { service.stopIndexing() }
+        let failedLoad = await service.checkAndLoadExistingIndex(scheduleOrphanCleanup: false)
+        XCTAssertFalse(failedLoad)
+        XCTAssertNotNil(service.indexLoadError)
+        XCTAssertFalse(service.progress.isRunning)
+        XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+        try await queue.write { try $0.execute(sql: "ALTER TABLE saved_photos RENAME TO indexed_photos") }
+        _ = await service.loadExistingIndexIfAvailable()
+        XCTAssertNil(service.indexLoadError)
+    }
+
+    func testPendingLegacyFlagsOverrideStaleCompletion() {
+        let suite = "ConflictingInitialFlags.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: AppKeys.initialIndexingExperiencePending)
+        defaults.set(true, forKey: AppKeys.initialIndexingExperienceCompleted)
+        XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+    }
+
+    @MainActor
+    func testRelaunchResumesStoppedPartialRunAsInitialIndexing() async {
+        let suite = "StoppedInitialRelaunch.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        InitialIndexingExperienceStore.begin(in: defaults)
+        InitialIndexingExperienceStore.stop(in: defaults)
+        let service = makeSurpriseLaunchService(
+            database: SearchFixtureDatabase(photos: [surpriseFixturePhoto()]),
+            cachedState: SurpriseQueryCache.State(validatedQueries: [], lastValidatedCount: 0),
+            initialIndexingDefaults: defaults
+        )
+        defer { service.stopIndexing() }
+        let loaded = await service.checkAndLoadExistingIndex(scheduleOrphanCleanup: false)
+        XCTAssertTrue(loaded)
+        XCTAssertTrue(service.shouldShowInitialIndexingExperience)
+        XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+    }
+
+    @MainActor
+    func testIncrementalRefreshRendersHomeAndProgressInsteadOfSetup() async throws {
+        let suiteName = "IncrementalHomeRenderingTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        InitialIndexingExperienceStore.complete(in: defaults)
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        try database.insertPhoto(makeOrphanPolicyPhoto(localIdentifier: "existing-photo"))
+        let engine = SearchEngine(textEncoder: FakeTextEncoder([:]), database: database)
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: engine, database: database, initialIndexingDefaults: defaults
+        )
+        let loaded = await service.loadExistingIndexIfAvailable()
+        XCTAssertTrue(loaded)
+        // Replacing indexed media invalidates the resident snapshot until reload.
+        engine.dropIndex()
+        service.isReady = false
+        service.progress = .init(total: 10, completed: 1, isRunning: true,
+                                 phase: .photos, searchableCount: 1)
+        let runtime = SemanticSearchRuntime()
+        runtime.markIndexUnavailable()
+        let screen = MainTabView(indexingService: service, searchEngine: engine,
+                                 semanticRuntime: runtime, retrySemanticWarmup: {})
+            .environment(\.database, database)
+            .preferredColorScheme(.dark)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIHostingController(rootView: screen)
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+            service.stopIndexing()
+        }
+        for checkingAvailability in [false, true] {
+            if checkingAvailability { runtime.markIndexWarming(promoted: false) }
+            // Let SwiftUI finish layout and its asynchronous home-data load.
+            try await Task.sleep(for: .milliseconds(500))
+            window.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "Incremental home — checking=\(checkingAvailability)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
+            let visibleText = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                .joined(separator: " ").lowercased()
+            XCTAssertTrue(visibleText.contains("building photo search"), visibleText)
+            XCTAssertTrue(visibleText.contains("today in your memories"), visibleText)
+            XCTAssertFalse(visibleText.contains("build search index"), visibleText)
+            XCTAssertFalse(visibleText.contains("make your library searchable"), visibleText)
+            XCTAssertFalse(visibleText.contains("a few memories while indexing"), visibleText)
+        }
+    }
+
+    func testNormalHomeSurvivesReadinessAndProgressTransitions() {
+        for ready in [false, true] {
+            for running in [false, true] {
+                XCTAssertTrue(IndexingHomePresentationPolicy.showsNormalHome(
+                    hasKnownExistingIndex: true, isReady: ready,
+                    isRunning: running, isPaused: false, rebuildRequired: false
+                ))
+            }
+        }
+        XCTAssertTrue(IndexingHomePresentationPolicy.showsNormalHome(
+            hasKnownExistingIndex: false, isReady: false,
+            isRunning: true, isPaused: false, rebuildRequired: false
         ))
-        // Later runs must not fall through to the empty/home library count.
-        XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
-            isInitialLibraryWorkflowActive: false,
-            isRunning: true, isPaused: false, hasQuery: false
-        ))
-        XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
-            isInitialLibraryWorkflowActive: false,
-            isRunning: false, isPaused: true, hasQuery: false
-        ))
-        // Completion or an explicit stop returns to the regular home screen.
-        XCTAssertFalse(IndexingHomePresentationPolicy.showsSlideshow(
-            isInitialLibraryWorkflowActive: false,
-            isRunning: false, isPaused: false, hasQuery: false
+        XCTAssertTrue(IndexingHomePresentationPolicy.showsNormalHome(
+            hasKnownExistingIndex: false, isReady: false,
+            isRunning: false, isPaused: true, rebuildRequired: false
         ))
     }
 
-    func testIndexingSlideshowDoesNotCoverQueriesDuringLaterRuns() {
-        for isPaused in [false, true] {
+    func testNormalHomeDoesNotHideRealSetupOrRequiredRebuild() {
+        XCTAssertFalse(IndexingHomePresentationPolicy.showsNormalHome(
+            hasKnownExistingIndex: false, isReady: false,
+            isRunning: false, isPaused: false, rebuildRequired: false
+        ))
+        XCTAssertFalse(IndexingHomePresentationPolicy.showsNormalHome(
+            hasKnownExistingIndex: true, isReady: true,
+            isRunning: true, isPaused: true, rebuildRequired: true
+        ))
+    }
+
+    func testIncrementalIndexingNeverShowsSlideshow() {
+        for phase in [IndexingPhase.idle, .photos, .videos, .enrichment] {
             XCTAssertFalse(IndexingHomePresentationPolicy.showsSlideshow(
-                isInitialLibraryWorkflowActive: false,
-                isRunning: !isPaused, isPaused: isPaused, hasQuery: true
+                isInitialLibraryWorkflowActive: false, phase: phase
+            ), "Incremental indexing must preserve the home screen: \(phase)")
+        }
+    }
+
+    @MainActor
+    func testRebuildStartsInitialExperienceAfterPreviousIndexCompleted() async throws {
+        for useRequiredRebuildEntryPoint in [false, true] {
+            let suiteName = "RebuildSlideshowTests.\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suiteName)!
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            InitialIndexingExperienceStore.complete(in: defaults)
+            let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                       migrate: { try AppDatabase.migrator.migrate($0) })
+            try database.resetIndexedMedia()
+            let service = IndexingService(
+                imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+                searchEngine: SearchEngine(database: database), database: database,
+                initialIndexingDefaults: defaults
+            )
+            _ = await service.loadExistingIndexIfAvailable()
+            XCTAssertTrue(service.indexRebuildRequired)
+            if useRequiredRebuildEntryPoint {
+                service.rebuildRequiredIndex()
+            } else {
+                // The settings reset calls startIndexing after committing its reset.
+                service.startIndexing()
+            }
+            XCTAssertTrue(service.shouldShowInitialIndexingExperience)
+            XCTAssertTrue(InitialIndexingExperienceStore.isPending(in: defaults))
+            XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
+                isInitialLibraryWorkflowActive: service.shouldShowInitialIndexingExperience,
+                phase: service.progress.phase
+            ))
+            service.stopIndexing()
+        }
+    }
+
+    @MainActor
+    func testResumedInitialIndexWithSearchablePhotosKeepsSlideshow() async {
+        let suiteName = "ResumedSlideshowTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        InitialIndexingExperienceStore.begin(in: defaults)
+        let service = makeSurpriseLaunchService(
+            database: SearchFixtureDatabase(photos: [surpriseFixturePhoto()]),
+            cachedState: .init(validatedQueries: [], lastValidatedCount: 0),
+            initialIndexingDefaults: defaults
+        )
+        let loaded = await service.loadExistingIndexIfAvailable()
+        XCTAssertTrue(loaded)
+        XCTAssertTrue(service.isReady)
+        service.startIndexing()
+        XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
+            isInitialLibraryWorkflowActive: service.shouldShowInitialIndexingExperience,
+            phase: service.progress.phase
+        ))
+        service.stopIndexing()
+    }
+
+    @MainActor
+    func testCompletedLibraryKeepsHomeDuringBothIncrementalEntryPoints() async {
+        for useNewPhotosEntryPoint in [false, true] {
+            let suiteName = "IncrementalSlideshowTests.\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suiteName)!
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            InitialIndexingExperienceStore.complete(in: defaults)
+            let service = makeSurpriseLaunchService(
+                database: SearchFixtureDatabase(photos: [surpriseFixturePhoto()]),
+                cachedState: .init(validatedQueries: [], lastValidatedCount: 0),
+                initialIndexingDefaults: defaults
+            )
+            _ = await service.loadExistingIndexIfAvailable()
+            if useNewPhotosEntryPoint {
+                service.indexNewPhotosOnly()
+            } else {
+                service.startIndexing()
+            }
+            XCTAssertTrue(service.progress.isRunning)
+            for phase in [IndexingPhase.idle, .photos, .videos] {
+                service.progress.phase = phase
+                XCTAssertFalse(IndexingHomePresentationPolicy.showsSlideshow(
+                    isInitialLibraryWorkflowActive: service.shouldShowInitialIndexingExperience,
+                    phase: service.progress.phase
+                ))
+            }
+            service.stopIndexing()
+        }
+    }
+
+    func testIndexingHomeShowsSlideshowThroughInitialWorkflowAndReindexing() {
+        // Fresh/resumed indexing and rebuilds keep the slideshow between phases.
+        for phase in [IndexingPhase.idle, .photos, .videos] {
+            XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
+                isInitialLibraryWorkflowActive: true, phase: phase
             ))
         }
-        // Initial setup retains its existing presentation until ready.
-        XCTAssertTrue(IndexingHomePresentationPolicy.showsSlideshow(
-            isInitialLibraryWorkflowActive: true,
-            isRunning: true, isPaused: false, hasQuery: true
+        // Completion or an explicit stop returns to the regular home screen.
+        XCTAssertFalse(IndexingHomePresentationPolicy.showsSlideshow(
+            isInitialLibraryWorkflowActive: false
         ))
     }
 
@@ -1224,7 +1489,10 @@ final class IndexingPolicyTests: XCTestCase {
         service.stopIndexing()
         XCTAssertFalse(service.isInitialIndexingExperiencePending)
         XCTAssertFalse(service.isInitialLibraryIndexingActive)
-        XCTAssertTrue(InitialIndexingExperienceStore.isCompleted(in: defaults))
+        XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+        service.startIndexing()
+        XCTAssertTrue(service.isInitialLibraryIndexingActive)
+        service.stopIndexing()
     }
 
     @MainActor
@@ -2007,15 +2275,9 @@ final class IndexingPolicyTests: XCTestCase {
 
     func testEnrichmentNeverTakesOverTheSearchHome() {
         for initial in [false, true] {
-            for query in [false, true] {
-                XCTAssertFalse(IndexingHomePresentationPolicy.showsSlideshow(
-                    isInitialLibraryWorkflowActive: initial,
-                    isRunning: true,
-                    isPaused: false,
-                    hasQuery: query,
-                    phase: .enrichment
-                ))
-            }
+            XCTAssertFalse(IndexingHomePresentationPolicy.showsSlideshow(
+                isInitialLibraryWorkflowActive: initial, phase: .enrichment
+            ))
         }
     }
 
@@ -2253,31 +2515,9 @@ final class IndexingPolicyTests: XCTestCase {
         ))
     }
 
-    func testInitialIndexingExperienceBeginsOnlyWithoutAKnownIndex() {
-        XCTAssertTrue(InitialIndexingExperiencePolicy.shouldBegin(
-            hasKnownExistingIndex: false,
-            hasCompletedInitialExperience: false,
-            isReady: false,
-            searchableCount: 0
-        ))
-        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldBegin(
-            hasKnownExistingIndex: true,
-            hasCompletedInitialExperience: false,
-            isReady: false,
-            searchableCount: 0
-        ))
-        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldBegin(
-            hasKnownExistingIndex: false,
-            hasCompletedInitialExperience: false,
-            isReady: true,
-            searchableCount: 1
-        ))
-        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldBegin(
-            hasKnownExistingIndex: false,
-            hasCompletedInitialExperience: true,
-            isReady: false,
-            searchableCount: 0
-        ))
+    func testInitialIndexingExperienceDependsOnCompletedBaseScan() {
+        XCTAssertTrue(InitialIndexingExperiencePolicy.shouldBegin(hasCompletedInitialExperience: false))
+        XCTAssertFalse(InitialIndexingExperiencePolicy.shouldBegin(hasCompletedInitialExperience: true))
     }
 
     func testInitialIndexingExperienceTracksBaseWorkflowActivity() {
@@ -2332,6 +2572,12 @@ final class IndexingPolicyTests: XCTestCase {
         InitialIndexingExperienceStore.complete(in: defaults)
         XCTAssertFalse(InitialIndexingExperienceStore.isPending(in: defaults))
         XCTAssertTrue(InitialIndexingExperienceStore.isCompleted(in: defaults))
+        InitialIndexingExperienceStore.begin(in: defaults)
+        XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+        XCTAssertTrue(InitialIndexingExperienceStore.isPending(in: defaults))
+        InitialIndexingExperienceStore.stop(in: defaults)
+        XCTAssertFalse(InitialIndexingExperienceStore.isCompleted(in: defaults))
+        XCTAssertFalse(InitialIndexingExperienceStore.isPending(in: defaults))
     }
 
     func testPendingInitialIndexWithoutPersistedRowsRequiresLaunchResume() {

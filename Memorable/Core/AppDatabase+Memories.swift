@@ -371,7 +371,7 @@ extension AppDatabase {
                 sql: "SELECT id FROM search_history ORDER BY searchedAt DESC LIMIT ?",
                 arguments: [SearchHistoryPolicy.maximumCount]
             )
-            guard index < rows.count else { return }
+            guard rows.indices.contains(index) else { return }
             let id: Int64 = rows[index]["id"]
             try db.execute(sql: "DELETE FROM search_history WHERE id = ?", arguments: [id])
         }

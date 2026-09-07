@@ -533,6 +533,71 @@ final class SmartQueryParserConcurrencyTests: XCTestCase {
         XCTAssertEqual(hints.locationHint?.lowercased(), "berlin")
     }
 
+    func testMissingModelVisualContentPreservesTheLocalSearchQuery() async {
+        for visualDescription in ["", " \n\t ", "photos"] {
+            let parser = SmartQueryParser(isAvailable: true) {
+                FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                    visualDescription: visualDescription,
+                    startDate: nil,
+                    endDate: nil,
+                    locationName: nil,
+                    negativeTerms: []
+                ))
+            }
+
+            let hints = await parser.parse(query: "dog -cat")
+
+            XCTAssertTrue(hints.hasVisualQuery, "Model output: \(visualDescription.debugDescription)")
+            XCTAssertEqual(hints.textQuery, "dog")
+            XCTAssertEqual(hints.textMatchQuery, "dog")
+            XCTAssertEqual(hints.negativeTerms, ["cat"])
+            XCTAssertNil(hints.locationHint)
+            XCTAssertNil(hints.dateRange)
+        }
+    }
+
+    func testMissingModelVisualContentDoesNotReplaceTheQueryWithAnInventedPlace() async {
+        let parser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "",
+                startDate: nil,
+                endDate: nil,
+                locationName: "Berlin",
+                negativeTerms: []
+            ))
+        }
+
+        let hints = await parser.parse(query: "dog")
+
+        XCTAssertTrue(hints.hasVisualQuery)
+        XCTAssertEqual(hints.textQuery, "dog")
+        XCTAssertEqual(hints.textMatchQuery, "dog")
+        XCTAssertNil(hints.locationHint)
+    }
+
+    func testMissingModelVisualContentPreservesDateOnlyAndEmptyQuerySemantics() async {
+        let parser = SmartQueryParser(isAvailable: true) {
+            FixedParsedQueryResponder(parsedQuery: ParsedQuery(
+                visualDescription: "",
+                startDate: nil,
+                endDate: nil,
+                locationName: nil,
+                negativeTerms: []
+            ))
+        }
+
+        let dateOnly = await parser.parse(query: "2022")
+        XCTAssertFalse(dateOnly.hasVisualQuery)
+        XCTAssertNotNil(dateOnly.dateRange)
+        XCTAssertEqual(dateOnly.textMatchQuery, "")
+
+        let empty = await parser.parse(query: "")
+        XCTAssertFalse(empty.hasVisualQuery)
+        XCTAssertNil(empty.dateRange)
+        XCTAssertNil(empty.locationHint)
+        XCTAssertEqual(empty.textMatchQuery, "")
+    }
+
     func testDeterministicFiltersRemoveModelRetainedFilterTokensFromVisualQuery() async {
         let parser = SmartQueryParser(isAvailable: true) {
             FixedParsedQueryResponder(parsedQuery: ParsedQuery(

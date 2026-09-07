@@ -881,11 +881,11 @@ final class ProjectConfigurationTests: XCTestCase {
             "@Published private(set) var indexingService: IndexingService?"
         ))
         XCTAssertTrue(searchView.contains("semanticRuntime.isCheckingIndexAvailability"))
-        let preparedServiceCondition = "if let indexingService, let searchEngine, !semanticRuntime.isCheckingIndexAvailability"
+        let preparedServiceCondition = "if let indexingService, let searchEngine, canPresentTabs"
         XCTAssertEqual(
             mainTabView.components(separatedBy: preparedServiceCondition).count - 1,
             2,
-            "Both tabs must keep the same preparation shell until index loading finishes"
+            "Both tabs must share bootstrap readiness without replacing established screens during reloads"
         )
         let searchBar = try sourceSection(
             in: searchView,
