@@ -19,14 +19,13 @@ enum FolderDisplayNamePolicy {
 }
 
 enum FolderSourceRegistration {
-    @MainActor
     static func register(
         bookmarkData: Data,
         sourceId: String,
-        persistBookmark: (Data) throws -> Void,
+        persistBookmark: @Sendable (Data) throws -> Void,
         insertSource: @escaping @Sendable () throws -> Void,
         removeSource: @escaping @Sendable () throws -> Void,
-        removeBookmark: () throws -> Void
+        removeBookmark: @Sendable () throws -> Void
     ) async throws {
         _ = sourceId
         try persistBookmark(bookmarkData)
@@ -164,7 +163,11 @@ final class FolderIndexingWorker {
             logger.error("Refusing to re-index a non-folder source")
             return .failed
         }
-        guard let url = FolderScanner.resolveBookmark(forSourceId: source.id) else {
+        let url = await FolderFileReadOperation.run {
+            FolderScanner.resolveBookmark(forSourceId: source.id)
+        }
+        guard !Task.isCancelled else { return .cancelled }
+        guard let url = url ?? nil else {
             callbacks.reportError("Memorable can no longer access \(source.name). Remove it and add the folder again.")
             logger.error("Could not resolve a saved folder bookmark for re-indexing")
             return .failed
@@ -212,11 +215,15 @@ final class FolderIndexingWorker {
         if existingSource == nil {
             let bookmarkData: Data
             do {
-                bookmarkData = try url.bookmarkData(
-                    options: .minimalBookmark,
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil
-                )
+                bookmarkData = try await CancellableDetachedOperation.run {
+                    try url.bookmarkData(
+                        options: .minimalBookmark,
+                        includingResourceValuesForKeys: nil,
+                        relativeTo: nil
+                    )
+                }
+            } catch is CancellationError {
+                return .cancelled
             } catch {
                 callbacks.reportError("Memorable could not save access to this folder. Try again.")
                 logger.error("Failed to save folder bookmark: \(error.safeDiagnosticCode)")

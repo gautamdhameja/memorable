@@ -38,12 +38,12 @@ final class SearchViewModel: ObservableObject {
         let searchForHistoryPreview: (String) async throws -> SearchResponse
         let detectScreenshotIDs: ([SearchResult]) async -> Set<String>
         let validResultIDs: ([SearchResult]) async -> Set<String>
-        let addHistory: (String, SearchResult, Int) -> Void
-        let backfillHistoryPreviews: ([RecentSearchPreview]) -> Bool
-        let loadHistory: () -> [String]
-        let loadHistoryPreviews: () -> [RecentSearchPreview]
-        let clearHistory: () -> Void
-        let removeHistory: (Int) -> Void
+        let addHistory: (String, SearchResult, Int) async -> Void
+        let backfillHistoryPreviews: ([RecentSearchPreview]) async -> Bool
+        let loadHistory: () async -> [String]
+        let loadHistoryPreviews: () async -> [RecentSearchPreview]
+        let clearHistory: () async -> Void
+        let removeHistory: (Int) async -> Void
         let now: () -> TimeInterval
         var searchActivityChanged: (Bool) -> Void = { _ in }
     }
@@ -90,6 +90,10 @@ final class SearchViewModel: ObservableObject {
     private var recentSearchPreviewBackfillTask: Task<Void, Never>?
     private var recentSearchPreviewBackfillSequence = 0
     private var recentSearchPreviewNoResultQueries = Set<String>()
+    private var historyUpdateTask: Task<Void, Never>?
+    private var historyUpdateID = 0
+    private var historyGeneration = 0
+    private var hasRequestedHistoryUpdate = false
 
     init(dependencies: Dependencies) {
         self.dependencies = dependencies
@@ -186,21 +190,15 @@ final class SearchViewModel: ObservableObject {
     }
 
     func loadSearchHistory() {
-        setSearchHistory(dependencies.loadHistory())
+        enqueueHistoryUpdate {}
     }
 
     func setSearchHistory(
         _ history: [String],
-        previews: [RecentSearchPreview]? = nil
+        previews: [RecentSearchPreview] = []
     ) {
         searchHistory = history
-        if let previews {
-            recentSearchPreviews = previews
-        } else if history.isEmpty {
-            recentSearchPreviews = []
-        } else {
-            recentSearchPreviews = dependencies.loadHistoryPreviews()
-        }
+        recentSearchPreviews = previews
         isSearchHistoryLoaded = true
     }
 
@@ -208,12 +206,13 @@ final class SearchViewModel: ObservableObject {
         _ history: [String],
         previews: [RecentSearchPreview]
     ) {
-        guard !isSearchHistoryLoaded else { return }
+        guard !isSearchHistoryLoaded, !hasRequestedHistoryUpdate else { return }
         setSearchHistory(history, previews: previews)
     }
 
     func beginIndexReset() {
         isIndexResetting = true
+        historyGeneration += 1
         setQueryText("")
         cancelRecentSearchPreviewBackfill()
         dismissLastResults()
@@ -227,14 +226,55 @@ final class SearchViewModel: ObservableObject {
     }
 
     func clearSearchHistory() {
-        dependencies.clearHistory()
-        setSearchHistory([])
+        guard !isIndexResetting else { return }
+        cancelRecentSearchPreviewBackfill()
+        enqueueHistoryUpdate { [dependencies] in await dependencies.clearHistory() }
         dismissLastResults()
     }
 
     func removeSearchHistory(at index: Int) {
-        dependencies.removeHistory(index)
-        setSearchHistory(dependencies.loadHistory())
+        guard !isIndexResetting, searchHistory.indices.contains(index) else { return }
+        let query = searchHistory[index]
+        enqueueHistoryUpdate { [dependencies] in
+            let current = await dependencies.loadHistory()
+            if let currentIndex = current.firstIndex(of: query) {
+                await dependencies.removeHistory(currentIndex)
+            }
+        }
+    }
+
+    /// Keep accepted writes ordered without making the UI wait on SQLite.
+    /// Reset invalidates queued writes and drains any already-started write
+    /// before deleting history in the index-reset transaction.
+    @discardableResult
+    private func enqueueHistoryUpdate(
+        _ mutation: @escaping @MainActor () async -> Void
+    ) -> Task<Void, Never> {
+        let previous = historyUpdateTask
+        let generation = historyGeneration
+        historyUpdateID += 1
+        let updateID = historyUpdateID
+        hasRequestedHistoryUpdate = true
+        let task = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self else { return }
+            defer {
+                if historyUpdateID == updateID { historyUpdateTask = nil }
+            }
+            guard generation == historyGeneration, !isIndexResetting else { return }
+            await mutation()
+            guard generation == historyGeneration, !isIndexResetting else { return }
+            let history = await dependencies.loadHistory()
+            let previews = await dependencies.loadHistoryPreviews()
+            guard generation == historyGeneration, !isIndexResetting else { return }
+            setSearchHistory(history, previews: previews)
+        }
+        historyUpdateTask = task
+        return task
+    }
+
+    func waitForHistoryUpdates() async {
+        await historyUpdateTask?.value
     }
 
     func dismissLastResults() {
@@ -474,8 +514,10 @@ final class SearchViewModel: ObservableObject {
         guard !Task.isCancelled,
               normalizedQuery.isEmpty,
               recentSearchPreviewBackfillSequence == backfillID else { return }
-        guard dependencies.backfillHistoryPreviews(previews) else { return }
-        setSearchHistory(dependencies.loadHistory())
+        let completedPreviews = previews
+        await enqueueHistoryUpdate { [dependencies] in
+            _ = await dependencies.backfillHistoryPreviews(completedPreviews)
+        }.value
     }
 
     func waitForVisibleResultValidation() async {
@@ -530,13 +572,14 @@ final class SearchViewModel: ObservableObject {
             startScreenshotDetection(for: response.results)
 
             if !response.results.isEmpty {
-                if saveToHistory {
-                    dependencies.addHistory(query, response.results[0], response.results.count)
-                    setSearchHistory(dependencies.loadHistory())
-                }
                 lastQuery = query
                 lastResults = response.results
                 recordSuccessfulSearch()
+                if saveToHistory {
+                    await enqueueHistoryUpdate { [dependencies] in
+                        await dependencies.addHistory(query, response.results[0], response.results.count)
+                    }.value
+                }
             }
         } catch {
             logger.error("[SearchViewModel #\(searchID)] Search failed: \(error.safeDiagnosticCode)")

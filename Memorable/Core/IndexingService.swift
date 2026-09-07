@@ -98,7 +98,9 @@ class IndexingService: ObservableObject {
     private var geocodingRetryTask: Task<Void, Never>?
     private var geocodingRetryAttempt = 0
     private var isApplicationActive = false
-    private var isUserSearchActive = false
+    private(set) var isUserSearchActive = false
+    private let primaryUserSearchID = UUID()
+    private var activeUserSearchIDs = Set<UUID>()
     private var proEntitlementObservation: AnyCancellable?
     private var scheduledSavedFolderSourceIDs: Set<String> = []
     private var thermalSafetyState = ThermalIndexingState()
@@ -117,7 +119,7 @@ class IndexingService: ObservableObject {
 
     var onIndexReady: (() -> Void)?
     var onIndexUnavailable: (() -> Void)?
-    var onIndexResetStarted: (() -> Void)?
+    var onIndexResetStarted: (() async -> Void)?
     var onIndexResetFinished: ((Bool) -> Void)?
 
     var canShowValidatedSearchSuggestions: Bool {
@@ -540,6 +542,18 @@ class IndexingService: ObservableObject {
     }
 
     func setUserSearchActive(_ active: Bool) {
+        setUserSearchActive(active, id: primaryUserSearchID)
+    }
+
+    /// Each search surface owns its pause until its operation has drained.
+    /// Finishing one request must not resume maintenance under another one.
+    func setUserSearchActive(_ active: Bool, id: UUID) {
+        if active {
+            activeUserSearchIDs.insert(id)
+        } else {
+            activeUserSearchIDs.remove(id)
+        }
+        let active = !activeUserSearchIDs.isEmpty
         guard isUserSearchActive != active else { return }
         isUserSearchActive = active
         if active {
@@ -690,7 +704,7 @@ class IndexingService: ObservableObject {
               ) else {
             throw DuplicatePhotoDeletionError.deviceTooWarm
         }
-        guard let asset = PhotoLibrary.getAsset(by: localIdentifier) else {
+        guard let asset = await PhotoLibrary.resolveAsset(by: localIdentifier) else {
             throw DuplicatePhotoDeletionError.assetUnavailable
         }
 
@@ -983,7 +997,7 @@ class IndexingService: ObservableObject {
 
     private func resetMediaIndex() async throws {
         try Task.checkCancellation()
-        onIndexResetStarted?()
+        await onIndexResetStarted?()
         var didReset = false
         defer { onIndexResetFinished?(didReset) }
         let db = database

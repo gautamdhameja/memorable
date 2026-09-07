@@ -173,12 +173,24 @@ final class PhotoShareCoordinator: ObservableObject {
     }
 }
 
+private struct UserSearchActivityKey: EnvironmentKey {
+    static let defaultValue: @MainActor @Sendable (Bool, UUID) -> Void = { _, _ in }
+}
+
+extension EnvironmentValues {
+    var userSearchActivity: @MainActor @Sendable (Bool, UUID) -> Void {
+        get { self[UserSearchActivityKey.self] }
+        set { self[UserSearchActivityKey.self] = newValue }
+    }
+}
+
 struct SearchResultsViewer: View {
     let initialResult: SearchResult
     let allResults: [SearchResult]
     var searchEngine: SearchEngine? = nil
 
     @Environment(\.database) private var database
+    @Environment(\.userSearchActivity) private var userSearchActivity
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var nearbyPhoto: SearchResult?
     @State private var recognizedText: String?
@@ -523,9 +535,14 @@ struct SearchResultsViewer: View {
         let generation = findSimilarGeneration
         let photoID = displayedResults[currentIndex].id
         let featurePolicy = ProFeatureAccessPolicy(isPro: proManager.isPro)
+        let searchActivity = userSearchActivity
         isFindingSimilar = true
 
         findSimilarTask = Task { @MainActor in
+            guard !Task.isCancelled else { return }
+            let activityID = UUID()
+            searchActivity(true, activityID)
+            defer { searchActivity(false, activityID) }
             let similar = await SimilaritySearchOperation.run {
                 searchEngine.findSimilar(photoId: photoID, featurePolicy: featurePolicy)
             }

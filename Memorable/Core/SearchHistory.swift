@@ -126,34 +126,36 @@ enum RecentSearchHomePolicy {
 class SearchHistory {
     private static var db: DatabaseProtocol { AppDatabase.shared }
 
-    static func add(query: String, previewResult: SearchResult, resultCount: Int) {
+    static func add(query: String, previewResult: SearchResult, resultCount: Int) async {
         do {
             let boundedQuery = QueryInputPolicy.bounded(query)
-            try db.addSearchHistory(
-                boundedQuery,
-                preview: RecentSearchPreview(
-                    query: boundedQuery,
-                    result: previewResult,
-                    resultCount: resultCount
+            try await CancellableDetachedOperation.run {
+                try db.addSearchHistory(
+                    boundedQuery,
+                    preview: RecentSearchPreview(
+                        query: boundedQuery,
+                        result: previewResult,
+                        resultCount: resultCount
+                    )
                 )
-            )
+            }
         } catch {
             logger.error("Failed to save search history: \(error.safeDiagnosticCode)")
         }
     }
 
-    static func load() -> [String] {
+    static func load() async -> [String] {
         do {
-            return try db.loadSearchHistory()
+            return try await CancellableDetachedOperation.run { try db.loadSearchHistory() }
         } catch {
             logger.error("Failed to load search history: \(error.safeDiagnosticCode)")
             return []
         }
     }
 
-    static func loadPreviews(limit: Int = RecentSearchHomePolicy.maximumVisibleCount) -> [RecentSearchPreview] {
+    static func loadPreviews(limit: Int = RecentSearchHomePolicy.maximumVisibleCount) async -> [RecentSearchPreview] {
         do {
-            return try db.loadSearchHistoryPreviews(limit: limit)
+            return try await CancellableDetachedOperation.run { try db.loadSearchHistoryPreviews(limit: limit) }
         } catch {
             logger.error("Failed to load search history previews: \(error.safeDiagnosticCode)")
             return []
@@ -161,9 +163,9 @@ class SearchHistory {
     }
 
     @discardableResult
-    static func backfill(previews: [RecentSearchPreview]) -> Bool {
+    static func backfill(previews: [RecentSearchPreview]) async -> Bool {
         do {
-            try db.backfillSearchHistoryPreviews(previews)
+            try await CancellableDetachedOperation.run { try db.backfillSearchHistoryPreviews(previews) }
             return true
         } catch {
             logger.error("Failed to backfill search history preview: \(error.safeDiagnosticCode)")
@@ -171,17 +173,17 @@ class SearchHistory {
         }
     }
 
-    static func clear() {
+    static func clear() async {
         do {
-            try db.clearSearchHistory()
+            try await CancellableDetachedOperation.run { try db.clearSearchHistory() }
         } catch {
             logger.error("Failed to clear search history: \(error.safeDiagnosticCode)")
         }
     }
 
-    static func remove(at index: Int) {
+    static func remove(at index: Int) async {
         do {
-            try db.removeSearchHistory(at: index)
+            try await CancellableDetachedOperation.run { try db.removeSearchHistory(at: index) }
         } catch {
             logger.error("Failed to remove search history item: \(error.safeDiagnosticCode)")
         }

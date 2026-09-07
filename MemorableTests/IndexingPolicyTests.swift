@@ -1595,6 +1595,33 @@ final class IndexingPolicyTests: XCTestCase {
     }
 
     @MainActor
+    func testIndexResetWaitsForPendingHistoryPersistence() async throws {
+        let database = AppDatabase(openQueue: { try DatabaseQueue() },
+                                   migrate: { try AppDatabase.migrator.migrate($0) })
+        try database.addSearchHistory("before reset")
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: SearchEngine(database: database), database: database
+        )
+        let gate = AsyncMutationGate()
+        let draining = expectation(description: "draining history")
+        service.onIndexResetStarted = {
+            draining.fulfill()
+            await gate.wait()
+            // Simulate the final write accepted before the reset request.
+            try? database.addSearchHistory("late write")
+        }
+        service.onIndexResetFinished = { _ in withUnsafeCurrentTask { $0?.cancel() } }
+        let reset = Task { try await service.rebuildLibraryIndex() }
+        await fulfillment(of: [draining], timeout: 1)
+        XCTAssertEqual(try database.loadSearchHistory(), ["before reset"])
+        await gate.open()
+        _ = try? await reset.value
+        XCTAssertTrue(try database.loadSearchHistory().isEmpty)
+        XCTAssertTrue(try database.indexRebuildRequired())
+    }
+
+    @MainActor
     func testCommittedIndexResetPublishesHistoryResetBeforeCancellationStopsReindexing() async throws {
         let database = AppDatabase(openQueue: { try DatabaseQueue() },
                                    migrate: { try AppDatabase.migrator.migrate($0) })
@@ -1770,22 +1797,65 @@ final class IndexingPolicyTests: XCTestCase {
     }
 
     func testFolderRegistrationRemovesBookmarkWhenSourceInsertFails() async {
-        var bookmark: Data?
+        let bookmark = OSAllocatedUnfairLock(initialState: Optional<Data>.none)
 
         do {
             try await FolderSourceRegistration.register(
                 bookmarkData: Data([1, 2, 3]),
                 sourceId: "source-1",
-                persistBookmark: { bookmark = $0 },
+                persistBookmark: { data in bookmark.withLock { $0 = data } },
                 insertSource: { throw RegistrationTestError.insertFailed },
                 removeSource: {},
-                removeBookmark: { bookmark = nil }
+                removeBookmark: { bookmark.withLock { $0 = nil } }
             )
             XCTFail("Expected source insertion to fail")
         } catch {
             XCTAssertEqual(error as? RegistrationTestError, .insertFailed)
         }
-        XCTAssertNil(bookmark)
+        XCTAssertNil(bookmark.withLock { $0 })
+    }
+
+    @MainActor
+    func testFolderBookmarkPersistenceAndRollbackRunOffMainThread() async {
+        let persisted = ThreadObservation()
+        let removed = ThreadObservation()
+        do {
+            try await FolderSourceRegistration.register(
+                bookmarkData: Data([1]), sourceId: "off-main-bookmark",
+                persistBookmark: { _ in persisted.recordCurrentThread() },
+                insertSource: { throw RegistrationTestError.insertFailed },
+                removeSource: {},
+                removeBookmark: { removed.recordCurrentThread() }
+            )
+            XCTFail("Expected insertion failure")
+        } catch {
+            XCTAssertEqual(error as? RegistrationTestError, .insertFailed)
+        }
+        XCTAssertTrue(persisted.wasCalled)
+        XCTAssertTrue(removed.wasCalled)
+        XCTAssertFalse(persisted.wasOnMainThread)
+        XCTAssertFalse(removed.wasOnMainThread)
+    }
+
+    @MainActor
+    func testSearchSurfacesKeepMaintenancePausedUntilLastRequestFinishes() {
+        let database = SearchFixtureDatabase()
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: SearchEngine(database: database), database: database
+        )
+        let viewer = UUID()
+        let nestedViewer = UUID()
+        service.setUserSearchActive(true)
+        service.setUserSearchActive(true, id: viewer)
+        service.setUserSearchActive(false)
+        XCTAssertTrue(service.isUserSearchActive)
+        service.setUserSearchActive(true, id: nestedViewer)
+        service.setUserSearchActive(false, id: viewer)
+        service.setUserSearchActive(false, id: viewer)
+        XCTAssertTrue(service.isUserSearchActive)
+        service.setUserSearchActive(false, id: nestedViewer)
+        XCTAssertFalse(service.isUserSearchActive)
     }
 
     func testFolderRegistrationDoesNotInsertSourceWhenBookmarkPersistenceFails() async {

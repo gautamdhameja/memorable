@@ -2,6 +2,70 @@ import XCTest
 @testable import Memorable
 
 final class SearchViewModelTests: XCTestCase {
+    @MainActor
+    func testHistoryWriteLeavesResultsUsableAndResetDrainsIt() async {
+        let writer = ControlledSearcher()
+        var stored: [String] = []
+        let model = makeModel(
+            search: { _ in Self.response(ids: ["photo"]) },
+            addHistory: { query, _, _ in
+                _ = try? await writer.search(query: "write")
+                stored.append(query)
+            },
+            loadHistory: { stored }
+        )
+        model.setQueryText("mountains")
+        model.submitSearch(saveToHistory: true)
+        await writer.waitUntilCalled(with: "write")
+        XCTAssertEqual(model.results.map(\.id), ["photo"])
+        // The main actor can still accept input while persistence is pending.
+        model.setQueryText("rivers")
+        XCTAssertEqual(model.queryText, "rivers")
+        model.beginIndexReset()
+        var drained = false
+        let reset = Task { @MainActor in
+            await model.waitForHistoryUpdates()
+            stored.removeAll()
+            model.finishIndexReset(didReset: true)
+            drained = true
+        }
+        await Task.yield()
+        XCTAssertFalse(drained)
+        await writer.complete(query: "write", with: Self.response(ids: []))
+        await reset.value
+        XCTAssertTrue(stored.isEmpty)
+        XCTAssertTrue(model.searchHistory.isEmpty)
+        model.applyInitialSearchHistory(["stale"], previews: [])
+        XCTAssertTrue(model.searchHistory.isEmpty)
+    }
+
+    @MainActor
+    func testResetSkipsHistoryWritesQueuedBehindAnActiveWrite() async {
+        let writer = ControlledSearcher()
+        var savedQueries: [String] = []
+        let model = makeModel(
+            search: { _ in Self.response(ids: ["photo"]) },
+            addHistory: { query, _, _ in
+                if query == "first" { _ = try? await writer.search(query: "write") }
+                savedQueries.append(query)
+            }
+        )
+        model.setQueryText("first")
+        model.submitSearch(saveToHistory: true)
+        await writer.waitUntilCalled(with: "write")
+        model.setQueryText("second")
+        model.submitSearch(saveToHistory: true)
+        // Let the second search enqueue its save behind the first.
+        for _ in 0..<1_000 where model.lastSearchedQuery != "second" { await Task.yield() }
+        XCTAssertEqual(model.lastSearchedQuery, "second")
+        model.beginIndexReset()
+        await writer.complete(query: "write", with: Self.response(ids: []))
+        await model.waitForHistoryUpdates()
+        XCTAssertEqual(savedQueries, ["first"])
+        model.finishIndexReset(didReset: true)
+        XCTAssertTrue(model.searchHistory.isEmpty)
+    }
+
     private enum ExpectedError: LocalizedError {
         case failure
 
@@ -638,7 +702,7 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDiscoverySuggestionsRequireLoadedEmptyHistory() {
+    func testDiscoverySuggestionsRequireLoadedEmptyHistory() async {
         let model = makeModel(search: { _ in Self.response(ids: []) })
 
         XCTAssertFalse(model.shouldShowDiscoverySuggestions)
@@ -650,10 +714,12 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertFalse(model.shouldShowDiscoverySuggestions)
 
         model.clearSearchHistory()
+        await model.waitForHistoryUpdates()
         XCTAssertTrue(model.shouldShowDiscoverySuggestions)
 
         model.setSearchHistory(["dogs"])
         model.removeSearchHistory(at: 0)
+        await model.waitForHistoryUpdates()
         XCTAssertTrue(model.shouldShowDiscoverySuggestions)
     }
 
@@ -856,10 +922,10 @@ final class SearchViewModelTests: XCTestCase {
         searchForHistoryPreview: ((String) async throws -> SearchResponse)? = nil,
         validate: @escaping ([SearchResult]) async -> Set<String> = { results in Set(results.map(\.id)) },
         detectScreenshots: @escaping ([SearchResult]) async -> Set<String> = { _ in [] },
-        addHistory: @escaping (String, SearchResult, Int) -> Void = { _, _, _ in },
-        loadHistory: @escaping () -> [String] = { [] },
-        loadHistoryPreviews: @escaping () -> [RecentSearchPreview] = { [] },
-        backfillHistoryPreviews: @escaping ([RecentSearchPreview]) -> Bool = { _ in true }
+        addHistory: @escaping (String, SearchResult, Int) async -> Void = { _, _, _ in },
+        loadHistory: @escaping () async -> [String] = { [] },
+        loadHistoryPreviews: @escaping () async -> [RecentSearchPreview] = { [] },
+        backfillHistoryPreviews: @escaping ([RecentSearchPreview]) async -> Bool = { _ in true }
     ) -> SearchViewModel {
         SearchViewModel(dependencies: .init(
             prioritizeUserSearch: prioritizeUserSearch,

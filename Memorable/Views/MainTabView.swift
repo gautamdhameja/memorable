@@ -109,6 +109,9 @@ struct MainTabView: View {
             bottomDock
         }
         .preferredColorScheme(.dark)
+        .environment(\.userSearchActivity, { [weak indexingService] active, id in
+            indexingService?.setUserSearchActive(active, id: id)
+        })
     }
 
     private var bottomDock: some View {

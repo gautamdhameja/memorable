@@ -253,7 +253,7 @@ final class VideoPlaybackCoordinator {
     private var requestGeneration: UInt = 0
     private var activeController: PrivatePlayerViewController?
 
-    func present(_ asset: PHAsset) {
+    func present(localIdentifier: String) {
         requestGeneration &+= 1
         let generation = requestGeneration
         loadTask?.cancel()
@@ -265,7 +265,9 @@ final class VideoPlaybackCoordinator {
                 currentGeneration: self.requestGeneration,
                 isCancelled: Task.isCancelled
             ) else { return }
-            guard let playbackAsset = await PhotoLibrary.loadVideoPlaybackAsset(for: asset) else {
+            guard let asset = await PhotoLibrary.resolveAsset(by: localIdentifier),
+                  !Task.isCancelled,
+                  let playbackAsset = await PhotoLibrary.loadVideoPlaybackAsset(for: asset) else {
                 return
             }
             guard VideoPlaybackRequestPolicy.acceptsCompletion(
@@ -387,8 +389,8 @@ final class VideoPlaybackCoordinator {
 
 /// Presents one private, local-only video player at a time.
 @MainActor
-func presentVideoPlayer(for phAsset: PHAsset) {
-    VideoPlaybackCoordinator.shared.present(phAsset)
+func presentVideoPlayer(localIdentifier: String) {
+    VideoPlaybackCoordinator.shared.present(localIdentifier: localIdentifier)
 }
 
 @MainActor

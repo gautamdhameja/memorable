@@ -1,8 +1,40 @@
 import Photos
 import XCTest
+import os
 @testable import Memorable
 
 final class PhotoChangeObserverTests: XCTestCase {
+    @MainActor
+    func testStoppingObservationDoesNotWaitForPhotoKitFetch() async {
+        let registrar = RecordingPhotoChangeRegistrar()
+        let initialFetch = expectation(description: "initial fetch")
+        let changeFetch = expectation(description: "change fetch blocked")
+        let releaseFetch = DispatchSemaphore(value: 0)
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: [], options: nil)
+        let observer = PhotoChangeObserver(registrar: registrar, fetchMedia: {
+            let call = calls.withLock { $0 += 1; return $0 }
+            if call == 1 {
+                initialFetch.fulfill()
+            } else {
+                changeFetch.fulfill()
+                _ = releaseFetch.wait(timeout: .now() + 3)
+            }
+            return assets
+        })
+        observer.startObserving()
+        await fulfillment(of: [initialFetch], timeout: 1)
+        let change = Task.detached { observer.photoLibraryDidChange(PHChange()) }
+        await fulfillment(of: [changeFetch], timeout: 1)
+        let startedAt = ContinuousClock.now
+        observer.stopObserving()
+        let elapsed = startedAt.duration(to: .now)
+        releaseFetch.signal()
+        await change.value
+        XCTAssertLessThan(elapsed, .seconds(1))
+        XCTAssertEqual(registrar.unregistrationCount, 1)
+    }
+
     func testRegistrationLifecycleIsIdempotentAndDeinitUnregisters() {
         let registrar = RecordingPhotoChangeRegistrar()
         weak var releasedObserver: PhotoChangeObserver?

@@ -281,17 +281,24 @@ final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchec
         initialState: nil
     )
     private let observing = OSAllocatedUnfairLock(initialState: false)
-    private let fetchResult = OSAllocatedUnfairLock<PHFetchResult<PHAsset>?>(
-        initialState: nil
-    )
+    private struct FetchState: Sendable {
+        var result: PHFetchResult<PHAsset>?
+        var revision: UInt = 0
+    }
+    private let fetchResult = OSAllocatedUnfairLock(initialState: FetchState())
     private let registrar: PhotoChangeObservationRegistrar
+    private let fetchMedia: @Sendable () -> PHFetchResult<PHAsset>
 
     override convenience init() {
         self.init(registrar: SystemPhotoChangeObservationRegistrar())
     }
 
-    init(registrar: PhotoChangeObservationRegistrar) {
+    init(
+        registrar: PhotoChangeObservationRegistrar,
+        fetchMedia: @escaping @Sendable () -> PHFetchResult<PHAsset> = { PhotoLibrary.fetchAllMedia() }
+    ) {
         self.registrar = registrar
+        self.fetchMedia = fetchMedia
         super.init()
     }
 
@@ -308,10 +315,15 @@ final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchec
         }
         guard shouldRegister else { return }
         registrar.register(self)
-        Task.detached(priority: .utility) { [weak self] in
-            let initialFetch = PhotoLibrary.fetchAllMedia()
+        let revision = fetchResult.withLock { $0.revision }
+        Task.detached(priority: .utility) { [weak self, fetchMedia] in
+            let initialFetch = fetchMedia()
             guard let self, self.observing.withLock({ $0 }) else { return }
-            self.fetchResult.withLock { $0 = initialFetch }
+            self.fetchResult.withLock {
+                guard $0.revision == revision else { return }
+                $0.result = initialFetch
+                $0.revision &+= 1
+            }
         }
     }
 
@@ -322,46 +334,61 @@ final class PhotoChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchec
             return true
         }
         callback.withLock { $0 = nil }
-        fetchResult.withLock { $0 = nil }
+        fetchResult.withLock {
+            $0.result = nil
+            $0.revision &+= 1
+        }
         guard shouldUnregister else { return }
         registrar.unregister(self)
     }
 
     func photoLibraryDidChange(_ changeInstance: PHChange) {
-        let event = fetchResult.withLock { storedResult -> PhotoLibraryChangeEvent in
-            guard let beforeChanges = storedResult,
-                  let details = changeInstance.changeDetails(for: beforeChanges) else {
-                storedResult = PhotoLibrary.fetchAllMedia()
-                return .fullReconciliation
-            }
-            storedResult = details.fetchResultAfterChanges
-            guard details.hasIncrementalChanges else {
-                return .fullReconciliation
-            }
-            var event = PhotoLibraryChangeEvent()
-            for asset in details.insertedObjects {
-                if asset.mediaType == .video {
-                    event.insertedVideoIDs.insert(asset.localIdentifier)
-                } else {
-                    event.insertedPhotoIDs.insert(asset.localIdentifier)
+        guard observing.withLock({ $0 }) else { return }
+        let before = fetchResult.withLock { $0 }
+        // PhotoKit can perform I/O and materialize many changed assets here.
+        // Never hold the snapshot lock while doing that work: stopObserving
+        // also takes it on the main thread during memory-pressure cleanup.
+        let updated: PHFetchResult<PHAsset>
+        var event = PhotoLibraryChangeEvent.fullReconciliation
+        if let result = before.result,
+           let details = changeInstance.changeDetails(for: result) {
+            updated = details.fetchResultAfterChanges
+            if details.hasIncrementalChanges {
+                event = PhotoLibraryChangeEvent()
+                for asset in details.insertedObjects {
+                    if asset.mediaType == .video {
+                        event.insertedVideoIDs.insert(asset.localIdentifier)
+                    } else {
+                        event.insertedPhotoIDs.insert(asset.localIdentifier)
+                    }
+                }
+                for asset in details.removedObjects {
+                    if asset.mediaType == .video {
+                        event.removedVideoIDs.insert(asset.localIdentifier)
+                    } else {
+                        event.removedPhotoIDs.insert(asset.localIdentifier)
+                    }
+                }
+                for asset in details.changedObjects {
+                    if asset.mediaType == .video {
+                        event.changedVideoIDs.insert(asset.localIdentifier)
+                    } else {
+                        event.changedPhotoIDs.insert(asset.localIdentifier)
+                    }
                 }
             }
-            for asset in details.removedObjects {
-                if asset.mediaType == .video {
-                    event.removedVideoIDs.insert(asset.localIdentifier)
-                } else {
-                    event.removedPhotoIDs.insert(asset.localIdentifier)
-                }
-            }
-            for asset in details.changedObjects {
-                if asset.mediaType == .video {
-                    event.changedVideoIDs.insert(asset.localIdentifier)
-                } else {
-                    event.changedPhotoIDs.insert(asset.localIdentifier)
-                }
-            }
-            return event
+        } else {
+            updated = fetchMedia()
         }
+        let installed = fetchResult.withLock {
+            guard $0.revision == before.revision else { return false }
+            $0.result = updated
+            $0.revision &+= 1
+            return true
+        }
+        // A concurrent change owns a newer snapshot. Reconcile against Photos
+        // instead of replacing it with an out-of-order incremental snapshot.
+        if !installed { event = .fullReconciliation }
         guard event.hasWork else { return }
         enqueueDelivery(event)
     }

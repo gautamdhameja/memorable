@@ -215,7 +215,7 @@ extension PhotoLibrary {
             return try outcome.get()
         }
 
-        guard let asset = getAsset(by: result.localIdentifier),
+        guard let asset = await resolveAsset(by: result.localIdentifier),
               let resource = preferredPhotoResource(for: asset) else {
             throw PhotoSharePreparationError.sourceUnavailable
         }
@@ -321,7 +321,10 @@ extension PhotoLibrary {
             onDiscardedResult: { result in
                 if case .success(let item) = result { item.cleanup() }
             },
-            onCancel: writer.discard
+            // Cancellation handlers run on the cancelling thread, including
+            // the main thread. Drain file I/O below on this async operation's
+            // executor instead of waiting on an active writer in the handler.
+            onCancel: {}
         ) { completion, controller in
             requestData(options, { data in
                 if !writer.append(data) {
@@ -344,6 +347,7 @@ extension PhotoLibrary {
             })
         }
         guard let outcome else {
+            writer.discard()
             if Task.isCancelled { throw CancellationError() }
             throw writer.failure ?? PhotoSharePreparationError.sourceUnavailable
         }

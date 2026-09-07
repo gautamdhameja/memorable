@@ -16,6 +16,8 @@ struct SearchView: View {
     @State private var showSaveAlbum = false
     @State private var albumName = ""
     @State private var smartAlbumError: String?
+    @State private var isUpdatingSmartAlbums = false
+    @State private var smartAlbumRevision = 0
     @ObservedObject private var proManager = ProManager.shared
     @Environment(\.database) private var database
     @Environment(\.scenePhase) private var scenePhase
@@ -38,7 +40,11 @@ struct SearchView: View {
     // sort state; this wrapper is the SwiftUI persistence adapter.
     @AppStorage(SearchViewModel.sortModeStorageKey) private var sortModeRaw: String = SearchSortMode.relevance.rawValue
 
-    private func saveSmartAlbum() {
+    private func saveSmartAlbum() async {
+        guard !isUpdatingSmartAlbums else { return }
+        isUpdatingSmartAlbums = true
+        smartAlbumRevision += 1
+        defer { isUpdatingSmartAlbums = false }
         let album = SmartAlbum(
             id: UUID().uuidString,
             name: SmartAlbumPolicy.boundedName(albumName),
@@ -46,13 +52,33 @@ struct SearchView: View {
             createdAt: Date()
         )
         do {
-            try database.saveSmartAlbum(album)
+            let database = database
+            try await CancellableDetachedOperation.run {
+                try database.saveSmartAlbum(album)
+            }
             smartAlbums.insert(album, at: 0)
             smartAlbums = Array(smartAlbums.prefix(SmartAlbumPolicy.maximumAlbums))
             albumName = ""
         } catch {
             logger.error("Failed to save smart album: \(error.safeDiagnosticCode)")
             smartAlbumError = "The album couldn’t be saved. Please try again."
+        }
+    }
+
+    private func deleteSmartAlbum(_ album: SmartAlbum) async {
+        guard !isUpdatingSmartAlbums else { return }
+        isUpdatingSmartAlbums = true
+        smartAlbumRevision += 1
+        defer { isUpdatingSmartAlbums = false }
+        do {
+            let database = database
+            try await CancellableDetachedOperation.run {
+                try database.deleteSmartAlbum(id: album.id)
+            }
+            smartAlbums.removeAll { $0.id == album.id }
+        } catch {
+            logger.error("Failed to delete smart album: \(error.safeDiagnosticCode)")
+            smartAlbumError = "The album couldn’t be deleted. Please try again."
         }
     }
 
@@ -163,17 +189,17 @@ struct SearchView: View {
                 }
             },
             addHistory: {
-                SearchHistory.add(
+                await SearchHistory.add(
                     query: $0,
                     previewResult: $1,
                     resultCount: $2
                 )
             },
-            backfillHistoryPreviews: { SearchHistory.backfill(previews: $0) },
-            loadHistory: { SearchHistory.load() },
-            loadHistoryPreviews: { SearchHistory.loadPreviews() },
-            clearHistory: { SearchHistory.clear() },
-            removeHistory: { SearchHistory.remove(at: $0) },
+            backfillHistoryPreviews: { await SearchHistory.backfill(previews: $0) },
+            loadHistory: { await SearchHistory.load() },
+            loadHistoryPreviews: { await SearchHistory.loadPreviews() },
+            clearHistory: { await SearchHistory.clear() },
+            removeHistory: { await SearchHistory.remove(at: $0) },
             now: { CFAbsoluteTimeGetCurrent() },
             searchActivityChanged: { indexingService.setUserSearchActive($0) }
         )))
@@ -323,9 +349,7 @@ struct SearchView: View {
                 if result.isVideo {
                     Color.clear.onAppear {
                         selectedPhoto = nil
-                        if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                            presentVideoPlayer(for: asset)
-                        }
+                        presentVideoPlayer(localIdentifier: result.localIdentifier)
                     }
                 } else {
                     SearchResultsViewer(
@@ -342,9 +366,10 @@ struct SearchView: View {
                 TextField("Album name", text: $albumName)
                 Button("Save") {
                     if !albumName.isEmpty && !viewModel.queryText.isEmpty {
-                        saveSmartAlbum()
+                        Task { await saveSmartAlbum() }
                     }
                 }
+                .disabled(isUpdatingSmartAlbums)
                 Button("Cancel", role: .cancel) { albumName = "" }
             } message: {
                 Text("This album will auto-update when new matching photos are indexed.")
@@ -370,6 +395,7 @@ struct SearchView: View {
             .onAppear {
                 indexingService.onIndexResetStarted = { [weak viewModel] in
                     viewModel?.beginIndexReset()
+                    await viewModel?.waitForHistoryUpdates()
                 }
                 indexingService.onIndexResetFinished = { [weak viewModel] didReset in
                     viewModel?.finishIndexReset(didReset: didReset)
@@ -385,12 +411,13 @@ struct SearchView: View {
                 // Load DB-backed data off the main thread's critical path so
                 // the search bar is tappable immediately on appear.
                 let database = database
+                let albumRevision = smartAlbumRevision
                 async let savedData = Task.detached(priority: .utility) {
-                    let history = SearchHistory.load()
+                    let history = await SearchHistory.load()
                     return (
                         albums: Result { try database.loadSmartAlbums() },
                         history: history,
-                        previews: SearchHistory.loadPreviews()
+                        previews: await SearchHistory.loadPreviews()
                     )
                 }.value
                 async let libraryCount = Task.detached(priority: .utility) {
@@ -400,7 +427,7 @@ struct SearchView: View {
                 guard !Task.isCancelled else { return }
                 switch data.albums {
                 case .success(let albums):
-                    smartAlbums = albums
+                    if albumRevision == smartAlbumRevision { smartAlbums = albums }
                 case .failure(let error):
                     logger.error("Failed to load smart albums: \(error.safeDiagnosticCode)")
                     smartAlbumError = "Your saved albums couldn’t be loaded. Reopen this screen to try again."
@@ -1019,16 +1046,11 @@ struct SearchView: View {
                         .accessibilityHint("Runs the saved search: \(album.query)")
                         .contextMenu {
                             Button(role: .destructive) {
-                                do {
-                                    try database.deleteSmartAlbum(id: album.id)
-                                    smartAlbums.removeAll { $0.id == album.id }
-                                } catch {
-                                    logger.error("Failed to delete smart album: \(error.safeDiagnosticCode)")
-                                    smartAlbumError = "The album couldn’t be deleted. Please try again."
-                                }
+                                Task { await deleteSmartAlbum(album) }
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
+                            .disabled(isUpdatingSmartAlbums)
                         }
                     }
                 }
@@ -1365,9 +1387,7 @@ struct SearchView: View {
                             ForEach(viewModel.fallbackResults) { result in
                                 Button {
                                     if result.isVideo {
-                                        if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                                            presentVideoPlayer(for: asset)
-                                        }
+                                        presentVideoPlayer(localIdentifier: result.localIdentifier)
                                     } else {
                                         // Use fallback results for the viewer since main results are empty.
                                         viewModel.useFallbackResultsForViewer()
@@ -1894,9 +1914,7 @@ struct SearchView: View {
         #endif
         Haptics.selection()
         if result.isVideo {
-            if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                presentVideoPlayer(for: asset)
-            }
+            presentVideoPlayer(localIdentifier: result.localIdentifier)
         } else {
             selectedPhoto = result
         }

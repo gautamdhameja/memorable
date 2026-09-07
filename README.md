@@ -12,6 +12,8 @@ Memorable uses [SigLIP2](https://arxiv.org/abs/2502.14786) (Google, Apache 2.0) 
 
 During initial setup, the app indexes photos first so search becomes available at progressive checkpoints. It then indexes video frames. The main indexing screen ends after photos and videos; optional photo analysis continues later without blocking search.
 
+Search history, saved albums, folder bookmarks, and PhotoKit asset resolution run off the main actor. History writes stay ordered, and an index reset drains pending history persistence before clearing it. Text search and Find Similar in photo viewers pause maintenance until the last active search finishes. Photo-library change handling and share cancellation keep disk work outside locks needed by the UI.
+
 ```text
 Query -> Parse date, location, and exclusions -> Encode visual text locally
       -> Filter local metadata -> Score local embeddings -> Apply local boosts

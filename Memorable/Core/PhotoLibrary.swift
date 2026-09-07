@@ -623,14 +623,6 @@ class PhotoLibrary {
         return PHAsset.fetchAssets(with: options)
     }
 
-    static func getAsset(by localIdentifier: String) -> PHAsset? {
-        if let cached = assetResolver.cachedAsset(for: localIdentifier) {
-            return cached
-        }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
-        return result.firstObject
-    }
-
     static func resolveAsset(by localIdentifier: String) async -> PHAsset? {
         await assetResolver.resolve(localIdentifier)
     }
