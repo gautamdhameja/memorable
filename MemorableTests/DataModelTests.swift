@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import Memorable
 
 final class DataModelTests: XCTestCase {
@@ -100,26 +101,89 @@ final class DataModelTests: XCTestCase {
         XCTAssertEqual(thumbnailTarget.height, 300, accuracy: 0.001)
     }
 
-    func testMemoryGroupsExcludeTheHeroWithoutLeavingEmptySections() {
-        let hero = memoryReference(id: "hero", width: 3_024, height: 4_032)
-        let companion = memoryReference(id: "companion", width: 4_032, height: 3_024)
-        let onlyPhoto = memoryReference(id: "only-photo", width: 4_032, height: 3_024)
-        let groups = [
-            (year: 2025, photos: [hero, companion]),
-            (year: 2024, photos: [onlyPhoto]),
-        ]
+    @MainActor
+    func testLoadedMemoryRowsKeepTheirMetadataBasedHeight() {
+        for size in [CGSize(width: 300, height: 400), CGSize(width: 400, height: 300), CGSize(width: 800, height: 200)] {
+            let reference = memoryReference(id: "layout", width: Int(size.width), height: Int(size.height))
+            let ratio = MemoryCardLayout.aspectRatio(for: reference)
+            let image = memoryLayoutImage(size: size)
+            for width: CGFloat in [125, 190, 390] {
+                let loaded = UIHostingController(rootView:
+                    MemoryPhotoImage(image: image, backgroundBlurRadius: 12)
+                        .aspectRatio(ratio, contentMode: .fit)
+                )
+                let measured = loaded.sizeThatFits(in: CGSize(width: width, height: 1_000))
+                XCTAssertEqual(measured.width, width, accuracy: 0.5, "Loading \(size) must not widen a grid cell")
+                XCTAssertEqual(measured.height, width / ratio, accuracy: 0.5, "Loading \(size) must not move following rows")
+            }
+        }
+    }
 
-        let visible = MemoryYearGroupPresentation.excludingHero(groups, heroID: hero.id)
+    @MainActor
+    func testSearchThumbnailsKeepPlaceholderSizeWhenPhotosOrVideoFramesLoad() {
+        for isVideo in [false, true] {
+            assertStableImageLayout { image in
+                PhotoThumbnailView.imageContent(thumbnail: image, isVideo: isVideo)
+            }
+        }
+    }
 
-        XCTAssertEqual(visible.map(\.year), [2025, 2024])
-        XCTAssertEqual(visible[0].photos.map(\.id), [companion.id])
-        XCTAssertEqual(visible[1].photos.map(\.id), [onlyPhoto.id])
+    @MainActor
+    func testIndexingSlideshowKeepsItsSizeAcrossPhotoChanges() {
+        assertStableImageLayout { image in
+            IndexingSlideshowView.imageContent(
+                currentImage: image, currentDate: Date(timeIntervalSince1970: 0),
+                isVisible: true, dateVisible: true
+            )
+        }
+    }
 
-        let heroOnly = MemoryYearGroupPresentation.excludingHero(
-            [(year: 2025, photos: [hero])],
-            heroID: hero.id
-        )
-        XCTAssertTrue(heroOnly.isEmpty)
+    @MainActor
+    func testDuplicateThumbnailsKeepPlaceholderSizeWhenPhotosLoad() {
+        assertStableImageLayout { image in
+            DuplicatePairRow.thumbnailView(image: image, label: "LEFT", alignment: .topLeading)
+        }
+    }
+
+    @MainActor
+    func testHomeMemoryBackdropCannotWidenTheCardWhenPhotosLoad() {
+        assertStableImageLayout { image in
+            SearchHomePhotoImage.imageContent(image: image, fillsBackdrop: true, bounds: nil, contentMode: .fit)
+                .frame(height: 156)
+        }
+    }
+
+    @MainActor
+    private func assertStableImageLayout<Content: View>(
+        file: StaticString = #filePath, line: UInt = #line,
+        @ViewBuilder content: (UIImage?) -> Content
+    ) {
+        for typeSize in [DynamicTypeSize.large, .accessibility3] {
+            for width: CGFloat in [125, 190, 350, 700] {
+                let proposal = CGSize(width: width, height: 1_000)
+                let placeholder = UIHostingController(
+                    rootView: content(nil).environment(\.dynamicTypeSize, typeSize)
+                ).sizeThatFits(in: proposal)
+                for size in [CGSize(width: 300, height: 400), CGSize(width: 400, height: 300),
+                             CGSize(width: 800, height: 200), CGSize(width: 200, height: 800)] {
+                    let loaded = UIHostingController(
+                        rootView: content(memoryLayoutImage(size: size)).environment(\.dynamicTypeSize, typeSize)
+                    ).sizeThatFits(in: proposal)
+                    XCTAssertEqual(loaded.width, placeholder.width, accuracy: 0.5,
+                                   "Loading \(size) must not widen a \(width)-point container", file: file, line: line)
+                    XCTAssertEqual(loaded.height, placeholder.height, accuracy: 0.5,
+                                   "Loading \(size) must not move following rows", file: file, line: line)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func memoryLayoutImage(size: CGSize) -> UIImage {
+        UIGraphicsImageRenderer(size: size).image { context in
+            UIColor.blue.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
     }
 
     func testMemoryContentPolicyRejectsScreenshotsAndDocumentImages() {

@@ -14,58 +14,64 @@ struct IndexingSlideshowView: View {
     @State private var duplicateFilter = MemoryDuplicateFilter()
     @State private var imageLoadGeneration: UInt = 0
 
-    var body: some View {
-        ZStack {
-            if let image = currentImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .overlay(alignment: .bottom) {
-                        if let date = currentDate {
-                            Text(date.formatted(date: .abbreviated, time: .omitted))
-                                .font(Celestial.Typography.eyebrow)
-                                .foregroundStyle(.white.opacity(0.8))
-                                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                                .modifier(
-                                    GlassPanelModifier(
-                                        cornerRadius: 16,
-                                        tint: Color.black.opacity(0.14)
+    static func imageContent(currentImage: UIImage?, currentDate: Date?, isVisible: Bool, dateVisible: Bool) -> some View {
+        Color.clear
+            .aspectRatio(4.0 / 3.0, contentMode: .fit)
+            .frame(maxWidth: .infinity, maxHeight: 430)
+            .overlay {
+                if let image = currentImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .overlay(alignment: .bottom) {
+                            if let date = currentDate {
+                                Text(date.formatted(date: .abbreviated, time: .omitted))
+                                    .font(Celestial.Typography.eyebrow)
+                                    .foregroundStyle(.white.opacity(0.8))
+                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .modifier(
+                                        GlassPanelModifier(
+                                            cornerRadius: 16,
+                                            tint: Color.black.opacity(0.14)
+                                        )
                                     )
-                                )
-                                .padding(.horizontal, 12)
-                                .padding(.bottom, 10)
-                                .frame(maxWidth: .infinity)
-                                .background(
-                                    LinearGradient(
-                                        colors: [.clear, .black.opacity(0.6)],
-                                        startPoint: .top,
-                                        endPoint: .bottom
+                                    .padding(.horizontal, 12)
+                                    .padding(.bottom, 10)
+                                    .frame(maxWidth: .infinity)
+                                    .background(
+                                        LinearGradient(
+                                            colors: [.clear, .black.opacity(0.6)],
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
                                     )
-                                )
-                                .opacity(dateVisible ? 1 : 0)
-                                .animation(.easeInOut(duration: 0.6), value: dateVisible)
+                                    .opacity(dateVisible ? 1 : 0)
+                                    .animation(.easeInOut(duration: 0.6), value: dateVisible)
+                            }
                         }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .frame(maxWidth: .infinity, maxHeight: 430)
-                    .opacity(isVisible ? 1 : 0)
-            } else {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Celestial.Colors.surfaceContainer)
-                    .aspectRatio(4.0/3.0, contentMode: .fit)
-                    .overlay {
-                        VStack(spacing: 8) {
-                            ProgressView()
-                                .tint(Celestial.Colors.outlineVariant)
-                            Text("Finding your first memories...")
-                                .font(Celestial.Typography.caption)
-                                .foregroundStyle(Celestial.Colors.outline)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .opacity(isVisible ? 1 : 0)
+                } else {
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Celestial.Colors.surfaceContainer)
+                        .overlay {
+                            VStack(spacing: 8) {
+                                ProgressView()
+                                    .tint(Celestial.Colors.outlineVariant)
+                                Text("Finding your first memories...")
+                                    .font(Celestial.Typography.caption)
+                                    .foregroundStyle(Celestial.Colors.outline)
+                            }
                         }
-                    }
+                }
             }
-        }
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    var body: some View {
+        Self.imageContent(currentImage: currentImage, currentDate: currentDate, isVisible: isVisible, dateVisible: dateVisible)
         .task {
             let task = Task { @MainActor in
                 await waitForIndexedPhotos()

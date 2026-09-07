@@ -773,7 +773,7 @@ final class ProjectConfigurationTests: XCTestCase {
         )
         let homeImage = try sourceSection(
             in: searchView,
-            from: "private struct SearchHomePhotoImage: View",
+            from: "struct SearchHomePhotoImage: View",
             to: "private struct RecentSearchPlaceholder: View"
         )
         let recentSearchRow = try sourceSection(
@@ -822,32 +822,27 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(homeImage.contains(".scaledToFill()"))
     }
 
-    func testMemoriesUseUncroppedHeroAndDoNotRepeatItInTheGrid() throws {
+    func testMemoriesUseTextHeaderAndKeepAllPhotosInTheGrid() throws {
         let memoriesView = try contents(of: "Memorable/Views/OnThisDayView.swift")
-        let heroImage = try sourceSection(
+        XCTAssertFalse(memoriesView.contains("MemoryHeroImage"))
+        XCTAssertFalse(memoriesView.contains("excludingHero"))
+        XCTAssertTrue(memoriesView.contains("ForEach(yearGroups, id: \\.year)"))
+        XCTAssertTrue(memoriesView.contains("groupPhotos: allPhotos(in: group.year)"))
+        XCTAssertTrue(memoriesView.contains("MemorySlideshowView()"))
+        let photoImage = try sourceSection(
             in: memoriesView,
-            from: "private struct MemoryHeroImage: View",
+            from: "struct MemoryPhotoImage: View",
             to: "// MARK: - Memory Thumbnail"
         )
-        XCTAssertTrue(memoriesView.contains(
-            "MemoryYearGroupPresentation.excludingHero(yearGroups, heroID: heroPhoto?.id)"
-        ))
-        XCTAssertTrue(memoriesView.contains("ForEach(visibleYearGroups, id: \\.year)"))
-        XCTAssertTrue(memoriesView.contains("groupPhotos: allPhotos(in: group.year)"))
-        XCTAssertTrue(memoriesView.contains("dynamicTypeSize.isAccessibilitySize"))
-        XCTAssertTrue(memoriesView.contains("selectedHeroResult = heroPhoto?.searchResult"))
-        XCTAssertTrue(memoriesView.contains(
-            "allResults: yearGroups.first?.photos.map(\\.searchResult) ?? [result]"
-        ))
-        XCTAssertTrue(heroImage.contains("PhotoLibrary.loadPreviewImage("))
-        XCTAssertTrue(heroImage.contains(".scaledToFit()"))
-        XCTAssertTrue(heroImage.contains(".blur(radius:"))
+        XCTAssertTrue(photoImage.contains(".scaledToFit()"))
+        XCTAssertTrue(photoImage.contains(".blur(radius:"))
         let thumbnail = try sourceSection(
             in: memoriesView,
             from: "struct MemoryThumbnail: View",
             to: "private func handleMemoryPressure()"
         )
         XCTAssertTrue(thumbnail.contains("MemoryCardLayout.aspectRatio(for: photo)"))
+        XCTAssertTrue(thumbnail.contains("MemoryPhotoImage(image: thumb,"))
         XCTAssertTrue(thumbnail.contains(".aspectRatio(aspectRatio, contentMode: .fit)"))
         XCTAssertTrue(thumbnail.contains("PhotoLibrary.loadPreviewImage("))
         XCTAssertTrue(thumbnail.contains("MemoryCardLayout.targetSize(for: photo, width: 400)"))

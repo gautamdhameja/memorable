@@ -248,8 +248,8 @@ struct DuplicatePairRow: View {
             }
 
             HStack(spacing: 5) {
-                thumbnailView(image: image1, label: "LEFT", alignment: .topLeading)
-                thumbnailView(image: image2, label: "RIGHT", alignment: .topTrailing)
+                Self.thumbnailView(image: image1, label: "LEFT", alignment: .topLeading)
+                Self.thumbnailView(image: image2, label: "RIGHT", alignment: .topTrailing)
             }
 
             HStack(spacing: 5) {
@@ -338,23 +338,21 @@ struct DuplicatePairRow: View {
         return min(100, max(0, Int((pair.similarity * 100).rounded())))
     }
 
-    private func thumbnailView(
+    static func thumbnailView(
         image: UIImage?,
         label: String,
         alignment: Alignment
     ) -> some View {
-        Group {
-            if let img = image {
-                Image(uiImage: img)
-                    .resizable()
-                    .aspectRatio(1, contentMode: .fill)
-                    .clipped()
-            } else {
-                Rectangle()
-                    .fill(Celestial.Colors.surfaceContainer)
+        Rectangle()
+            .fill(Celestial.Colors.surfaceContainer)
+            .aspectRatio(1.16, contentMode: .fit)
+            .overlay {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                }
             }
-        }
-        .aspectRatio(1.16, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(alignment: alignment) {

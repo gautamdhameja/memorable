@@ -2098,7 +2098,7 @@ private struct RecentSearchTimelineRail: View {
     }
 }
 
-private struct SearchHomePhotoImage: View {
+struct SearchHomePhotoImage: View {
     let result: SearchResult
     let targetSize: CGSize
     var fillsBackdrop = false
@@ -2108,30 +2108,34 @@ private struct SearchHomePhotoImage: View {
     @State private var imageLoadGeneration: UInt = 0
     @State private var imageLoadTask: Task<Void, Never>?
 
-    var body: some View {
-        ZStack {
-            RecentSearchPlaceholder()
+    static func imageContent(image: UIImage?, fillsBackdrop: Bool, bounds: CGSize?, contentMode: ContentMode) -> some View {
+        RecentSearchPlaceholder().overlay {
+            ZStack {
+                if let image {
+                    if fillsBackdrop {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: bounds?.width, height: bounds?.height)
+                            .blur(radius: 20)
+                            .scaleEffect(1.08)
+                            .opacity(0.55)
+                            .accessibilityHidden(true)
+                    }
 
-            if let image {
-                if fillsBackdrop {
                     Image(uiImage: image)
                         .resizable()
-                        .scaledToFill()
+                        .aspectRatio(contentMode: contentMode)
                         .frame(width: bounds?.width, height: bounds?.height)
-                        .blur(radius: 20)
-                        .scaleEffect(1.08)
-                        .opacity(0.55)
-                        .accessibilityHidden(true)
                 }
-
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: contentMode)
-                    .frame(width: bounds?.width, height: bounds?.height)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+    }
+
+    var body: some View {
+        Self.imageContent(image: image, fillsBackdrop: fillsBackdrop, bounds: bounds, contentMode: contentMode)
         .task(id: result.id) {
             imageLoadTask?.cancel()
             let task = Task { @MainActor in

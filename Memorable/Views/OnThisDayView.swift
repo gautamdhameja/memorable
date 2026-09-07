@@ -2,24 +2,10 @@ import SwiftUI
 
 struct OnThisDayView: View {
     @Environment(\.database) private var database
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var yearGroups: [(year: Int, photos: [IndexedPhotoReference])] = []
     @State private var isLoading = true
     @State private var showSlideshow = false
-    @State private var selectedHeroResult: SearchResult?
     @State private var indexedCount = 0
-
-    private var heroPhoto: IndexedPhotoReference? {
-        yearGroups.first?.photos.first
-    }
-
-    private var visibleYearGroups: [(year: Int, photos: [IndexedPhotoReference])] {
-        MemoryYearGroupPresentation.excludingHero(yearGroups, heroID: heroPhoto?.id)
-    }
-
-    private var memoryHeroHeight: CGFloat {
-        MemoryHeroMetrics.height(for: dynamicTypeSize)
-    }
 
     var body: some View {
         ZStack {
@@ -56,52 +42,35 @@ struct OnThisDayView: View {
                         .padding(.top, 60)
                         .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                     } else {
-                        ZStack(alignment: .bottomLeading) {
-                            MemoryHeroImage(photo: heroPhoto)
-                                .frame(height: memoryHeroHeight)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    selectedHeroResult = heroPhoto?.searchResult
-                                }
-                                .accessibilityLabel("Open featured memory")
-                                .accessibilityAddTraits(.isButton)
-                                .accessibilityHint("Opens this memory full screen")
-                            LinearGradient(
-                                colors: [.black.opacity(0.12), Celestial.Colors.background],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(height: 240)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("ON THIS DAY")
+                                .font(Celestial.Typography.eyebrow)
+                                .tracking(1.4)
+                                .foregroundStyle(Celestial.Colors.amber)
+                            Text(Date.now.formatted(.dateTime.month(.wide).day()))
+                                .font(Celestial.Typography.display)
+                                .foregroundStyle(Celestial.Colors.onSurface)
+                                .padding(.top, 10)
+                            Text("\(yearGroups.reduce(0) { $0 + $1.photos.count }) photos across \(yearGroups.count) years")
+                                .font(Celestial.Typography.supporting)
+                                .foregroundStyle(Celestial.Colors.secondary)
+                                .padding(.top, 8)
 
-                            VStack(alignment: .leading, spacing: 0) {
-                                Text("ON THIS DAY")
-                                    .font(Celestial.Typography.eyebrow)
-                                    .tracking(1.4)
-                                    .foregroundStyle(Celestial.Colors.amber)
-                                Text(Date.now.formatted(.dateTime.month(.wide).day()))
-                                    .font(Celestial.Typography.display)
-                                    .foregroundStyle(Celestial.Colors.onSurface)
-                                    .padding(.top, 10)
-                                Text("\(yearGroups.reduce(0) { $0 + $1.photos.count }) photos across \(yearGroups.count) years")
-                                    .font(Celestial.Typography.supporting)
-                                    .foregroundStyle(Celestial.Colors.secondary)
-                                    .padding(.top, 8)
-
-                                Button(action: { showSlideshow = true }) {
-                                    Label("Relive your memories", systemImage: "play.fill")
-                                }
-                                .celestialPrimaryButtonStyle(
-                                    tint: Celestial.Colors.onSurface,
-                                    foreground: Celestial.Colors.surfaceDim
-                                )
-                                .padding(.top, 22)
+                            Button(action: { showSlideshow = true }) {
+                                Label("Relive your memories", systemImage: "play.fill")
                             }
-                            .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
-                            .padding(.bottom, 24)
+                            .celestialPrimaryButtonStyle(
+                                tint: Celestial.Colors.onSurface,
+                                foreground: Celestial.Colors.surfaceDim
+                            )
+                            .padding(.top, 22)
                         }
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                        .padding(.top, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                         LazyVStack(spacing: Celestial.Spacing.sectionGap) {
-                            ForEach(visibleYearGroups, id: \.year) { group in
+                            ForEach(yearGroups, id: \.year) { group in
                                 VStack(spacing: 12) {
                                     HStack(alignment: .firstTextBaseline) {
                                         Text("\(String(group.year))")
@@ -138,12 +107,6 @@ struct OnThisDayView: View {
         .fullScreenCover(isPresented: $showSlideshow) {
             MemorySlideshowView()
         }
-        .fullScreenCover(item: $selectedHeroResult) { result in
-            SearchResultsViewer(
-                initialResult: result,
-                allResults: yearGroups.first?.photos.map(\.searchResult) ?? [result]
-            )
-        }
         .task {
             do {
                 let database = database
@@ -169,42 +132,20 @@ struct OnThisDayView: View {
     }
 }
 
-enum MemoryYearGroupPresentation {
-    typealias YearGroup = (year: Int, photos: [IndexedPhotoReference])
-
-    static func excludingHero(_ groups: [YearGroup], heroID: String?) -> [YearGroup] {
-        guard let heroID else { return groups }
-        return groups.compactMap { group in
-            let photos = group.photos.filter { $0.id != heroID }
-            return photos.isEmpty ? nil : (year: group.year, photos: photos)
-        }
-    }
-}
-
-private enum MemoryHeroMetrics {
-    static let regularHeight: CGFloat = 340
-    static let accessibilityHeight: CGFloat = 460
-    static let backgroundBlurRadius: CGFloat = 24
-
-    static func height(for dynamicTypeSize: DynamicTypeSize) -> CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? accessibilityHeight : regularHeight
-    }
-}
-
-private struct MemoryHeroImage: View {
-    let photo: IndexedPhotoReference?
-    @State private var image: UIImage?
-    @State private var loadedPhotoID: String?
-    @State private var imageLoadGeneration: UInt = 0
-    @State private var imageLoadTask: Task<Void, Never>?
+/// The foreground preserves the complete photo; the blurred layer fills its backdrop.
+struct MemoryPhotoImage: View {
+    let image: UIImage
+    let backgroundBlurRadius: CGFloat
 
     var body: some View {
-        ZStack {
-            if let image {
+        // Fill and fit layers can exceed their proposed size. An overlay keeps
+        // those drawing dimensions out of the scroll view's layout calculation.
+        Color.clear.overlay {
+            ZStack {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
-                    .blur(radius: MemoryHeroMetrics.backgroundBlurRadius)
+                    .blur(radius: backgroundBlurRadius)
                     .scaleEffect(1.08)
                     .opacity(0.5)
                     .accessibilityHidden(true)
@@ -212,85 +153,9 @@ private struct MemoryHeroImage: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
-            } else {
-                Celestial.memoryGradient
             }
         }
-        .background(Celestial.Colors.surfaceContainerLow)
         .clipped()
-        .task(id: photo?.id) {
-            guard let photo else {
-                image = nil
-                loadedPhotoID = nil
-                return
-            }
-            let task = startImageLoad(for: photo)
-            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
-            handleMemoryPressure()
-        }
-        .onDisappear {
-            imageLoadTask?.cancel()
-            imageLoadTask = nil
-            imageLoadGeneration &+= 1
-        }
-    }
-
-    private func startImageLoad(
-        for photo: IndexedPhotoReference,
-        delayNanoseconds: UInt64 = 0
-    ) -> Task<Void, Never> {
-        imageLoadTask?.cancel()
-        let task = Task { @MainActor in
-            if delayNanoseconds > 0 {
-                do {
-                    try await Task.sleep(nanoseconds: delayNanoseconds)
-                } catch {
-                    return
-                }
-            }
-            imageLoadGeneration &+= 1
-            let generation = imageLoadGeneration
-            let loaded = await PhotoLibrary.loadPreviewImage(
-                for: photo.searchResult,
-                targetSize: CGSize(width: 1200, height: 1200)
-            )
-            guard ImageLoadGenerationPolicy.acceptsCompletion(
-                startedGeneration: generation,
-                currentGeneration: imageLoadGeneration,
-                isCancelled: Task.isCancelled
-            ) else { return }
-            image = loaded
-            loadedPhotoID = photo.id
-        }
-        imageLoadTask = task
-        return task
-    }
-
-    private func handleMemoryPressure() {
-        imageLoadTask?.cancel()
-        imageLoadTask = nil
-        imageLoadGeneration &+= 1
-        switch MemoryPressureImageRecoveryPolicy.decision(
-            hasImage: image != nil && loadedPhotoID == photo?.id,
-            isActive: photo != nil,
-            preserveVisibleImage: true
-        ) {
-        case .preserve:
-            return
-        case .release:
-            MemoryPressureReleasePolicy.release(&image)
-            loadedPhotoID = nil
-        case .releaseAndRetry:
-            MemoryPressureReleasePolicy.release(&image)
-            loadedPhotoID = nil
-            guard let photo else { return }
-            _ = startImageLoad(
-                for: photo,
-                delayNanoseconds: MemoryPressureImageRecoveryPolicy.retryDelayNanoseconds
-            )
-        }
     }
 }
 
@@ -332,17 +197,7 @@ struct MemoryThumbnail: View {
         Button(action: handleTap) {
             ZStack {
                 if let thumb = thumbnail {
-                    Image(uiImage: thumb)
-                        .resizable()
-                        .scaledToFill()
-                        .blur(radius: 12)
-                        .scaleEffect(1.08)
-                        .opacity(0.5)
-                        .accessibilityHidden(true)
-
-                    Image(uiImage: thumb)
-                        .resizable()
-                        .scaledToFit()
+                    MemoryPhotoImage(image: thumb, backgroundBlurRadius: 12)
                 } else {
                     Rectangle()
                         .fill(Celestial.Colors.surfaceContainer)

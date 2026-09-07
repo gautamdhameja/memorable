@@ -155,6 +155,8 @@ Both slideshows show photo dates without generated or canned captions. No captio
 
 The home memory card keeps a compact 218-point height at standard text sizes. Portrait previews fill their photo area edge to edge, cropping excess at the edges while preserving proportions, beside a 152-point caption panel with an inline arrow. Landscape and square previews keep the caption below. Larger accessibility text can expand the caption rather than truncate it.
 
+Image loading must not change scroll layout. Search result thumbnails use a stable 4:3 canvas and fit the complete image inside it. The indexing slideshow reserves a 4:3 canvas capped at 430 points. Home and memory backdrops draw in overlays so their image dimensions cannot widen the page. Memory grids use stored photo dimensions before loading; the full Memories screen has a compact text header.
+
 Add a deterministic limit and a cancellation check before introducing any new operation whose memory or work scales with library size.
 
 ## Dependencies

@@ -14,46 +14,40 @@ struct PhotoThumbnailView: View {
         return type
     }
 
-    private var aspectRatio: CGFloat {
-        guard let thumb = thumbnail else { return 4.0/3.0 }
-        guard thumb.size.height > 0 else { return 4.0/3.0 }
-        let raw = thumb.size.width / thumb.size.height
-        // Clamp to avoid extremes: min 9:16 portrait, max 16:9 landscape
-        return min(max(raw, 9.0/16.0), 16.0/9.0)
+    static func imageContent(thumbnail: UIImage?, isVideo: Bool) -> some View {
+        // Reserve the same canvas before and after loading; image dimensions
+        // must not change masonry row heights while the user is scrolling.
+        Rectangle()
+            .fill(Celestial.Colors.surfaceContainer)
+            .aspectRatio(4.0 / 3.0, contentMode: .fit)
+            .overlay {
+                if let thumbnail {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    ProgressView()
+                        .tint(Celestial.Colors.outlineVariant)
+                        .controlSize(.small)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if thumbnail != nil, isVideo {
+                    Image(systemName: "play.fill")
+                        .font(Celestial.Typography.captionStrong)
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .modifier(
+                            GlassCircleModifier(tint: Color.black.opacity(0.18))
+                        )
+                        .padding(7)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
     }
 
     var body: some View {
-        Group {
-            if let thumb = thumbnail {
-                Image(uiImage: thumb)
-                    .resizable()
-                    .aspectRatio(aspectRatio, contentMode: .fit)
-                    .overlay(alignment: .bottomTrailing) {
-                        if result.isVideo {
-                            Image(systemName: "play.fill")
-                                .font(Celestial.Typography.captionStrong)
-                                .foregroundStyle(.white)
-                                .frame(width: 28, height: 28)
-                                .modifier(
-                                    GlassCircleModifier(
-                                        tint: Color.black.opacity(0.18)
-                                    )
-                                )
-                                .padding(7)
-                        }
-                    }
-            } else {
-                Rectangle()
-                    .fill(Celestial.Colors.surfaceContainer)
-                    .aspectRatio(4.0/3.0, contentMode: .fit)
-                    .overlay {
-                        ProgressView()
-                            .tint(Celestial.Colors.outlineVariant)
-                            .controlSize(.small)
-                    }
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        Self.imageContent(thumbnail: thumbnail, isVideo: result.isVideo)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
         .accessibilityAddTraits(.isImage)
