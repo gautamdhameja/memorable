@@ -202,7 +202,38 @@ private struct CelestialNavigationTitleModifier: ViewModifier {
     }
 }
 
+/// Keep the navigation bar mounted before pushing a screen with a title.
+/// Hiding it on Search makes UIKit correct its top inset after the push ends.
+private struct CelestialSearchNavigationModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                if #available(iOS 26.0, *) {
+                    brandTitle.sharedBackgroundVisibility(.hidden)
+                } else {
+                    brandTitle
+                }
+            }
+    }
+
+    private var brandTitle: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Text("Memorable")
+                .font(Celestial.Typography.brand)
+                .foregroundStyle(Celestial.Colors.onSurface)
+                .fixedSize()
+        }
+    }
+}
+
 extension View {
+    func celestialSearchNavigation() -> some View {
+        modifier(CelestialSearchNavigationModifier())
+    }
+
     func celestialNavigationTitle(_ title: String) -> some View {
         modifier(CelestialNavigationTitleModifier(title: title))
     }

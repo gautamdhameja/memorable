@@ -10,10 +10,16 @@ struct SourceManagerView: View {
     @State private var showFolderPicker = false
     @State private var showUpgrade = false
     @State private var deleteError: String?
+    @State private var loadError: String?
     @ObservedObject private var proManager = ProManager.shared
 
     private var folderSources: [PhotoSource] {
         sources.filter { $0.type == PhotoSourceType.folder.rawValue }
+    }
+
+    private var canAddFolder: Bool {
+        database.allowsIndexingWrites
+            && (!indexingService.progress.isRunning || indexingService.progress.phase == .enrichment)
     }
 
     var body: some View {
@@ -148,7 +154,7 @@ struct SourceManagerView: View {
                         .celestialSecondaryButtonStyle()
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .disabled(!database.allowsIndexingWrites)
+                        .disabled(!canAddFolder)
                     }
                 } header: {
                     Text("Folders")
@@ -183,20 +189,22 @@ struct SourceManagerView: View {
             UpgradeView()
         }
         .alert("Error", isPresented: .init(
-            get: { deleteError != nil || indexingService.folderIndexingError != nil },
+            get: { deleteError != nil || loadError != nil || indexingService.folderIndexingError != nil },
             set: {
                 if !$0 {
                     deleteError = nil
+                    loadError = nil
                     indexingService.clearFolderIndexingError()
                 }
             }
         )) {
             Button("OK") {
                 deleteError = nil
+                loadError = nil
                 indexingService.clearFolderIndexingError()
             }
         } message: {
-            Text(deleteError ?? indexingService.folderIndexingError ?? "")
+            Text(deleteError ?? loadError ?? indexingService.folderIndexingError ?? "")
         }
     }
 
@@ -243,7 +251,7 @@ struct SourceManagerView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!database.allowsIndexingWrites)
+            .disabled(!canAddFolder)
         }
         .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
         .modifier(GlassPanelModifier(cornerRadius: 16))
@@ -278,10 +286,10 @@ struct SourceManagerView: View {
             }.value
             sources = loaded.sources
             applePhotosIndexedCount = loaded.photoLibraryCounts.photos
+            loadError = nil
         } catch {
             logger.error("Failed to load sources: \(error.safeDiagnosticCode)")
-            sources = []
-            applePhotosIndexedCount = 0
+            loadError = "Photo sources couldn’t load. Close and reopen Photo Sources to try again."
         }
     }
 }

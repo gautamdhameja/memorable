@@ -50,7 +50,7 @@ private final class AppleBackgroundIndexingTaskHandle: BackgroundIndexingTaskHan
     }
 
     func setExpirationHandler(_ handler: @escaping @MainActor @Sendable () -> Void) {
-        task.expirationHandler = {
+        task.expirationHandler = { @Sendable in
             if Thread.isMainThread {
                 MainActor.assumeIsolated {
                     handler()

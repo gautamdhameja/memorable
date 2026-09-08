@@ -9,6 +9,45 @@ import Vision
 
 final class IndexingPolicyTests: XCTestCase {
     @MainActor
+    func testFolderSelectionDuringIndexingReportsErrorAndPreservesActiveRun() throws {
+        try XCTSkipUnless(ProManager.shared.isPro, "Folder indexing requires a Pro entitlement")
+        let suite = "BusyFolderSelection.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: SearchEngine(database: database),
+            database: database,
+            initialIndexingDefaults: defaults
+        )
+        defer { service.stopIndexing() }
+
+        for phase in [IndexingPhase.photos, .videos, .idle] {
+            service.clearFolderIndexingError()
+            service.progress = IndexingProgress(
+                total: 100, completed: 45, isRunning: true, phase: phase
+            )
+
+            // The picker was opened while idle, then indexing started before
+            // its selection callback delivered this URL.
+            service.indexFolder(url: URL(fileURLWithPath: "/unused-folder"), name: "Selected Folder")
+
+            XCTAssertNotNil(service.folderIndexingError)
+            XCTAssertTrue(service.progress.isRunning)
+            XCTAssertEqual(service.progress.phase, phase)
+            XCTAssertEqual(service.progress.total, 100)
+            XCTAssertEqual(service.progress.completed, 45)
+            XCTAssertTrue(try database.listSources().isEmpty)
+        }
+        service.clearFolderIndexingError()
+        XCTAssertNil(service.folderIndexingError)
+    }
+
+    @MainActor
     func testPartialRowsDoNotCertifyInitialCompletionAndBothEntryPointsResume() async throws {
         for incrementalEntry in [false, true] {
             let suite = "PartialInitialIndex.\(UUID().uuidString)"

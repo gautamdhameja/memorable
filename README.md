@@ -18,6 +18,10 @@ The slideshow appears during fresh indexing, resumed initial indexing, and index
 
 Search history, saved albums, folder bookmarks, and PhotoKit asset resolution run off the main actor. History writes stay ordered, and an index reset drains pending history persistence before clearing it. Text search and Find Similar in photo viewers pause maintenance until the last active search finishes. Photo-library change handling and share cancellation keep disk work outside locks needed by the UI.
 
+Saved albums rerun successful text searches. Similarity results and edited drafts cannot be saved as text queries. Memories matches the exact month and day in the device's local time zone, excluding the current year.
+
+An unavailable local photo stops showing a loading spinner; the full-photo viewer offers a retry. Source-loading and duplicate-scan failures show errors instead of empty success states. Duplicate deletion uses PhotoKit's async API with a nonisolated changes callback, then reconciles the search index after Photos confirms deletion.
+
 ```text
 Query -> Parse date, location, and exclusions -> Encode visual text locally
       -> Filter local metadata -> Score local embeddings -> Apply local boosts
@@ -155,7 +159,9 @@ Both slideshows show photo dates without generated or canned captions. No captio
 
 The home memory card keeps a compact 218-point height at standard text sizes. Portrait previews fill their photo area edge to edge, cropping excess at the edges while preserving proportions, beside a 152-point caption panel with an inline arrow. Landscape and square previews keep the caption below. Larger accessibility text can expand the caption rather than truncate it.
 
-Image loading must not change scroll layout. Search result thumbnails use a stable 4:3 canvas and fit the complete image inside it. The indexing slideshow reserves a 4:3 canvas capped at 430 points. Home and memory backdrops draw in overlays so their image dimensions cannot widen the page. Memory grids use stored photo dimensions before loading; the full Memories screen has a compact text header.
+Image loading must not change scroll layout. Search result thumbnails use a stable 4:3 canvas. Visual previews fill and crop within the tile without stretching; text-match previews fit the complete image to preserve readable text. The tile also bounds hit testing, so cropped image content cannot intercept neighboring taps. The indexing slideshow reserves a 4:3 canvas capped at 430 points. Home and memory backdrops draw in overlays so their image dimensions cannot widen the page. Memory grids use stored photo dimensions before loading; the full Memories screen has a compact text header.
+
+Keep the native navigation bar visible on Search and its launch/preparation screens, using `celestialSearchNavigation()`. Changing from a hidden bar on Search to a visible bar on Memories causes a late vertical inset correction after the push. Verify navigation transitions with a simulator recording; thumbnail sizing tests do not cover this behavior.
 
 Add a deterministic limit and a cancellation check before introducing any new operation whose memory or work scales with library size.
 

@@ -354,6 +354,32 @@ final class QueryParserTests: XCTestCase {
         XCTAssertTrue(hints.textQuery.contains("market"))
     }
 
+    func testFlowersInBloomRemainsVisualWithoutAProPlaceRestriction() {
+        for query in ["flowers in bloom", "Flowers in Bloom"] {
+            let hints = QueryParserFallback.parse(query: query)
+            XCTAssertNil(hints.locationHint)
+            XCTAssertEqual(hints.textQuery, "flowers in bloom")
+            XCTAssertNil(SearchFeaturePolicy.basic.restrictionSummary(for: hints))
+        }
+    }
+
+    func testBuiltInVisualSuggestionsDoNotRequestPlaceFilters() {
+        for query in SurpriseQueries.candidates {
+            let hints = QueryParserFallback.parse(query: query)
+            XCTAssertNil(hints.locationHint, "Visual suggestion produced a place filter: \(query)")
+        }
+    }
+
+    func testBloomScenePreservesExplicitPlacesAndSimilarlyNamedTowns() {
+        let nearby = QueryParserFallback.parse(query: "flowers in bloom near Berlin")
+        XCTAssertEqual(nearby.locationHint?.lowercased(), "berlin")
+        XCTAssertEqual(nearby.textQuery, "flowers in bloom")
+
+        let town = QueryParserFallback.parse(query: "flowers in Bloomington")
+        XCTAssertEqual(town.locationHint?.lowercased(), "bloomington")
+        XCTAssertEqual(town.textQuery, "flowers")
+    }
+
     func testCatAtHomeNoLocation() {
         let hints = QueryParserFallback.parse(query: "cat at home")
         XCTAssertNil(hints.locationHint, "home is not a location")

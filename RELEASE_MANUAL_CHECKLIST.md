@@ -35,6 +35,27 @@ Do not submit placeholder or unreachable URLs. Keep the published privacy text a
 4. Upload the archive to App Store Connect.
 5. Run TestFlight checks on at least one supported device with a large local media library.
 
+## Verify navigation and loading layout
+
+Record transitions on the current iOS version and the oldest supported version, at standard and accessibility text sizes. Check the end of each animation for a late vertical jump, then repeat after a cold launch.
+
+1. Open Memories from both Search and More, then go back. Open a memory photo, Around this time, and the slideshow; dismiss each back to its parent.
+2. Open Privacy, Licenses, and a license detail from More; go back through each level.
+3. Present and dismiss Photo Sources, the folder picker, Duplicates, and Upgrade.
+4. Open photo, OCR, similar, and video results. Present and cancel Share. Return to results, then switch between Search and More.
+5. Check onboarding, preparation/recovery, initial/resumed indexing, and incremental indexing. Confirm intended status changes do not unexpectedly reposition existing content.
+
+Native navigation bars stay visible with inline titles. Full-screen media and onboarding own their controls without changing the presenting stack's bar. Thumbnail loading must not change its reserved layout. Passing source-policy tests does not replace these transition recordings. Record any unavailable state as untested.
+
+## Verify functional recovery
+
+1. Use a disposable photo library to scan for duplicates. Deny the system deletion prompt and confirm the photo remains searchable. Repeat and allow deletion; confirm the selected copy disappears from duplicate pairs and search without a crash.
+2. Save a successful text search and reopen its album. Confirm Find Similar results and an edited, unsubmitted query cannot be saved as a text-search album.
+3. Check that each photo under today's Memories has the same local month and day, from a previous year.
+4. Test a photo that is no longer available locally. Loading must finish with an unavailable state, and the full-photo retry must remain responsive.
+5. Test source-loading and duplicate-scan failures. Confirm an error appears and existing data is retained; a failed scan must not report “No duplicates found.”
+6. In Release, run built-in suggestions, including “flowers in bloom.” Visual suggestions must not trigger an unrelated place-filter upsell.
+
 ## Verify background indexing on physical devices
 
 Simulator testing does not prove that `BGTaskScheduler` accepts or launches the

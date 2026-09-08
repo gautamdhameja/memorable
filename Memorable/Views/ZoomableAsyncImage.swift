@@ -7,6 +7,7 @@ struct ZoomableAsyncImage: View {
     var onSingleTap: (() -> Void)? = nil
 
     @State private var image: UIImage?
+    @State private var isLoading = true
     @State private var imageLoadGeneration: UInt = 0
     @State private var imageLoadTask: Task<Void, Never>?
     @State private var scale: CGFloat = 1.0
@@ -55,8 +56,7 @@ struct ZoomableAsyncImage: View {
                         }
                     }
             } else {
-                ProgressView()
-                    .tint(.white)
+                Self.unloadedContent(isLoading: isLoading, retry: retryImageLoad)
                     .frame(width: geo.size.width, height: geo.size.height)
             }
         }
@@ -73,6 +73,7 @@ struct ZoomableAsyncImage: View {
             } else {
                 imageLoadGeneration &+= 1
                 image = nil
+                isLoading = true
                 resetZoom()
             }
         }
@@ -150,9 +151,36 @@ struct ZoomableAsyncImage: View {
 
     // MARK: - Loading
 
+    @ViewBuilder
+    static func unloadedContent(isLoading: Bool, retry: @escaping () -> Void) -> some View {
+        if isLoading {
+            ProgressView().tint(.white)
+        } else {
+            VStack(spacing: 16) {
+                Image(systemName: "photo.badge.exclamationmark")
+                    .font(.title)
+                Text("Photo unavailable")
+                    .font(Celestial.Typography.bodyEmphasized)
+                Button("Try again", action: retry)
+                    .celestialSecondaryButtonStyle()
+            }
+            .foregroundStyle(.white)
+            .padding(24)
+        }
+    }
+
+    private func retryImageLoad() {
+        guard isActive, !isLoading else { return }
+        imageLoadTask?.cancel()
+        isLoading = true
+        imageLoadTask = Task { @MainActor in await loadImage() }
+    }
+
     private func loadImage() async {
+        guard !Task.isCancelled, isActive else { return }
         imageLoadGeneration &+= 1
         let generation = imageLoadGeneration
+        isLoading = true
         let targetSize = displayTargetSize()
         let loaded = await PhotoLibrary.loadPreviewImage(for: result, targetSize: targetSize)
         if ImageLoadGenerationPolicy.acceptsCompletion(
@@ -161,6 +189,7 @@ struct ZoomableAsyncImage: View {
             isCancelled: Task.isCancelled
         ) {
             image = loaded
+            isLoading = false
         }
     }
 
@@ -179,8 +208,10 @@ struct ZoomableAsyncImage: View {
             return
         case .release:
             MemoryPressureReleasePolicy.release(&image)
+            isLoading = false
         case .releaseAndRetry:
             MemoryPressureReleasePolicy.release(&image)
+            isLoading = true
             let task = Task { @MainActor in
                 do {
                     try await Task.sleep(

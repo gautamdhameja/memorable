@@ -122,8 +122,100 @@ final class DataModelTests: XCTestCase {
     @MainActor
     func testSearchThumbnailsKeepPlaceholderSizeWhenPhotosOrVideoFramesLoad() {
         for isVideo in [false, true] {
-            assertStableImageLayout { image in
-                PhotoThumbnailView.imageContent(thumbnail: image, isVideo: isVideo)
+            for contentMode in [ContentMode.fill, .fit] {
+                assertStableImageLayout { image in
+                    PhotoThumbnailView.imageContent(thumbnail: image, isVideo: isVideo, contentMode: contentMode)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testUnavailableThumbnailsKeepTheirLoadingBounds() {
+        for typeSize in [DynamicTypeSize.large, .accessibility3] {
+            for width: CGFloat in [125, 190, 350, 700] {
+                for isVideo in [false, true] {
+                    let proposal = CGSize(width: width, height: 1_000)
+                    let loading = UIHostingController(rootView:
+                        PhotoThumbnailView.imageContent(thumbnail: nil, isVideo: isVideo)
+                            .environment(\.dynamicTypeSize, typeSize)
+                    ).sizeThatFits(in: proposal)
+                    let unavailable = UIHostingController(rootView:
+                        PhotoThumbnailView.imageContent(
+                            thumbnail: nil, isVideo: isVideo, isLoading: false
+                        )
+                        .environment(\.dynamicTypeSize, typeSize)
+                    ).sizeThatFits(in: proposal)
+                    XCTAssertEqual(unavailable.width, loading.width, accuracy: 0.5)
+                    XCTAssertEqual(unavailable.height, loading.height, accuracy: 0.5,
+                                   "An unavailable preview must not move the following results")
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testUnavailableMemoriesKeepTheirMetadataBasedHeight() {
+        for typeSize in [DynamicTypeSize.large, .accessibility3] {
+            for width: CGFloat in [125, 190, 390] {
+                for ratio: CGFloat in [3.0 / 4.0, 4.0 / 3.0, 2.0] {
+                    for isLoading in [true, false] {
+                        let measured = UIHostingController(rootView:
+                            MemoryThumbnail.imageContent(
+                                thumbnail: nil, isLoading: isLoading, aspectRatio: ratio
+                            )
+                            .environment(\.dynamicTypeSize, typeSize)
+                        ).sizeThatFits(in: CGSize(width: width, height: 1_000))
+                        XCTAssertEqual(measured.width, width, accuracy: 0.5)
+                        XCTAssertEqual(measured.height, width / ratio, accuracy: 0.5)
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testUnavailableViewerKeepsTheFullScreenCanvas() {
+        for typeSize in [DynamicTypeSize.large, .accessibility3] {
+            for size in [CGSize(width: 320, height: 568), CGSize(width: 852, height: 393)] {
+                for isLoading in [true, false] {
+                    let measured = UIHostingController(rootView:
+                        ZoomableAsyncImage.unloadedContent(isLoading: isLoading, retry: {})
+                            .frame(width: size.width, height: size.height)
+                            .environment(\.dynamicTypeSize, typeSize)
+                    ).sizeThatFits(in: size)
+                    XCTAssertEqual(measured.width, size.width, accuracy: 0.5)
+                    XCTAssertEqual(measured.height, size.height, accuracy: 0.5)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testVisualSearchThumbnailsFillTheirTilesWithoutEmptyBands() throws {
+        for size in [CGSize(width: 300, height: 400), CGSize(width: 800, height: 200)] {
+            let renderer = ImageRenderer(content:
+                PhotoThumbnailView.imageContent(thumbnail: memoryLayoutImage(size: size), isVideo: false)
+                    .frame(width: 120, height: 90)
+            )
+            renderer.scale = 1
+            let image = try XCTUnwrap(renderer.cgImage)
+            var pixels = [UInt8](repeating: 0, count: 120 * 90 * 4)
+            try pixels.withUnsafeMutableBytes { bytes in
+                let context = try XCTUnwrap(CGContext(
+                    data: bytes.baseAddress, width: 120, height: 90,
+                    bitsPerComponent: 8, bytesPerRow: 120 * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                context.draw(image, in: CGRect(x: 0, y: 0, width: 120, height: 90))
+            }
+            // Sample inside each edge, away from the rounded corners.
+            for (x, y) in [(6, 45), (114, 45), (60, 6), (60, 84), (60, 45)] {
+                let offset = (y * 120 + x) * 4
+                XCTAssertGreaterThan(pixels[offset + 2], 240, "Photo \(size) must fill edge (\(x), \(y))")
+                XCTAssertLessThan(pixels[offset], 15)
+                XCTAssertLessThan(pixels[offset + 1], 15)
             }
         }
     }

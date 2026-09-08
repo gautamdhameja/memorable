@@ -184,6 +184,7 @@ struct MemoryThumbnail: View {
     var searchEngine: SearchEngine? = nil
     var accessibilityTitle: String? = nil
     @State private var thumbnail: UIImage?
+    @State private var isLoading = true
     @State private var imageLoadGeneration: UInt = 0
     @State private var imageLoadTask: Task<Void, Never>?
     @State private var selectedResult: SearchResult?
@@ -193,27 +194,39 @@ struct MemoryThumbnail: View {
         MemoryCardLayout.aspectRatio(for: photo)
     }
 
-    var body: some View {
-        Button(action: handleTap) {
-            ZStack {
-                if let thumb = thumbnail {
-                    MemoryPhotoImage(image: thumb, backgroundBlurRadius: 12)
-                } else {
-                    Rectangle()
-                        .fill(Celestial.Colors.surfaceContainer)
-                        .overlay {
+    static func imageContent(
+        thumbnail: UIImage?, isLoading: Bool, aspectRatio: CGFloat
+    ) -> some View {
+        ZStack {
+            if let thumb = thumbnail {
+                MemoryPhotoImage(image: thumb, backgroundBlurRadius: 12)
+            } else {
+                Rectangle()
+                    .fill(Celestial.Colors.surfaceContainer)
+                    .overlay {
+                        if isLoading {
                             ProgressView()
                                 .tint(Celestial.Colors.outlineVariant)
                                 .controlSize(.small)
+                        } else {
+                            Image(systemName: "photo.badge.exclamationmark")
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
-                }
+                    }
             }
-            .aspectRatio(aspectRatio, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .aspectRatio(aspectRatio, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+
+    var body: some View {
+        Button(action: handleTap) {
+            Self.imageContent(thumbnail: thumbnail, isLoading: isLoading, aspectRatio: aspectRatio)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityTitle ?? creationDate.map { "Memory from \(DateFormatter.mediumDate.string(from: $0))" } ?? "Memory photo")
+        .accessibilityValue(!isLoading && thumbnail == nil ? "Preview unavailable" : "")
         .accessibilityAddTraits(.isImage)
         .fullScreenCover(item: $selectedResult) { result in
             SearchResultsViewer(
@@ -245,6 +258,7 @@ struct MemoryThumbnail: View {
         coordinatesRecovery: Bool = false
     ) -> Task<Void, Never> {
         imageLoadTask?.cancel()
+        isLoading = true
         let task = Task { @MainActor in
             if delayNanoseconds > 0 {
                 do {
@@ -253,6 +267,7 @@ struct MemoryThumbnail: View {
                     return
                 }
             }
+            guard !Task.isCancelled else { return }
             imageLoadGeneration &+= 1
             let generation = imageLoadGeneration
             let result = photo.searchResult
@@ -273,6 +288,7 @@ struct MemoryThumbnail: View {
                 isCancelled: Task.isCancelled
             ) else { return }
             thumbnail = loaded
+            isLoading = false
             creationDate = photo.creationDate
         }
         imageLoadTask = task

@@ -85,6 +85,7 @@ final class SearchViewModel: ObservableObject {
     private var screenshotSequence = 0
     private var searchTask: Task<Void, Never>?
     private var isSimilaritySearch = false
+    private var completedTextSearchQuery: String?
     private var visibleResultValidationTask: Task<Void, Never>?
     private var screenshotDetectionTask: Task<Void, Never>?
     private var recentSearchPreviewBackfillTask: Task<Void, Never>?
@@ -118,6 +119,17 @@ final class SearchViewModel: ObservableObject {
 
     var photoViewerResults: [SearchResult] {
         filteredResults(currentDisplayedResults).filter { !$0.isVideo }
+    }
+
+    /// Smart albums rerun text queries, so only save the query that produced
+    /// the current results, never an edited draft or a similarity label.
+    var smartAlbumQuery: String? {
+        guard !isSearching,
+              searchError == nil,
+              !results.isEmpty,
+              let completedTextSearchQuery,
+              normalizedQuery == completedTextSearchQuery else { return nil }
+        return completedTextSearchQuery
     }
 
     var shouldShowDiscoverySuggestions: Bool {
@@ -383,6 +395,7 @@ final class SearchViewModel: ObservableObject {
     }
 
     private func beginSearch(isSimilarity: Bool) -> Int {
+        completedTextSearchQuery = nil
         cancelRecentSearchPreviewBackfill()
         cancelActiveSearch(reason: "new search submitted")
         validationSequence += 1
@@ -574,6 +587,7 @@ final class SearchViewModel: ObservableObject {
             guard !Task.isCancelled, activeSearchID == searchID else { return }
 
             results = response.results
+            completedTextSearchQuery = response.results.isEmpty ? nil : query
             lastSearchedQuery = query
             fallbackResults = response.fallbackResults
             filterSummary = response.filtersApplied

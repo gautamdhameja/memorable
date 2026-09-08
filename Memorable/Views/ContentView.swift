@@ -110,17 +110,9 @@ struct ContentView: View {
     /// A static first frame aligned with the home header. Startup authorization
     /// and dependency checks must not resemble photo indexing.
     private var launchShell: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Memorable")
-                    .font(Celestial.Typography.brand)
-                    .foregroundStyle(Celestial.Colors.onSurface)
-                Spacer()
-            }
-            .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
-            .padding(.top, 8)
-
-            Spacer()
+        NavigationStack {
+            CelestialBackdrop()
+                .celestialSearchNavigation()
         }
         .accessibilityHidden(true)
     }

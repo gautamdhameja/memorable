@@ -183,7 +183,7 @@ extension AppDatabase {
                   AND isScreenshot = 0
                   AND isDocumentImage = 0
                   AND cast(strftime('%m', creationDate, 'localtime') as integer) = ?
-                  AND abs(cast(strftime('%d', creationDate, 'localtime') as integer) - ?) <= 1
+                  AND cast(strftime('%d', creationDate, 'localtime') as integer) = ?
                   AND cast(strftime('%Y', creationDate, 'localtime') as integer) < ?
                 ORDER BY creationDate DESC
                 LIMIT ?

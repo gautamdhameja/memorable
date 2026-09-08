@@ -633,6 +633,35 @@ final class ProjectConfigurationTests: XCTestCase {
         )
     }
 
+    func testEveryScreenKeepsNavigationBarVisibilityAndTitleModeStable() throws {
+        let sources = try allAppSourceText()
+        let range = NSRange(sources.startIndex..., in: sources)
+        let visibility = try NSRegularExpression(
+            pattern: #"\.toolbar(?:Visibility)?\(\s*([^,]+),\s*for:\s*\.navigationBar\s*\)"#
+        )
+        let titleMode = try NSRegularExpression(
+            pattern: #"\.navigationBarTitleDisplayMode\(\s*([^\)]+)\)"#
+        )
+
+        // This guards the cause across all screens, including future roots.
+        // Record actual pushes and dismissals as well: source checks alone
+        // cannot establish that UIKit's transition geometry stays stable.
+        for (expression, expected) in [(visibility, ".visible"), (titleMode, ".inline")] {
+            let matches = expression.matches(in: sources, range: range)
+            XCTAssertFalse(matches.isEmpty)
+            for match in matches {
+                let valueRange = try XCTUnwrap(Range(match.range(at: 1), in: sources))
+                XCTAssertEqual(
+                    sources[valueRange].trimmingCharacters(in: .whitespacesAndNewlines),
+                    expected,
+                    "Keep navigation geometry stable across every screen transition"
+                )
+            }
+        }
+        XCTAssertFalse(sources.contains(".navigationBarHidden("))
+        XCTAssertFalse(sources.contains("setNavigationBarHidden("))
+    }
+
     func testMoreNavigationKeepsBarGeometryStableAcrossPushes() throws {
         let moreView = try contents(of: "Memorable/Views/MoreView.swift")
         let moreRoot = try sourceSection(
@@ -644,6 +673,20 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertFalse(moreRoot.contains(".toolbar(.hidden, for: .navigationBar)"))
         XCTAssertTrue(moreRoot.contains(".toolbar(.visible, for: .navigationBar)"))
         XCTAssertTrue(moreRoot.contains("ToolbarItem(placement: .principal)"))
+    }
+
+    func testSearchNavigationKeepsBarGeometryStableAcrossPushesAndStartup() throws {
+        let search = try contents(of: "Memorable/Views/SearchView.swift")
+        let theme = try contents(of: "Memorable/Views/Theme.swift")
+        let launch = try contents(of: "Memorable/Views/ContentView.swift")
+        let tabs = try contents(of: "Memorable/Views/MainTabView.swift")
+
+        XCTAssertFalse(search.contains(".toolbar(.hidden, for: .navigationBar)"))
+        XCTAssertTrue(search.contains(".celestialSearchNavigation()"))
+        XCTAssertTrue(launch.contains(".celestialSearchNavigation()"))
+        XCTAssertTrue(tabs.contains(".celestialSearchNavigation()"))
+        XCTAssertTrue(theme.contains("private struct CelestialSearchNavigationModifier"))
+        XCTAssertTrue(theme.contains("ToolbarItem(placement: .topBarLeading)"))
     }
 
     func testBrandTypographyOutranksSecondaryScreenTitles() throws {

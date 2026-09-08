@@ -282,7 +282,7 @@ enum QueryParserFallback {
     private static let visualWords: Set<String> = [
         // Photographic subjects and scenes
         "sunset", "sunrise", "beach", "mountain", "food", "dog", "cat",
-        "car", "tree", "flower", "snow", "rain", "night", "morning",
+        "car", "tree", "flower", "bloom", "snow", "rain", "night", "morning",
         "selfie", "people", "baby", "wedding", "birthday", "christmas",
         "halloween", "lake", "river", "ocean", "forest", "park", "garden",
         "pool", "sky", "clouds", "street", "market", "lunch", "dinner",

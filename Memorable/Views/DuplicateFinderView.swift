@@ -180,7 +180,9 @@ struct DuplicateFinderView: View {
                         isCancelled: Task.isCancelled
                     ) else { return }
                     isScanning = false
-                    scanComplete = true
+                    scanComplete = false
+                    deletionAlertTitle = "Couldn't scan for duplicates"
+                    deletionAlertMessage = "The scan couldn't finish. Try again."
                     scanTask = nil
                 }
             }

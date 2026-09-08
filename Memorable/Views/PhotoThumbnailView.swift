@@ -2,7 +2,9 @@ import SwiftUI
 
 struct PhotoThumbnailView: View {
     let result: SearchResult
+    var contentMode: ContentMode = .fill
     @State private var thumbnail: UIImage?
+    @State private var isLoading = true
     @State private var imageLoadGeneration: UInt = 0
     @State private var imageLoadTask: Task<Void, Never>?
 
@@ -14,7 +16,10 @@ struct PhotoThumbnailView: View {
         return type
     }
 
-    static func imageContent(thumbnail: UIImage?, isVideo: Bool) -> some View {
+    static func imageContent(
+        thumbnail: UIImage?, isVideo: Bool, contentMode: ContentMode = .fill,
+        isLoading: Bool = true
+    ) -> some View {
         // Reserve the same canvas before and after loading; image dimensions
         // must not change masonry row heights while the user is scrolling.
         Rectangle()
@@ -22,13 +27,20 @@ struct PhotoThumbnailView: View {
             .aspectRatio(4.0 / 3.0, contentMode: .fit)
             .overlay {
                 if let thumbnail {
-                    Image(uiImage: thumbnail)
-                        .resizable()
-                        .scaledToFit()
-                } else {
+                    GeometryReader { geometry in
+                        Image(uiImage: thumbnail)
+                            .resizable()
+                            .aspectRatio(contentMode: contentMode)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped()
+                    }
+                } else if isLoading {
                     ProgressView()
                         .tint(Celestial.Colors.outlineVariant)
                         .controlSize(.small)
+                } else {
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -44,18 +56,28 @@ struct PhotoThumbnailView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
     }
 
     var body: some View {
-        Self.imageContent(thumbnail: thumbnail, isVideo: result.isVideo)
+        Self.imageContent(
+            thumbnail: thumbnail, isVideo: result.isVideo,
+            contentMode: contentMode, isLoading: isLoading
+        )
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityDescription)
+        .accessibilityLabel(
+            !isLoading && thumbnail == nil
+                ? "\(accessibilityDescription), preview unavailable"
+                : accessibilityDescription
+        )
         .accessibilityAddTraits(.isImage)
         .task {
             imageLoadTask?.cancel()
             let task = Task { @MainActor in
+                guard !Task.isCancelled else { return }
                 imageLoadGeneration &+= 1
                 let generation = imageLoadGeneration
+                isLoading = true
                 let loaded: UIImage?
                 if result.sourceId == PhotoSourceType.photokit.rawValue,
                    !result.isVideo,
@@ -73,6 +95,7 @@ struct PhotoThumbnailView: View {
                     isCancelled: Task.isCancelled
                 ) {
                     thumbnail = loaded
+                    isLoading = false
                 }
             }
             imageLoadTask = task
@@ -87,6 +110,7 @@ struct PhotoThumbnailView: View {
             imageLoadTask = nil
             imageLoadGeneration &+= 1
             MemoryPressureReleasePolicy.release(&thumbnail)
+            isLoading = false
         }
     }
 }

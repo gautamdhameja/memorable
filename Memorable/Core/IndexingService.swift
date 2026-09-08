@@ -793,22 +793,10 @@ class IndexingService: ObservableObject {
         return .indexRefreshPending
     }
 
-    private static func deletePhotoAsset(_ asset: PHAsset) async throws {
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.deleteAssets([asset] as NSArray)
-            } completionHandler: { success, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if success {
-                    continuation.resume()
-                } else {
-                    continuation.resume(
-                        throwing: DuplicatePhotoDeletionError.photoLibraryRejected
-                    )
-                }
-            }
+    private nonisolated static func deletePhotoAsset(_ asset: PHAsset) async throws {
+        // PhotoKit invokes changes on its own queue, outside MainActor.
+        try await PHPhotoLibrary.shared().performChanges { @Sendable in
+            PHAssetChangeRequest.deleteAssets([asset] as NSArray)
         }
     }
 
@@ -892,6 +880,13 @@ class IndexingService: ObservableObject {
     func indexFolder(url: URL, name: String) {
         guard ProManager.shared.isPro else {
             logger.error("Folder indexing requires an active Pro entitlement")
+            return
+        }
+        // Indexing can start while the system folder picker is open.
+        // Report the rejected selection instead of silently discarding it.
+        guard !progress.isRunning || progress.phase == .enrichment else {
+            folderIndexingError = "Search is updating. Wait for it to finish, then add the folder again."
+            logger.error("Folder selection could not be added while indexing is running")
             return
         }
         let resume: () -> Void = { [weak self] in self?.indexFolder(url: url, name: name) }
@@ -2691,15 +2686,12 @@ class IndexingService: ObservableObject {
 
 enum DuplicatePhotoDeletionError: LocalizedError {
     case assetUnavailable
-    case photoLibraryRejected
     case deviceTooWarm
 
     var errorDescription: String? {
         switch self {
         case .assetUnavailable:
             return "This photo is no longer available in your library."
-        case .photoLibraryRejected:
-            return "Photos could not move this item to Recently Deleted."
         case .deviceTooWarm:
             return "Let this iPhone cool down before deleting duplicates."
         }

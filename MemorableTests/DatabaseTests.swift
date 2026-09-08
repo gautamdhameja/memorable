@@ -597,6 +597,51 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(try database.loadSearchHistoryPreviews(limit: 3).isEmpty)
     }
 
+    func testMemorySummaryAndGridMatchExactLocalDateAcrossDayBoundaries() throws {
+        let database = AppDatabase(
+            openQueue: { try DatabaseQueue() },
+            migrate: { try AppDatabase.migrator.migrate($0) }
+        )
+        let calendar = Calendar.current
+        let today = Date()
+        let yearStart = try XCTUnwrap(calendar.dateInterval(of: .year, for: today)).start
+        var matchingComponents = calendar.dateComponents([.month, .day], from: today)
+        matchingComponents.hour = 12
+        // Strict matching also finds the previous leap year when today is February 29.
+        let memoryDate = try XCTUnwrap(calendar.nextDate(
+            after: yearStart,
+            matching: matchingComponents,
+            matchingPolicy: .strict,
+            direction: .backward
+        ))
+        let memoryDay = try XCTUnwrap(calendar.dateInterval(of: .day, for: memoryDate))
+        let fixtures: [(id: String, date: Date)] = [
+            ("previous-day", memoryDay.start.addingTimeInterval(-1)),
+            ("start-of-date", memoryDay.start),
+            ("end-of-date", memoryDay.end.addingTimeInterval(-1)),
+            ("next-day", memoryDay.end),
+            ("current-year", today),
+        ]
+        for (index, fixture) in fixtures.enumerated() {
+            var photo = makePhoto(localIdentifier: fixture.id)
+            photo.id = fixture.id
+            photo.creationDate = fixture.date
+            var embedding = [Float](repeating: 0, count: EmbeddingConfig.dimensions)
+            embedding[index] = 1
+            photo.embedding = embedding.toFloat16Data()
+            try database.insertPhoto(photo)
+        }
+
+        let groups = try database.onThisDayPhotos()
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(Set(groups.flatMap(\.photos).map(\.id)), ["start-of-date", "end-of-date"])
+        let summary = try XCTUnwrap(database.onThisDaySummary())
+        XCTAssertEqual(summary.photoCount, 2)
+        XCTAssertEqual(summary.yearCount, 1)
+        XCTAssertEqual(summary.heroPhoto.id, "end-of-date")
+        XCTAssertEqual(summary.mostRecentYear, calendar.component(.year, from: memoryDate))
+    }
+
     func testMemoryQueriesIgnoreRowsOutsideLegacySafetyWindow() throws {
         let database = AppDatabase(
             openQueue: { try DatabaseQueue() },

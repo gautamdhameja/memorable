@@ -41,14 +41,14 @@ struct SearchView: View {
     @AppStorage(SearchViewModel.sortModeStorageKey) private var sortModeRaw: String = SearchSortMode.relevance.rawValue
 
     private func saveSmartAlbum() async {
-        guard !isUpdatingSmartAlbums else { return }
+        guard !isUpdatingSmartAlbums, let query = viewModel.smartAlbumQuery else { return }
         isUpdatingSmartAlbums = true
         smartAlbumRevision += 1
         defer { isUpdatingSmartAlbums = false }
         let album = SmartAlbum(
             id: UUID().uuidString,
             name: SmartAlbumPolicy.boundedName(albumName),
-            query: QueryInputPolicy.bounded(viewModel.queryText),
+            query: query,
             createdAt: Date()
         )
         do {
@@ -214,8 +214,6 @@ struct SearchView: View {
                 CelestialBackdrop()
 
                 VStack(spacing: 0) {
-                    searchHeader
-
                     if !indexingService.shouldShowInitialIndexingExperience {
                         // Search stays out of the first indexing experience so
                         // the unfinished index never looks ready for use.
@@ -356,7 +354,7 @@ struct SearchView: View {
                     .scrollBounceBehavior(.basedOnSize)
                 } // VStack
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .celestialSearchNavigation()
             .preferredColorScheme(.dark)
         })
 
@@ -381,11 +379,11 @@ struct SearchView: View {
             .alert("Save as Smart Album", isPresented: $showSaveAlbum) {
                 TextField("Album name", text: $albumName)
                 Button("Save") {
-                    if !albumName.isEmpty && !viewModel.queryText.isEmpty {
+                    if !albumName.isEmpty && viewModel.smartAlbumQuery != nil {
                         Task { await saveSmartAlbum() }
                     }
                 }
-                .disabled(isUpdatingSmartAlbums)
+                .disabled(isUpdatingSmartAlbums || viewModel.smartAlbumQuery == nil)
                 Button("Cancel", role: .cancel) { albumName = "" }
             } message: {
                 Text("This album will auto-update when new matching photos are indexed.")
@@ -588,19 +586,6 @@ struct SearchView: View {
     }
 
     // MARK: - Search Bar
-
-    private var searchHeader: some View {
-        HStack(alignment: .center) {
-            Text("Memorable")
-                .font(Celestial.Typography.brand)
-                .foregroundStyle(Celestial.Colors.onSurface)
-                .layoutPriority(1)
-            Spacer()
-        }
-        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
-        .padding(.top, 8)
-        .fixedSize(horizontal: false, vertical: true)
-    }
 
     private var searchBar: some View {
         HStack(spacing: 12) {
@@ -1699,9 +1684,10 @@ struct SearchView: View {
                     "Sort results by \(viewModel.sortMode == .relevance ? "relevance" : "recent")"
                 )
 
-                if !smartAlbums.contains(where: { $0.query.lowercased() == viewModel.queryText.lowercased() }) {
+                if let query = viewModel.smartAlbumQuery,
+                   !smartAlbums.contains(where: { $0.query.lowercased() == query.lowercased() }) {
                     Button {
-                        albumName = viewModel.queryText
+                        albumName = query
                         showSaveAlbum = true
                     } label: {
                         Image(systemName: "bookmark")
@@ -1803,7 +1789,7 @@ struct SearchView: View {
                         LazyHStack(alignment: .top, spacing: 8) {
                             ForEach(textMatches) { result in
                                 VStack(alignment: .leading, spacing: 6) {
-                                    resultTile(result: result)
+                                    resultTile(result: result, contentMode: .fit)
                                         .frame(width: 144, height: 112)
                                         .clipped()
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -1892,11 +1878,11 @@ struct SearchView: View {
         }
     }
 
-    private func resultTile(result: SearchResult) -> some View {
+    private func resultTile(result: SearchResult, contentMode: ContentMode = .fill) -> some View {
         Button {
             handleResultTap(result)
         } label: {
-            PhotoThumbnailView(result: result)
+            PhotoThumbnailView(result: result, contentMode: contentMode)
         }
             .buttonStyle(.plain)
             .contextMenu {

@@ -418,15 +418,6 @@ private struct SearchPreparationShell: View {
             ZStack {
                 CelestialBackdrop()
                 VStack(spacing: 0) {
-                    HStack {
-                        Text("Memorable")
-                            .font(Celestial.Typography.brand)
-                            .foregroundStyle(Celestial.Colors.onSurface)
-                        Spacer()
-                    }
-                    .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
-                    .padding(.top, 8)
-
                     HStack(spacing: 12) {
                         Image(systemName: "magnifyingglass")
                             .foregroundStyle(Celestial.Colors.primaryFixedDim)
@@ -477,6 +468,7 @@ private struct SearchPreparationShell: View {
                     }
                 }
             }
+            .celestialSearchNavigation()
         }
     }
 

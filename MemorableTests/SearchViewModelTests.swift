@@ -3,6 +3,57 @@ import XCTest
 
 final class SearchViewModelTests: XCTestCase {
     @MainActor
+    func testSmartAlbumQueryRequiresCompletedResultsForCurrentText() async {
+        let model = makeModel(search: { query in
+            if query == "failure" { throw ExpectedError.failure }
+            return Self.response(ids: query == "empty" ? [] : ["photo"])
+        })
+        XCTAssertNil(model.smartAlbumQuery)
+        model.setQueryText("  mountains  ")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(model.smartAlbumQuery, "mountains")
+
+        model.setQueryText("rivers")
+        XCTAssertNil(model.smartAlbumQuery, "An edited draft must not be saved against old results")
+        model.setQueryText("mountains")
+        XCTAssertEqual(model.smartAlbumQuery, "mountains")
+        model.setQueryText("")
+        XCTAssertNil(model.smartAlbumQuery)
+
+        for query in ["empty", "failure"] {
+            model.setQueryText(query)
+            model.submitSearch()
+            await model.waitForCurrentSearch()
+            XCTAssertNil(model.smartAlbumQuery, query)
+        }
+    }
+
+    @MainActor
+    func testSmartAlbumQueryRejectsSimilarityAndPendingTextSearch() async {
+        let searcher = ControlledSearcher()
+        let model = makeModel(search: { query in
+            try await searcher.search(query: query)
+        })
+        model.submitSimilaritySearch { [Self.result(id: "similar")] }
+        await model.waitForCurrentSearch()
+        XCTAssertNil(model.smartAlbumQuery, "Similarity display text cannot reproduce these results")
+
+        model.setQueryText("mountains")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "mountains")
+        XCTAssertNil(model.smartAlbumQuery)
+        await searcher.complete(query: "mountains", with: Self.response(ids: ["mountain"]))
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(model.smartAlbumQuery, "mountains")
+
+        model.submitSimilaritySearch { [Self.result(id: "another-similar")] }
+        XCTAssertNil(model.smartAlbumQuery)
+        await model.waitForCurrentSearch()
+        XCTAssertNil(model.smartAlbumQuery)
+    }
+
+    @MainActor
     func testHistoryWriteLeavesResultsUsableAndResetDrainsIt() async {
         let writer = ControlledSearcher()
         var stored: [String] = []

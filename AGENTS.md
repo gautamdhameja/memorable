@@ -61,6 +61,8 @@ When I report a bug, follow this exact sequence:
 4. **Fix:** Propose a proper, generalized fix that addresses the root cause. No band-aids, no shortcuts. Explain why it works and why it won't break anything else.
 5. **Verify:** Run tests or build to confirm.
 
+For a UX bug, trace the shared cause through every screen and entry point before calling it fixed. Verify affected pushes, back navigation, modal presentation/dismissal, and loading transitions in the running app. Use recordings for flicker; settled screenshots and source checks are insufficient. Report live coverage separately from code review and untested states.
+
 ## Communication style
 
 - Be direct and concise. No filler, no preamble.
