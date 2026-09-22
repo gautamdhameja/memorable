@@ -3,7 +3,12 @@ import Photos
 
 struct ZoomableAsyncImage: View {
     let result: SearchResult
+    /// The page the user is looking at. Drives zoom reset and memory-pressure
+    /// recovery.
     var isActive: Bool = true
+    /// Whether this page keeps a decoded image. Neighbouring pages stay loaded
+    /// so a swipe reveals the photo instead of a spinner.
+    var shouldLoad: Bool = true
     var onSingleTap: (() -> Void)? = nil
 
     @State private var image: UIImage?
@@ -60,9 +65,9 @@ struct ZoomableAsyncImage: View {
                     .frame(width: geo.size.width, height: geo.size.height)
             }
         }
-        .task(id: isActive) {
+        .task(id: shouldLoad) {
             imageLoadTask?.cancel()
-            if isActive {
+            if shouldLoad {
                 let task = Task { @MainActor in await loadImage() }
                 imageLoadTask = task
                 await withTaskCancellationHandler {
@@ -71,11 +76,16 @@ struct ZoomableAsyncImage: View {
                     task.cancel()
                 }
             } else {
+                // Only pages outside the retention window release their image,
+                // so paging back and forth does not decode the same photo again.
                 imageLoadGeneration &+= 1
                 image = nil
                 isLoading = true
-                resetZoom()
             }
+        }
+        .onChange(of: isActive) {
+            // A page the user swiped away from must not return still zoomed in.
+            if !isActive { resetZoom() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
             handleMemoryPressure()
@@ -170,14 +180,14 @@ struct ZoomableAsyncImage: View {
     }
 
     private func retryImageLoad() {
-        guard isActive, !isLoading else { return }
+        guard shouldLoad, !isLoading else { return }
         imageLoadTask?.cancel()
         isLoading = true
         imageLoadTask = Task { @MainActor in await loadImage() }
     }
 
     private func loadImage() async {
-        guard !Task.isCancelled, isActive else { return }
+        guard !Task.isCancelled, shouldLoad else { return }
         imageLoadGeneration &+= 1
         let generation = imageLoadGeneration
         isLoading = true

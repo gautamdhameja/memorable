@@ -289,6 +289,42 @@ final class SharedUtilitiesTests: XCTestCase {
         XCTAssertNil(weakResource.value)
     }
 
+    func testPhotoViewerKeepsNeighbouringPagesLoadedAndReleasesDistantOnes() {
+        // The visible page and the one on each side stay decoded so a swipe
+        // reveals the photo instead of a spinner.
+        for offset in -1...1 {
+            XCTAssertTrue(
+                PhotoViewerPreloadPolicy.shouldLoad(index: 5 + offset, currentIndex: 5),
+                "Page at offset \(offset) should stay loaded"
+            )
+        }
+
+        // Everything further away releases its image so viewer memory stays
+        // bounded no matter how many results the search returned.
+        XCTAssertFalse(PhotoViewerPreloadPolicy.shouldLoad(index: 3, currentIndex: 5))
+        XCTAssertFalse(PhotoViewerPreloadPolicy.shouldLoad(index: 7, currentIndex: 5))
+        XCTAssertFalse(PhotoViewerPreloadPolicy.shouldLoad(index: 0, currentIndex: 200))
+    }
+
+    func testPhotoViewerPreloadWindowIsConfigurableAndRejectsNegativeCounts() {
+        XCTAssertTrue(
+            PhotoViewerPreloadPolicy.shouldLoad(index: 7, currentIndex: 5, neighbourCount: 2)
+        )
+        XCTAssertFalse(
+            PhotoViewerPreloadPolicy.shouldLoad(index: 8, currentIndex: 5, neighbourCount: 2)
+        )
+        XCTAssertTrue(
+            PhotoViewerPreloadPolicy.shouldLoad(index: 5, currentIndex: 5, neighbourCount: 0)
+        )
+        // A negative window must not disable loading for the visible page.
+        XCTAssertTrue(
+            PhotoViewerPreloadPolicy.shouldLoad(index: 5, currentIndex: 5, neighbourCount: -3)
+        )
+        XCTAssertFalse(
+            PhotoViewerPreloadPolicy.shouldLoad(index: 6, currentIndex: 5, neighbourCount: -3)
+        )
+    }
+
     func testActiveImageMemoryPressurePolicyPreservesOrSchedulesOneRecovery() {
         XCTAssertEqual(
             MemoryPressureImageRecoveryPolicy.decision(

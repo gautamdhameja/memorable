@@ -123,6 +123,24 @@ enum MemoryPressureImageRecoveryPolicy {
     }
 }
 
+/// The full-screen viewer pages through results with a `TabView`. Only the
+/// pages inside this window keep a decoded image, so swiping to a neighbour
+/// shows the photo immediately while viewer memory stays bounded regardless of
+/// how many results the search returned.
+enum PhotoViewerPreloadPolicy {
+    /// Pages on either side of the visible one that keep their decoded image.
+    static let retainedNeighbourCount = 1
+
+    static func shouldLoad(
+        index: Int,
+        currentIndex: Int,
+        neighbourCount: Int = retainedNeighbourCount
+    ) -> Bool {
+        guard neighbourCount >= 0 else { return index == currentIndex }
+        return abs(index - currentIndex) <= neighbourCount
+    }
+}
+
 enum ImageLoadGenerationPolicy {
     static func acceptsCompletion(
         startedGeneration: UInt,

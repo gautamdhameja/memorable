@@ -226,9 +226,17 @@ struct SearchResultsViewer: View {
 
             TabView(selection: $currentIndex) {
                 ForEach(Array(displayedResults.enumerated()), id: \.element.id) { index, result in
-                    ZoomableAsyncImage(result: result, isActive: index == currentIndex, onSingleTap: {
-                        withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
-                    })
+                    ZoomableAsyncImage(
+                        result: result,
+                        isActive: index == currentIndex,
+                        shouldLoad: PhotoViewerPreloadPolicy.shouldLoad(
+                            index: index,
+                            currentIndex: currentIndex
+                        ),
+                        onSingleTap: {
+                            withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
+                        }
+                    )
                     .tag(index)
                 }
             }
