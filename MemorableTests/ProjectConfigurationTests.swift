@@ -888,7 +888,7 @@ final class ProjectConfigurationTests: XCTestCase {
         XCTAssertTrue(thumbnail.contains("MemoryPhotoImage(image: thumb,"))
         XCTAssertTrue(thumbnail.contains(".aspectRatio(aspectRatio, contentMode: .fit)"))
         XCTAssertTrue(thumbnail.contains("PhotoLibrary.loadPreviewImage("))
-        XCTAssertTrue(thumbnail.contains("MemoryCardLayout.targetSize(for: photo, width: 400)"))
+        XCTAssertTrue(thumbnail.contains("TileImagePixelSizePolicy.maxDimension(for: tileSize"))
     }
 
     func testValidatedSuggestionsAreExclusiveWithSearchHistory() throws {

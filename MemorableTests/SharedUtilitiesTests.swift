@@ -4,6 +4,48 @@ import os
 @testable import Memorable
 
 final class SharedUtilitiesTests: XCTestCase {
+    func testTileImageSizeFollowsDrawnSizeInSteps() {
+        // A full-width tile on a 3x display asks for a sharp image.
+        XCTAssertEqual(
+            TileImagePixelSizePolicy.maxDimension(
+                for: CGSize(width: 394, height: 296),
+                displayScale: 3
+            ),
+            1_200
+        )
+        // Small tiles never drop below the previous fixed request.
+        XCTAssertEqual(
+            TileImagePixelSizePolicy.maxDimension(
+                for: CGSize(width: 60, height: 40),
+                displayScale: 3
+            ),
+            TileImagePixelSizePolicy.minimum
+        )
+        // A tall tile is capped well below full resolution.
+        XCTAssertEqual(
+            TileImagePixelSizePolicy.maxDimension(
+                for: CGSize(width: 400, height: 900),
+                displayScale: 3
+            ),
+            TileImagePixelSizePolicy.maximum
+        )
+        XCTAssertNil(TileImagePixelSizePolicy.maxDimension(for: .zero, displayScale: 3))
+    }
+
+    func testTileImageReloadsOnlyWhenTileNeedsMorePixels() {
+        XCTAssertTrue(TileImagePixelSizePolicy.needsReload(loaded: nil, requested: 400))
+        XCTAssertTrue(TileImagePixelSizePolicy.needsReload(loaded: 400, requested: 1_200))
+        XCTAssertFalse(TileImagePixelSizePolicy.needsReload(loaded: 1_200, requested: 600))
+        XCTAssertFalse(TileImagePixelSizePolicy.needsReload(loaded: 600, requested: 600))
+    }
+
+    func testCountPhraseFormatsAndPluralizes() {
+        XCTAssertEqual(CountPhrase.string(1, "year"), "1 year")
+        XCTAssertEqual(CountPhrase.string(0, "photo"), "0 photos")
+        XCTAssertEqual(CountPhrase.string(3, "match", plural: "matches"), "3 matches")
+        XCTAssertEqual(CountPhrase.string(1_204, "photo"), "\(1_204.formatted()) photos")
+    }
+
     func testStagedBookmarkDeletionRecoversAfterInterruptedDatabaseCommit() throws {
         let sourceID = "staged-deletion-\(UUID().uuidString)"
         let bookmark = Data([7, 4, 1])

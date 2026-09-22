@@ -195,6 +195,39 @@ enum MediaTileAspectRatio {
     }
 }
 
+/// Grid tiles request an image sized to the space they are drawn in. A fixed
+/// small request left full-width tiles upscaled about three times and blurry.
+/// Sizes move in steps so small layout adjustments do not trigger a reload,
+/// and the ceiling keeps a decoded tile well below a full-resolution photo.
+enum TileImagePixelSizePolicy {
+    static let minimum: CGFloat = 400
+    static let step: CGFloat = 200
+    static let maximum: CGFloat = 1_400
+
+    /// The longest image side in pixels for a tile drawn at `size` points.
+    static func maxDimension(for size: CGSize, displayScale: CGFloat) -> CGFloat? {
+        let longest = max(size.width, size.height) * displayScale
+        guard longest.isFinite, longest > 0 else { return nil }
+        let stepped = (longest / step).rounded(.up) * step
+        return min(max(stepped, minimum), maximum)
+    }
+
+    /// A loaded image is kept when it is already at least as large as the
+    /// tile now needs, so a tile that shrinks never reloads a smaller copy.
+    static func needsReload(loaded: CGFloat?, requested: CGFloat) -> Bool {
+        guard let loaded else { return true }
+        return requested > loaded
+    }
+}
+
+/// A count with its noun, such as "1 photo" or "1,204 photos".
+enum CountPhrase {
+    static func string(_ count: Int, _ singular: String, plural: String? = nil) -> String {
+        let noun = count == 1 ? singular : (plural ?? singular + "s")
+        return "\(count.formatted()) \(noun)"
+    }
+}
+
 /// The full-screen viewer pages through results with a `TabView`. Only the
 /// pages inside this window keep a decoded image, so swiping to a neighbour
 /// shows the photo immediately while viewer memory stays bounded regardless of

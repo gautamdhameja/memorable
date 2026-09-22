@@ -7,6 +7,13 @@ struct PhotoThumbnailView: View {
     @State private var isLoading = true
     @State private var imageLoadGeneration: UInt = 0
     @State private var imageLoadTask: Task<Void, Never>?
+    @State private var tileSize: CGSize = .zero
+    @State private var loadedMaxDimension: CGFloat?
+    @Environment(\.displayScale) private var displayScale
+
+    private var requestedMaxDimension: CGFloat? {
+        TileImagePixelSizePolicy.maxDimension(for: tileSize, displayScale: displayScale)
+    }
 
     private var accessibilityDescription: String {
         let type = result.isVideo ? "Video" : "Photo"
@@ -74,7 +81,13 @@ struct PhotoThumbnailView: View {
                 : accessibilityDescription
         )
         .accessibilityAddTraits(.isImage)
-        .task {
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { tileSize = $0 }
+        .task(id: requestedMaxDimension) {
+            guard let maxDimension = requestedMaxDimension,
+                  thumbnail == nil || TileImagePixelSizePolicy.needsReload(
+                      loaded: loadedMaxDimension,
+                      requested: maxDimension
+                  ) else { return }
             imageLoadTask?.cancel()
             let task = Task { @MainActor in
                 guard !Task.isCancelled else { return }
@@ -85,11 +98,11 @@ struct PhotoThumbnailView: View {
                 if result.sourceId == PhotoSourceType.photokit.rawValue,
                    !result.isVideo,
                    let asset = await PhotoLibrary.resolveAsset(by: result.localIdentifier) {
-                    loaded = await PhotoLibrary.loadThumbnail(for: asset)
+                    loaded = await PhotoLibrary.loadThumbnail(for: asset, maxDimension: maxDimension)
                 } else {
                     loaded = await PhotoLibrary.loadImage(
                         for: result,
-                        targetSize: CGSize(width: 400, height: 400)
+                        targetSize: CGSize(width: maxDimension, height: maxDimension)
                     )
                 }
                 if ImageLoadGenerationPolicy.acceptsCompletion(
@@ -97,7 +110,14 @@ struct PhotoThumbnailView: View {
                     currentGeneration: imageLoadGeneration,
                     isCancelled: Task.isCancelled
                 ) {
-                    thumbnail = loaded
+                    // Keep a sharper image already on screen if the larger
+                    // request fails, rather than blanking the tile.
+                    if let loaded {
+                        thumbnail = loaded
+                        loadedMaxDimension = maxDimension
+                    } else if thumbnail == nil {
+                        loadedMaxDimension = nil
+                    }
                     isLoading = false
                 }
             }
@@ -113,6 +133,7 @@ struct PhotoThumbnailView: View {
             imageLoadTask = nil
             imageLoadGeneration &+= 1
             MemoryPressureReleasePolicy.release(&thumbnail)
+            loadedMaxDimension = nil
             isLoading = false
         }
     }

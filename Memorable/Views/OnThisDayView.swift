@@ -192,6 +192,13 @@ struct MemoryThumbnail: View {
     @State private var imageLoadTask: Task<Void, Never>?
     @State private var selectedResult: SearchResult?
     @State private var creationDate: Date?
+    @State private var tileSize: CGSize = .zero
+    @State private var loadedMaxDimension: CGFloat?
+    @Environment(\.displayScale) private var displayScale
+
+    private var requestedMaxDimension: CGFloat? {
+        TileImagePixelSizePolicy.maxDimension(for: tileSize, displayScale: displayScale)
+    }
 
     private var aspectRatio: CGFloat {
         MemoryCardLayout.aspectRatio(for: photo)
@@ -239,8 +246,14 @@ struct MemoryThumbnail: View {
                 backTitle: viewerBackTitle
             )
         }
-        .task(id: photo.id) {
-            let task = startImageLoad()
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { tileSize = $0 }
+        .task(id: requestedMaxDimension) {
+            guard let maxDimension = requestedMaxDimension,
+                  thumbnail == nil || TileImagePixelSizePolicy.needsReload(
+                      loaded: loadedMaxDimension,
+                      requested: maxDimension
+                  ) else { return }
+            let task = startImageLoad(maxDimension: maxDimension)
             await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
@@ -258,6 +271,7 @@ struct MemoryThumbnail: View {
     }
 
     private func startImageLoad(
+        maxDimension: CGFloat,
         delayNanoseconds: UInt64 = 0,
         coordinatesRecovery: Bool = false
     ) -> Task<Void, Never> {
@@ -278,7 +292,7 @@ struct MemoryThumbnail: View {
             let load: @Sendable () async -> UIImage? = {
                 await PhotoLibrary.loadPreviewImage(
                     for: result,
-                    targetSize: MemoryCardLayout.targetSize(for: photo, width: 400)
+                    targetSize: CGSize(width: maxDimension, height: maxDimension)
                 )
             }
             let loaded = if coordinatesRecovery {
@@ -291,7 +305,14 @@ struct MemoryThumbnail: View {
                 currentGeneration: imageLoadGeneration,
                 isCancelled: Task.isCancelled
             ) else { return }
-            thumbnail = loaded
+            // Keep a sharper image already on screen if the larger request
+            // fails, rather than blanking the tile.
+            if let loaded {
+                thumbnail = loaded
+                loadedMaxDimension = maxDimension
+            } else if thumbnail == nil {
+                loadedMaxDimension = nil
+            }
             isLoading = false
             creationDate = photo.creationDate
         }
@@ -304,7 +325,9 @@ struct MemoryThumbnail: View {
         imageLoadTask = nil
         imageLoadGeneration &+= 1
         MemoryPressureReleasePolicy.release(&thumbnail)
+        loadedMaxDimension = nil
         _ = startImageLoad(
+            maxDimension: requestedMaxDimension ?? TileImagePixelSizePolicy.minimum,
             delayNanoseconds: MemoryPressureImageRecoveryPolicy.retryDelayNanoseconds,
             coordinatesRecovery: true
         )
