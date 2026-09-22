@@ -119,11 +119,16 @@ enum PhotoLibraryChangeReconciler {
         let modifiedAt: Date?
     }
 
+    /// `canAddMedia` is false once the free tier's cap is reached. Media that
+    /// is not indexed then cannot become indexed, so only a refresh of already
+    /// indexed media counts as outstanding work.
     static func needsIndexing(
-        assets: [AssetVersion], indexed: [String: IndexedMediaVersion]
+        assets: [AssetVersion],
+        indexed: [String: IndexedMediaVersion],
+        canAddMedia: Bool = true
     ) -> Bool {
         assets.contains { asset in
-            guard let version = indexed[asset.localIdentifier] else { return true }
+            guard let version = indexed[asset.localIdentifier] else { return canAddMedia }
             return IndexedMediaFreshness.needsRefresh(
                 modifiedAt: asset.modifiedAt, indexedAt: version.indexedAt
             )
@@ -133,7 +138,10 @@ enum PhotoLibraryChangeReconciler {
     /// Count equality cannot establish completeness after edits or replacement.
     /// Read at most one page of identities/timestamps at a time and stop once
     /// there is work; folder rows never participate in this comparison.
-    static func hasUnindexedOrModifiedMedia(database: DatabaseProtocol) throws -> Bool {
+    static func hasUnindexedOrModifiedMedia(
+        database: DatabaseProtocol,
+        canAddMedia: Bool = true
+    ) throws -> Bool {
         let assets = PhotoLibrary.fetchAllMedia()
         let pageSize = SearchIndexLimits.databasePageMediaItems
         for start in stride(from: 0, to: assets.count, by: pageSize) {
@@ -145,8 +153,15 @@ enum PhotoLibraryChangeReconciler {
                 let version = AssetVersion(localIdentifier: asset.localIdentifier, modifiedAt: asset.modificationDate)
                 if asset.mediaType == .video { videos.append(version) } else { photos.append(version) }
             }
-            if try needsIndexing(assets: photos, indexed: database.indexedPhotoVersions(in: photos.map(\.localIdentifier)))
-                || needsIndexing(assets: videos, indexed: database.indexedVideoVersions(in: videos.map(\.localIdentifier))) {
+            if try needsIndexing(
+                assets: photos,
+                indexed: database.indexedPhotoVersions(in: photos.map(\.localIdentifier)),
+                canAddMedia: canAddMedia
+            ) || needsIndexing(
+                assets: videos,
+                indexed: database.indexedVideoVersions(in: videos.map(\.localIdentifier)),
+                canAddMedia: canAddMedia
+            ) {
                 return true
             }
         }

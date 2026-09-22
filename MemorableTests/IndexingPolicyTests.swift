@@ -364,6 +364,76 @@ final class IndexingPolicyTests: XCTestCase {
         ))
     }
 
+    func testFullFreeLibraryReportsNoOutstandingMediaSoLaunchesStopResuming() {
+        let capped = FreeTier.maxIndexedMedia
+        let canAdd = FreeTier.canIndexMore(indexedMediaCount: capped, isPro: false)
+        XCTAssertFalse(canAdd)
+
+        // A free library far larger than the cap has nothing a run could add,
+        // so it must not read as outstanding work on every launch.
+        XCTAssertEqual(
+            LibraryIndexingCompletenessPolicy.outstandingMediaCount(
+                totalInLibrary: 20_000, totalIndexed: capped, canAddMedia: canAdd
+            ),
+            0
+        )
+
+        // Below the cap, and for Pro, the remaining media is still real work.
+        XCTAssertEqual(
+            LibraryIndexingCompletenessPolicy.outstandingMediaCount(
+                totalInLibrary: 20_000,
+                totalIndexed: 400,
+                canAddMedia: FreeTier.canIndexMore(indexedMediaCount: 400, isPro: false)
+            ),
+            19_600
+        )
+        XCTAssertEqual(
+            LibraryIndexingCompletenessPolicy.outstandingMediaCount(
+                totalInLibrary: 20_000,
+                totalIndexed: capped,
+                canAddMedia: FreeTier.canIndexMore(indexedMediaCount: capped, isPro: true)
+            ),
+            19_500
+        )
+
+        // An index holding more photo-library rows than the library reports is
+        // not negative work.
+        XCTAssertEqual(
+            LibraryIndexingCompletenessPolicy.outstandingMediaCount(
+                totalInLibrary: 10, totalIndexed: 25, canAddMedia: true
+            ),
+            0
+        )
+    }
+
+    func testFullFreeLibraryStillReportsEditsToAlreadyIndexedMedia() {
+        let indexedAt = Date(timeIntervalSince1970: 100)
+        let indexed = ["kept": IndexedMediaVersion(id: "kept", indexedAt: indexedAt)]
+
+        // Media that never reached the index cannot be added at the cap, so it
+        // is not outstanding work.
+        XCTAssertFalse(PhotoLibraryChangeReconciler.needsIndexing(
+            assets: [.init(localIdentifier: "beyond-cap", modifiedAt: indexedAt)],
+            indexed: indexed,
+            canAddMedia: false
+        ))
+
+        // An edit to media that is already indexed is a replacement, which does
+        // not grow the index, so it must still resume.
+        XCTAssertTrue(PhotoLibraryChangeReconciler.needsIndexing(
+            assets: [.init(localIdentifier: "kept", modifiedAt: indexedAt.addingTimeInterval(1))],
+            indexed: indexed,
+            canAddMedia: false
+        ))
+
+        // Below the cap the unindexed asset is outstanding work again.
+        XCTAssertTrue(PhotoLibraryChangeReconciler.needsIndexing(
+            assets: [.init(localIdentifier: "beyond-cap", modifiedAt: indexedAt)],
+            indexed: indexed,
+            canAddMedia: true
+        ))
+    }
+
     func testFullFreeTierCanRefreshRetainedMediaWithoutAddingItems() {
         let indexedAt = Date(timeIntervalSince1970: 100)
         let indexed = IndexedMediaVersion(id: "retained", indexedAt: indexedAt)

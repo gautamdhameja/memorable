@@ -1442,6 +1442,30 @@ class IndexingService: ObservableObject {
         case unavailable
     }
 
+    /// A forced refresh only ever replaces media that is already indexed. An
+    /// identifier that never reached the index cannot be refreshed, and once
+    /// the free tier's cap is reached it cannot be inserted either, so leaving
+    /// it queued would ask for a resume on every launch forever.
+    private func pruneUnrefreshablePendingMedia() async {
+        guard !pendingPhotoRefreshIDs.isEmpty || !pendingVideoRefreshIDs.isEmpty else { return }
+        let db = database
+        let photoIDs = Array(pendingPhotoRefreshIDs)
+        let videoIDs = Array(pendingVideoRefreshIDs)
+        do {
+            let indexed = try await CancellableDetachedOperation.run {
+                (
+                    photos: Set(try db.indexedPhotoVersions(in: photoIDs).keys),
+                    videos: Set(try db.indexedVideoVersions(in: videoIDs).keys)
+                )
+            }
+            pendingPhotoRefreshIDs.formIntersection(indexed.photos)
+            pendingVideoRefreshIDs.formIntersection(indexed.videos)
+        } catch {
+            // Leave the queue untouched; the next decision retries the prune.
+            return
+        }
+    }
+
     private func didReplaceIndexedMedia(_ identifier: String) {
         PhotoLibrary.clearAssetCache()
         pendingPhotoRefreshIDs.remove(identifier)
@@ -2055,11 +2079,19 @@ class IndexingService: ObservableObject {
         }
 
         let counts: IndexedMediaCounts
+        // The free tier's cap counts every indexed row, including folder
+        // sources, so the cap check must use the same total the worker applies.
+        let allIndexedMediaCount: Int
         do {
             let db = database
-            counts = try await CancellableDetachedOperation.run {
-                try db.photoLibraryIndexedMediaCounts()
+            let snapshot = try await CancellableDetachedOperation.run {
+                (
+                    library: try db.photoLibraryIndexedMediaCounts(),
+                    allMedia: try db.indexedMediaCounts().total
+                )
             }
+            counts = snapshot.library
+            allIndexedMediaCount = snapshot.allMedia
         } catch is CancellationError {
             return .unavailable
         } catch {
@@ -2069,16 +2101,31 @@ class IndexingService: ObservableObject {
 
         let totalIndexed = counts.total
         guard totalIndexed > 0 else { return .noIndex }
-        let unindexedCount = totalInLibrary - totalIndexed
+        // Once a free library reaches the cap, media beyond it can never be
+        // indexed. Counting it as outstanding work asked every launch to resume
+        // a pass that could only scan the library and index nothing.
+        let canAddMedia = FreeTier.canIndexMore(
+            indexedMediaCount: allIndexedMediaCount,
+            isPro: ProManager.shared.isPro
+        )
+        let unindexedCount = LibraryIndexingCompletenessPolicy.outstandingMediaCount(
+            totalInLibrary: totalInLibrary,
+            totalIndexed: totalIndexed,
+            canAddMedia: canAddMedia
+        )
 
         if unindexedCount <= 0 {
+            await pruneUnrefreshablePendingMedia()
             if !pendingPhotoRefreshIDs.isEmpty || !pendingVideoRefreshIDs.isEmpty {
                 return .resume
             }
             do {
                 let db = database
                 let needsIndexing = try await CancellableDetachedOperation.run {
-                    try PhotoLibraryChangeReconciler.hasUnindexedOrModifiedMedia(database: db)
+                    try PhotoLibraryChangeReconciler.hasUnindexedOrModifiedMedia(
+                        database: db,
+                        canAddMedia: canAddMedia
+                    )
                 }
                 return needsIndexing ? .resume : .complete
             } catch is CancellationError {

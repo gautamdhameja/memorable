@@ -108,6 +108,20 @@ enum ForegroundSemanticWarmupPolicy {
     }
 }
 
+/// Decides how much of the photo library a run could still index. Media beyond
+/// the free tier's cap can never be indexed, so counting it as outstanding work
+/// asks every launch to resume a pass that can only rescan and index nothing.
+enum LibraryIndexingCompletenessPolicy {
+    static func outstandingMediaCount(
+        totalInLibrary: Int,
+        totalIndexed: Int,
+        canAddMedia: Bool
+    ) -> Int {
+        guard canAddMedia else { return 0 }
+        return max(0, totalInLibrary - totalIndexed)
+    }
+}
+
 enum IndexingBackgroundTimePolicy {
     /// Leave enough time for the current database write and cancellation path
     /// to finish before UIKit's finite background assertion expires.
