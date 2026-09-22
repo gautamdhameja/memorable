@@ -41,7 +41,8 @@ struct AroundThisTimeView: View {
                                     MemoryThumbnail(photo: nearby, groupPhotos: entitledPhotos,
                                                     searchEngine: searchEngine, accessibilityTitle: nearby.creationDate.map {
                                             "Photo taken \($0.formatted(date: .abbreviated, time: .shortened))"
-                                        } ?? "Photo")
+                                        } ?? "Photo",
+                                                    viewerBackTitle: "Nearby")
                                 }
                             }
                             if photos.count == 100 {

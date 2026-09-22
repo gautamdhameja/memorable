@@ -188,6 +188,9 @@ struct SearchResultsViewer: View {
     let initialResult: SearchResult
     let allResults: [SearchResult]
     var searchEngine: SearchEngine? = nil
+    /// Names the screen the back button returns to. Search results are only one
+    /// of the places this viewer opens from.
+    var backTitle: String = "Results"
 
     @Environment(\.database) private var database
     @Environment(\.userSearchActivity) private var userSearchActivity
@@ -211,11 +214,13 @@ struct SearchResultsViewer: View {
     init(
         initialResult: SearchResult,
         allResults: [SearchResult],
-        searchEngine: SearchEngine? = nil
+        searchEngine: SearchEngine? = nil,
+        backTitle: String = "Results"
     ) {
         self.initialResult = initialResult
         self.allResults = allResults
         self.searchEngine = searchEngine
+        self.backTitle = backTitle
         _currentIndex = State(initialValue: allResults.firstIndex(where: { $0.id == initialResult.id }) ?? 0)
         _displayedResults = State(initialValue: allResults)
     }
@@ -276,7 +281,7 @@ struct SearchResultsViewer: View {
                                 if dynamicTypeSize.isAccessibilitySize {
                                     Image(systemName: "chevron.left")
                                 } else {
-                                    Label("Results", systemImage: "chevron.left")
+                                    Label(backTitle, systemImage: "chevron.left")
                                 }
                             }
                             .font(Celestial.Typography.body)
@@ -285,7 +290,7 @@ struct SearchResultsViewer: View {
                             tint: Color.black.opacity(0.16),
                             foreground: .white
                         )
-                        .accessibilityLabel("Back to results")
+                        .accessibilityLabel("Back to \(backTitle)")
                         Spacer()
                         if displayedResults.count > 1 {
                             Text("\(currentIndex + 1) of \(displayedResults.count)")

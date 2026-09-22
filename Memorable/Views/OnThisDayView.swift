@@ -184,6 +184,8 @@ struct MemoryThumbnail: View {
     var groupPhotos: [IndexedPhotoReference] = []
     var searchEngine: SearchEngine? = nil
     var accessibilityTitle: String? = nil
+    /// The screen this thumbnail sits on, shown on the viewer's back button.
+    var viewerBackTitle: String = "Memories"
     @State private var thumbnail: UIImage?
     @State private var isLoading = true
     @State private var imageLoadGeneration: UInt = 0
@@ -233,7 +235,8 @@ struct MemoryThumbnail: View {
             SearchResultsViewer(
                 initialResult: result,
                 allResults: groupPhotos.map(\.searchResult),
-                searchEngine: searchEngine
+                searchEngine: searchEngine,
+                backTitle: viewerBackTitle
             )
         }
         .task(id: photo.id) {
