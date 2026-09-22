@@ -39,8 +39,7 @@ struct IndexingBannerView: View {
         let progress = indexingService.progress
         var parts: [String] = []
         if progress.searchableCount > 0 {
-            let noun = progress.searchableCount == 1 ? "item" : "items"
-            parts.append("\(progress.searchableCount.formatted()) \(noun) searchable")
+            parts.append("\(CountPhrase.string(progress.searchableCount, "item")) searchable")
         } else {
             parts.append("Finding your first searchable moments")
         }

@@ -57,7 +57,7 @@ struct DuplicateFinderView: View {
                                 }
                             } header: {
                                 HStack {
-                                    Text("\(duplicates.count) potential duplicates")
+                                    Text(CountPhrase.string(duplicates.count, "potential duplicate"))
                                     Spacer()
                                     Text("Review before deleting")
                                 }

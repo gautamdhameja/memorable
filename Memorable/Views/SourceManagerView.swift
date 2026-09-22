@@ -35,7 +35,7 @@ struct SourceManagerView: View {
                                 .font(Celestial.Typography.bodyEmphasized)
                                 .foregroundStyle(Celestial.Colors.onSurface)
                             if indexingService.isReady {
-                                Text("\(applePhotosIndexedCount) photos indexed")
+                                Text("\(CountPhrase.string(applePhotosIndexedCount, "photo")) indexed")
                                     .font(Celestial.Typography.caption)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
@@ -60,6 +60,7 @@ struct SourceManagerView: View {
                     .padding(Celestial.Spacing.surfaceContentInset)
                     .modifier(GlassPanelModifier(cornerRadius: 16))
                     .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                     .listRowInsets(containerRowInsets)
                     .disabled(!database.allowsIndexingWrites)
                 } header: {
@@ -89,7 +90,7 @@ struct SourceManagerView: View {
                                     Text(source.name)
                                         .font(Celestial.Typography.bodyEmphasized)
                                         .foregroundStyle(Celestial.Colors.onSurface)
-                                    Text("\(source.photoCount) photos")
+                                    Text(CountPhrase.string(source.photoCount, "photo"))
                                         .font(Celestial.Typography.caption)
                                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                 }
@@ -107,13 +108,18 @@ struct SourceManagerView: View {
                                             ? "arrow.clockwise.circle"
                                             : "lock.circle"
                                     )
+                                    .font(Celestial.Typography.bodyStrong)
                                     .foregroundStyle(
                                         proManager.isPro
                                             ? Celestial.Colors.primaryDim
                                             : Celestial.Colors.amber
                                     )
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
+                                .padding(.vertical, -8)
+                                .padding(.trailing, -10)
                                 .disabled(indexingService.progress.isRunning)
                                 .accessibilityLabel(
                                     proManager.isPro
@@ -147,7 +153,7 @@ struct SourceManagerView: View {
 
                         Button(action: requestFolderPicker) {
                             Label(
-                                proManager.isPro ? "Add Folder" : "Add Folder (Pro)",
+                                proManager.isPro ? "Add Folder" : "Add Folder · Pro",
                                 systemImage: "plus.circle"
                             )
                         }
@@ -163,6 +169,9 @@ struct SourceManagerView: View {
                 }
             }
             .scrollContentBackground(.hidden)
+            // Rows supply their own 16-point inset, matching the other
+            // screens. The grouped list otherwise added a second margin.
+            .contentMargins(.horizontal, 0, for: .scrollContent)
         }
         .preferredColorScheme(.dark)
         .celestialNavigationTitle("Photo Sources")
@@ -188,7 +197,7 @@ struct SourceManagerView: View {
         .sheet(isPresented: $showUpgrade) {
             UpgradeView()
         }
-        .alert("Error", isPresented: .init(
+        .alert("Photo sources", isPresented: .init(
             get: { deleteError != nil || loadError != nil || indexingService.folderIndexingError != nil },
             set: {
                 if !$0 {
