@@ -1402,23 +1402,26 @@ struct SearchView: View {
 
                 if !viewModel.fallbackResults.isEmpty {
                     DisclosureGroup("Show closest matches") {
-                        let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
-                        LazyVGrid(columns: columns, spacing: 8) {
-                            ForEach(viewModel.fallbackResults) { result in
-                                Button {
-                                    if result.isVideo {
-                                        presentVideoPlayer(localIdentifier: result.localIdentifier)
-                                    } else {
-                                        // Use fallback results for the viewer since main results are empty.
-                                        viewModel.useFallbackResultsForViewer()
-                                        selectedPhoto = result
-                                    }
-                                } label: {
-                                    FallbackThumbnail(result: result)
+                        // Sort the same way the viewer pages, so a tile's
+                        // position matches the "n of m" it opens at.
+                        MasonryGrid(
+                            viewModel.filteredResults(viewModel.fallbackResults),
+                            spacing: 4,
+                            aspectRatio: { MediaTileAspectRatio.ratio(for: $0) }
+                        ) { result in
+                            Button {
+                                if result.isVideo {
+                                    presentVideoPlayer(localIdentifier: result.localIdentifier)
+                                } else {
+                                    // Use fallback results for the viewer since main results are empty.
+                                    viewModel.useFallbackResultsForViewer()
+                                    selectedPhoto = result
                                 }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(result.isVideo ? "Video result" : "Photo result")
+                            } label: {
+                                PhotoThumbnailView(result: result)
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(result.isVideo ? "Video result" : "Photo result")
                         }
                         .padding(.top, 12)
                     }
@@ -1469,55 +1472,6 @@ struct SearchView: View {
         viewModel.setQueryText(parts.joined(separator: " "))
         performSearch(saveToHistory: true)
     }
-
-    private struct FallbackThumbnail: View {
-        let result: SearchResult
-        @State private var image: UIImage?
-        @State private var imageLoadGeneration: UInt = 0
-        @State private var imageLoadTask: Task<Void, Never>?
-
-        var body: some View {
-            Group {
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
-                        .clipped()
-                } else {
-                    Color(Celestial.Colors.surfaceContainer)
-                }
-            }
-            .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .task {
-                imageLoadTask?.cancel()
-                let task = Task { @MainActor in
-                    imageLoadGeneration &+= 1
-                    let generation = imageLoadGeneration
-                    let loaded = await PhotoLibrary.loadImage(
-                        for: result,
-                        targetSize: CGSize(width: 400, height: 400)
-                    )
-                    guard ImageLoadGenerationPolicy.acceptsCompletion(
-                        startedGeneration: generation,
-                        currentGeneration: imageLoadGeneration,
-                        isCancelled: Task.isCancelled
-                    ) else { return }
-                    image = loaded
-                }
-                imageLoadTask = task
-                await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
-                imageLoadTask?.cancel()
-                imageLoadTask = nil
-                imageLoadGeneration &+= 1
-                MemoryPressureReleasePolicy.release(&image)
-            }
-        }
-    }
-
     private var indexReadinessCheckingState: some View {
         VStack(spacing: 12) {
             ProgressView()

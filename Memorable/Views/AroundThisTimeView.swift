@@ -36,14 +36,16 @@ struct AroundThisTimeView: View {
                                 Text(date.formatted(date: .long, time: .shortened))
                                     .font(Celestial.Typography.bodyStrong)
                             }
-                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                                ForEach(entitledPhotos) { nearby in
-                                    MemoryThumbnail(photo: nearby, groupPhotos: entitledPhotos,
-                                                    searchEngine: searchEngine, accessibilityTitle: nearby.creationDate.map {
-                                            "Photo taken \($0.formatted(date: .abbreviated, time: .shortened))"
-                                        } ?? "Photo",
-                                                    viewerBackTitle: "Nearby")
-                                }
+                            MasonryGrid(
+                                entitledPhotos,
+                                spacing: 5,
+                                aspectRatio: { MediaTileAspectRatio.ratio(for: $0) }
+                            ) { nearby in
+                                MemoryThumbnail(photo: nearby, groupPhotos: entitledPhotos,
+                                                searchEngine: searchEngine, accessibilityTitle: nearby.creationDate.map {
+                                        "Photo taken \($0.formatted(date: .abbreviated, time: .shortened))"
+                                    } ?? "Photo",
+                                                viewerBackTitle: "Nearby")
                             }
                             if photos.count == 100 {
                                 Text("Showing the 100 closest photos.")
