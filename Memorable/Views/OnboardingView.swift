@@ -94,7 +94,7 @@ struct OnboardingView: View {
                     }
                     .font(Celestial.Typography.title)
 
-                    (Text("No developer account or tracking. ")
+                    (Text("No sign-up. No tracking. ")
                         .foregroundColor(Celestial.Colors.primary.opacity(0.88))
                         + Text("No automatic photo uploads.")
                         .foregroundColor(Celestial.Colors.onSurfaceVariant))
@@ -102,10 +102,9 @@ struct OnboardingView: View {
                         .padding(.top, 16)
 
                     VStack(spacing: 0) {
-                        privacyRow(number: "01", text: "Indexing and search run on this iPhone")
+                        privacyRow(number: "01", text: "Indexing and search run on this iPhone", isFirst: true)
                         privacyRow(number: "02", text: "Apple resolves photo coordinates into place names")
                         privacyRow(number: "03", text: "Delete the index any time")
-                        CelestialHairline()
                     }
                     .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                     .modifier(GlassPanelModifier(cornerRadius: 18))
@@ -175,10 +174,9 @@ struct OnboardingView: View {
                         .padding(.top, 16)
 
                     VStack(spacing: 0) {
-                        setupRow(label: "Processing", value: "On device")
+                        setupRow(label: "Processing", value: "On device", isFirst: true)
                         setupRow(label: "Search availability", value: "Progressive")
                         setupRow(label: "Free tier indexes", value: "First 500 items", accent: true)
-                        CelestialHairline()
                     }
                     .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                     .modifier(GlassPanelModifier(cornerRadius: 18))
@@ -221,7 +219,9 @@ struct OnboardingView: View {
         }
     }
 
-    private func privacyRow(number: String, text: String) -> some View {
+    // Dividers sit between rows only. A line on the first and last row
+    // traced the panel's own border just inside it.
+    private func privacyRow(number: String, text: String, isFirst: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
             Text(number)
                 .font(Celestial.Typography.technical)
@@ -232,10 +232,17 @@ struct OnboardingView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 19)
-        .overlay(alignment: .top) { CelestialHairline() }
+        .overlay(alignment: .top) {
+            if !isFirst { CelestialHairline() }
+        }
     }
 
-    private func setupRow(label: String, value: String, accent: Bool = false) -> some View {
+    private func setupRow(
+        label: String,
+        value: String,
+        accent: Bool = false,
+        isFirst: Bool = false
+    ) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(label)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
@@ -246,7 +253,9 @@ struct OnboardingView: View {
         }
         .font(Celestial.Typography.supporting)
         .padding(.vertical, 15)
-        .overlay(alignment: .top) { CelestialHairline() }
+        .overlay(alignment: .top) {
+            if !isFirst { CelestialHairline() }
+        }
     }
 
     private func pageFooter(primaryTitle: String, action: @escaping () -> Void) -> some View {

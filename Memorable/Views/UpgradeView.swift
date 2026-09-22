@@ -37,7 +37,8 @@ struct UpgradeView: View {
                         proFeature(
                             "Search everything",
                             detail: "Every locally available photo and video, including folders",
-                            icon: "photo.stack"
+                            icon: "photo.stack",
+                            isFirst: true
                         )
                         proFeature(
                             "Find exactly what you mean",
@@ -49,7 +50,6 @@ struct UpgradeView: View {
                             detail: "Review near-identical photos safely before removing a copy",
                             icon: "square.on.square"
                         )
-                        CelestialHairline()
                     }
                     .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
                     .modifier(
@@ -188,7 +188,12 @@ struct UpgradeView: View {
         .overlay(alignment: .top) { CelestialHairline() }
     }
 
-    private func proFeature(_ title: String, detail: String, icon: String) -> some View {
+    private func proFeature(
+        _ title: String,
+        detail: String,
+        icon: String,
+        isFirst: Bool = false
+    ) -> some View {
         HStack(alignment: .top, spacing: 12) {
             CelestialGlassIcon(
                 systemName: icon,
@@ -207,6 +212,9 @@ struct UpgradeView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 13)
-        .overlay(alignment: .top) { CelestialHairline() }
+        // Dividers sit between rows only, not along the panel's border.
+        .overlay(alignment: .top) {
+            if !isFirst { CelestialHairline() }
+        }
     }
 }
