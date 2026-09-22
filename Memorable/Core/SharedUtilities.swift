@@ -123,6 +123,52 @@ enum MemoryPressureImageRecoveryPolicy {
     }
 }
 
+/// Widths for one row of tiles that share a single height. Each tile keeps its
+/// own aspect ratio and the row fills the proposed width exactly, so a row of
+/// mixed portrait and landscape photos has no gap under the shorter tile.
+enum JustifiedRowLayout {
+    /// The height every tile in the row shares. Returns zero when the row
+    /// cannot be laid out, and callers then fall back to equal widths.
+    static func rowHeight(
+        availableWidth: CGFloat,
+        aspectRatios: [CGFloat],
+        spacing: CGFloat
+    ) -> CGFloat {
+        guard !aspectRatios.isEmpty,
+              availableWidth.isFinite,
+              availableWidth > 0,
+              spacing.isFinite,
+              spacing >= 0 else { return 0 }
+        let totalSpacing = spacing * CGFloat(aspectRatios.count - 1)
+        let contentWidth = availableWidth - totalSpacing
+        guard contentWidth > 0 else { return 0 }
+        let ratioSum = aspectRatios.reduce(0) { $0 + max(0, $1) }
+        guard ratioSum.isFinite, ratioSum > 0 else { return 0 }
+        return contentWidth / ratioSum
+    }
+
+    /// Tile widths in row order. A tile's width is its aspect ratio times the
+    /// shared height, so every tile renders at its true proportions.
+    static func widths(
+        availableWidth: CGFloat,
+        aspectRatios: [CGFloat],
+        spacing: CGFloat
+    ) -> [CGFloat] {
+        let height = rowHeight(
+            availableWidth: availableWidth,
+            aspectRatios: aspectRatios,
+            spacing: spacing
+        )
+        guard height > 0 else {
+            guard !aspectRatios.isEmpty else { return [] }
+            let totalSpacing = spacing * CGFloat(aspectRatios.count - 1)
+            let equal = max(0, (availableWidth - totalSpacing)) / CGFloat(aspectRatios.count)
+            return [CGFloat](repeating: equal, count: aspectRatios.count)
+        }
+        return aspectRatios.map { max(0, $0) * height }
+    }
+}
+
 /// Shared proportions for photo and video tiles in the result and memory
 /// grids. The ratio comes from indexed pixel dimensions rather than the decoded
 /// image, so a tile reserves its real shape before the image arrives and never

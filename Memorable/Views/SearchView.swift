@@ -1873,7 +1873,11 @@ struct SearchView: View {
     }
 
     private func masonryGrid(results: [SearchResult]) -> some View {
-        MasonryGrid(results, spacing: 4) { result in
+        MasonryGrid(
+            results,
+            spacing: 4,
+            aspectRatio: { MediaTileAspectRatio.ratio(for: $0) }
+        ) { result in
             resultTile(result: result)
         }
     }

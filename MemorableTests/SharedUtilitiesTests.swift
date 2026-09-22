@@ -289,6 +289,81 @@ final class SharedUtilitiesTests: XCTestCase {
         XCTAssertNil(weakResource.value)
     }
 
+    func testJustifiedRowFillsItsWidthAndGivesEveryTileTheSameHeight() {
+        let ratios: [CGFloat] = [4.0 / 3.0, 16.0 / 9.0, 3.0 / 4.0]
+        let spacing: CGFloat = 4
+        let available: CGFloat = 390
+
+        let height = JustifiedRowLayout.rowHeight(
+            availableWidth: available, aspectRatios: ratios, spacing: spacing
+        )
+        XCTAssertGreaterThan(height, 0)
+
+        let widths = JustifiedRowLayout.widths(
+            availableWidth: available, aspectRatios: ratios, spacing: spacing
+        )
+        XCTAssertEqual(widths.count, ratios.count)
+
+        // The row fills the proposed width exactly, leaving no gap.
+        let total = widths.reduce(0, +) + spacing * CGFloat(ratios.count - 1)
+        XCTAssertEqual(total, available, accuracy: 0.001)
+
+        // Every tile renders at its own aspect ratio against the shared height.
+        for (width, ratio) in zip(widths, ratios) {
+            XCTAssertEqual(width / height, ratio, accuracy: 0.001)
+        }
+    }
+
+    func testJustifiedRowFallsBackToEqualWidthsWhenItCannotBeJustified() {
+        // No width yet, for example during an early layout pass.
+        XCTAssertEqual(
+            JustifiedRowLayout.rowHeight(
+                availableWidth: 0, aspectRatios: [1, 1], spacing: 4
+            ),
+            0
+        )
+        let equal = JustifiedRowLayout.widths(
+            availableWidth: 104, aspectRatios: [0, 0], spacing: 4
+        )
+        XCTAssertEqual(equal.count, 2)
+        XCTAssertEqual(equal[0], 50, accuracy: 0.001)
+        XCTAssertEqual(equal[1], 50, accuracy: 0.001)
+
+        // Spacing wider than the row must not produce negative widths.
+        let crowded = JustifiedRowLayout.widths(
+            availableWidth: 10, aspectRatios: [1, 1], spacing: 40
+        )
+        XCTAssertEqual(crowded.count, 2)
+        XCTAssertTrue(crowded.allSatisfy { $0 >= 0 })
+
+        XCTAssertTrue(
+            JustifiedRowLayout.widths(
+                availableWidth: 390, aspectRatios: [], spacing: 4
+            ).isEmpty
+        )
+    }
+
+    func testJustifiedRowRejectsNonFiniteInput() {
+        XCTAssertEqual(
+            JustifiedRowLayout.rowHeight(
+                availableWidth: .infinity, aspectRatios: [1], spacing: 0
+            ),
+            0
+        )
+        XCTAssertEqual(
+            JustifiedRowLayout.rowHeight(
+                availableWidth: 390, aspectRatios: [.nan], spacing: 0
+            ),
+            0
+        )
+        XCTAssertEqual(
+            JustifiedRowLayout.rowHeight(
+                availableWidth: 390, aspectRatios: [1], spacing: -4
+            ),
+            0
+        )
+    }
+
     func testPhotoViewerKeepsNeighbouringPagesLoadedAndReleasesDistantOnes() {
         // The visible page and the one on each side stay decoded so a swipe
         // reveals the photo instead of a spinner.

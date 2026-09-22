@@ -85,7 +85,8 @@ struct OnThisDayView: View {
 
                                     MasonryGrid(
                                         Array(group.photos.prefix(20)),
-                                        spacing: 5
+                                        spacing: 5,
+                                        aspectRatio: { MediaTileAspectRatio.ratio(for: $0) }
                                     ) { photo in
                                         MemoryThumbnail(
                                             photo: photo,

@@ -1,14 +1,95 @@
 import SwiftUI
 
+/// Lays out one row of tiles at a single shared height. Each subview is offered
+/// a width proportional to its aspect ratio, so tiles keep their true
+/// proportions and the row fills its proposed width without leaving a gap under
+/// the shorter tile.
+struct JustifiedRow: Layout {
+    let aspectRatios: [CGFloat]
+    let spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let width = proposal.width ?? 0
+        let ratios = resolvedRatios(count: subviews.count)
+        let height = JustifiedRowLayout.rowHeight(
+            availableWidth: width,
+            aspectRatios: ratios,
+            spacing: spacing
+        )
+        guard height > 0 else {
+            // Without a usable width the row cannot be justified; report the
+            // tallest subview so the grid still reserves sensible space.
+            let fallback = subviews
+                .map { $0.sizeThatFits(proposal).height }
+                .max() ?? 0
+            return CGSize(width: width, height: fallback)
+        }
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let ratios = resolvedRatios(count: subviews.count)
+        let widths = JustifiedRowLayout.widths(
+            availableWidth: bounds.width,
+            aspectRatios: ratios,
+            spacing: spacing
+        )
+        guard widths.count == subviews.count else { return }
+        let height = JustifiedRowLayout.rowHeight(
+            availableWidth: bounds.width,
+            aspectRatios: ratios,
+            spacing: spacing
+        )
+        var x = bounds.minX
+        for (index, subview) in subviews.enumerated() {
+            let width = widths[index]
+            subview.place(
+                at: CGPoint(x: x, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(
+                    width: width,
+                    height: height > 0 ? height : nil
+                )
+            )
+            x += width + spacing
+        }
+    }
+
+    /// The grid supplies one ratio per tile. Guard anyway so a mismatch falls
+    /// back to equal shares instead of dropping tiles.
+    private func resolvedRatios(count: Int) -> [CGFloat] {
+        guard aspectRatios.count == count else {
+            return [CGFloat](repeating: MediaTileAspectRatio.fallback, count: count)
+        }
+        return aspectRatios
+    }
+}
+
 /// Reusable masonry layout with varied row patterns for a more organic feel.
 struct MasonryGrid<Item: Identifiable, Content: View>: View {
     let items: [Item]
     let spacing: CGFloat
+    let aspectRatio: (Item) -> CGFloat
     let content: (Item) -> Content
 
-    init(_ items: [Item], spacing: CGFloat = 10, @ViewBuilder content: @escaping (Item) -> Content) {
+    init(
+        _ items: [Item],
+        spacing: CGFloat = 10,
+        aspectRatio: @escaping (Item) -> CGFloat = { _ in MediaTileAspectRatio.fallback },
+        @ViewBuilder content: @escaping (Item) -> Content
+    ) {
         self.items = items
         self.spacing = spacing
+        self.aspectRatio = aspectRatio
         self.content = content
     }
 
@@ -88,24 +169,23 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
                 case .feature(let item):
                     content(item)
                 case .pair(let a, let b):
-                    HStack(alignment: .top, spacing: spacing) {
-                        content(a)
-                            .frame(maxWidth: .infinity)
-                        content(b)
-                            .frame(maxWidth: .infinity)
-                    }
+                    justifiedRow([a, b])
                 case .triple(let a, let b, let c):
-                    HStack(alignment: .top, spacing: spacing) {
-                        content(a)
-                            .frame(maxWidth: .infinity)
-                        content(b)
-                            .frame(maxWidth: .infinity)
-                        content(c)
-                            .frame(maxWidth: .infinity)
-                    }
+                    justifiedRow([a, b, c])
                 case .single(let item):
                     content(item)
                 }
+            }
+        }
+    }
+
+    private func justifiedRow(_ rowItems: [Item]) -> some View {
+        JustifiedRow(
+            aspectRatios: rowItems.map(aspectRatio),
+            spacing: spacing
+        ) {
+            ForEach(rowItems) { item in
+                content(item)
             }
         }
     }
