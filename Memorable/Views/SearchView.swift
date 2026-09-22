@@ -406,7 +406,10 @@ struct SearchView: View {
             }
 
         let lifecycleContent = presentedContent
-            .onAppear {
+            // The reset callbacks outlive this view on the indexing service, so
+            // they hold the view model weakly. Capture it explicitly here so the
+            // outer closure's strong reference is stated rather than implied.
+            .onAppear { [viewModel] in
                 indexingService.onIndexResetStarted = { [weak viewModel] in
                     viewModel?.beginIndexReset()
                     await viewModel?.waitForHistoryUpdates()
