@@ -207,6 +207,7 @@ struct SearchResultsViewer: View {
     @State private var findSimilarTask: Task<Void, Never>?
     @State private var findSimilarGeneration = 0
     @State private var isFindingSimilar = false
+    @State private var showNoSimilarPhotos = false
     @StateObject private var shareCoordinator = PhotoShareCoordinator()
     @ObservedObject private var proManager = ProManager.shared
     @Environment(\.dismiss) private var dismiss
@@ -353,7 +354,8 @@ struct SearchResultsViewer: View {
                             .foregroundStyle(.white.opacity(0.94))
                             .frame(minHeight: 44)
                             .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
-                            .padding(.vertical, 6)
+                            .padding(.top, 14)
+                            .padding(.bottom, 4)
                             .modifier(
                                 GlassPanelModifier(
                                     cornerRadius: 18,
@@ -370,6 +372,11 @@ struct SearchResultsViewer: View {
         }
         .statusBar(hidden: true)
         .sheet(isPresented: $showUpgrade) { UpgradeView() }
+        .alert("No similar photos", isPresented: $showNoSimilarPhotos) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Memorable didn't find other photos close enough to this one.")
+        }
         .sheet(item: $nearbyPhoto) { AroundThisTimeView(photo: $0, searchEngine: searchEngine) }
         .task(id: "\(currentResultID ?? ""):\(proManager.isPro)") {
             recognizedText = nil
@@ -496,7 +503,11 @@ struct SearchResultsViewer: View {
         if showsFindSimilar {
             Button(action: handleFindSimilar) {
                 HStack(spacing: 8) {
-                    if isFindingSimilar { ProgressView().tint(Celestial.Colors.amber) }
+                    if isFindingSimilar {
+                        ProgressView().tint(Celestial.Colors.amber)
+                    } else {
+                        Image(systemName: "sparkle.magnifyingglass")
+                    }
                     Text(proManager.isPro ? "Find similar" : "Find similar · Pro")
                 }
             }
@@ -576,6 +587,9 @@ struct SearchResultsViewer: View {
                     displayedResults = photoResults
                     currentIndex = 0
                 }
+            } else {
+                // The button otherwise stopped spinning with no change.
+                showNoSimilarPhotos = true
             }
             isFindingSimilar = false
             findSimilarTask = nil
