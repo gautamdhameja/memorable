@@ -199,7 +199,7 @@ User query
   → Score the resident fast window, then any remaining 512-media database pages
   → Time-of-day/scene-label boosts (additive, tuned for SigLIP2)
   → Negative term penalty (-30% of negative similarity)
-  → Visual score threshold >= 0.12, with no automatic threshold relaxation
+  → Visual cutoff per query: median + 6 robust spreads of that query's raw scores across the library, clamped to 0.09-0.12 (fixed 0.12 below 20 scored items); never a fallback that promotes the top score
   → Independently accept complete OCR phrases using Apple's NLTokenizer word boundaries
   → Accept one missing final letter in a word of 6+ letters only with 2+ exact phrase anchors; rank complete phrases first
   → Video dedup (best frame per video only)

@@ -73,6 +73,122 @@ final class SearchEngineTests: XCTestCase {
         }
     }
 
+    // MARK: - Relative visual threshold
+
+    func testRelativeThresholdKeepsFixedCutoffWithoutEnoughEvidence() {
+        let ceiling = SearchConfig.minimumScoreThreshold
+        XCTAssertEqual(VisualMatchThresholdPolicy.threshold(rawScores: []), ceiling)
+        XCTAssertEqual(
+            VisualMatchThresholdPolicy.threshold(rawScores: [0.05, 0.05, 0.105]),
+            ceiling
+        )
+        // Identical scores give no spread, so nothing can stand out.
+        XCTAssertEqual(
+            VisualMatchThresholdPolicy.threshold(rawScores: Array(repeating: 0.1, count: 50)),
+            ceiling
+        )
+        XCTAssertEqual(
+            VisualMatchThresholdPolicy.threshold(rawScores: [.nan, .infinity] + Array(repeating: 0.05, count: 10)),
+            ceiling
+        )
+    }
+
+    func testRelativeThresholdStaysBetweenFloorAndFixedCutoff() {
+        let tight = (0..<100).map { 0.05 + Float($0 % 10) * 0.0005 }
+        let tightThreshold = VisualMatchThresholdPolicy.threshold(rawScores: tight)
+        XCTAssertEqual(tightThreshold, SearchConfig.relativeThresholdFloor)
+
+        let wide = (0..<100).map { Float($0) * 0.002 }
+        XCTAssertEqual(
+            VisualMatchThresholdPolicy.threshold(rawScores: wide),
+            SearchConfig.minimumScoreThreshold
+        )
+
+        // Median 0.0545, MAD 0.0025: 0.0545 + 6 * 1.4826 * 0.0025 = 0.0767,
+        // raised to the floor.
+        let moderate = (0..<100).map { 0.05 + Float($0 % 10) * 0.001 }
+        XCTAssertEqual(
+            VisualMatchThresholdPolicy.threshold(rawScores: moderate),
+            SearchConfig.relativeThresholdFloor,
+            accuracy: 0.0001
+        )
+        // Median 0.0595, MAD 0.005: 0.0595 + 6 * 1.4826 * 0.005 = 0.1040.
+        let spread = (0..<100).map { 0.05 + Float($0 % 20) * 0.001 }
+        XCTAssertEqual(
+            VisualMatchThresholdPolicy.threshold(rawScores: spread),
+            0.0595 + 6 * 1.4826 * 0.005,
+            accuracy: 0.0002
+        )
+    }
+
+    func testScoreSampleIsBoundedAcrossPages() {
+        var sample = VisualScoreSample()
+        sample.append(contentsOf: Array(repeating: 0.1, count: VisualMatchThresholdPolicy.maximumSampleCount - 2))
+        sample.append(contentsOf: [0.2, 0.3, 0.4])
+        sample.append(contentsOf: [0.5])
+        XCTAssertEqual(sample.scores.count, VisualMatchThresholdPolicy.maximumSampleCount)
+        XCTAssertEqual(Array(sample.scores.suffix(2)), [0.2, 0.3])
+    }
+
+    /// A short query's clear match scores below the fixed cutoff but far
+    /// above the rest of the library. It belongs in the main results on both
+    /// the resident and the paged search paths.
+    func testShortQueryMatchStandingFarAboveTheLibraryIsAMainResult() async throws {
+        for residentLimit in [1, 8_000] {
+            var photos = (0..<60).map { index in
+                FixturePhoto(id: "other-\(index)", localIdentifier: "other-\(index)", date: nil,
+                             embedding: float16Vector(first: 0.045 + Float(index % 10) * 0.001))
+            }
+            photos.append(FixturePhoto(id: "match", localIdentifier: "match", date: nil,
+                                       embedding: float16Vector(first: 0.105)))
+            let engine = SearchEngine(textEncoder: FakeTextEncoder(["flowers": floatVector(first: 1)]),
+                                      database: SearchFixtureDatabase(photos: photos),
+                                      residentMediaLimit: residentLimit)
+            try engine.loadIndex()
+            let response = try await engine.search(query: "flowers")
+            XCTAssertEqual(response.results.map(\.id), ["match"], "residentLimit=\(residentLimit)")
+            XCTAssertTrue(response.fallbackResults.isEmpty)
+        }
+    }
+
+    /// When the top score sits inside the library's normal spread for the
+    /// query, it is not evidence of a match and stays a closest match.
+    func testNearMissInsideTheLibrarySpreadStaysAClosestMatch() async throws {
+        for residentLimit in [1, 8_000] {
+            let photos = (0..<60).map { index in
+                FixturePhoto(id: "photo-\(index)", localIdentifier: "photo-\(index)", date: nil,
+                             embedding: float16Vector(first: 0.02 + Float(index) * 0.0015))
+            }
+            let engine = SearchEngine(textEncoder: FakeTextEncoder(["flowers": floatVector(first: 1)]),
+                                      database: SearchFixtureDatabase(photos: photos),
+                                      residentMediaLimit: residentLimit)
+            try engine.loadIndex()
+            let response = try await engine.search(query: "flowers")
+            XCTAssertTrue(response.results.isEmpty, "residentLimit=\(residentLimit)")
+            XCTAssertFalse(response.fallbackResults.isEmpty)
+        }
+    }
+
+    /// The cutoff describes the query across the whole library, so a place
+    /// filter that leaves few candidates does not change it.
+    func testRelativeThresholdUsesTheWholeLibraryUnderFilters() throws {
+        for residentLimit in [1, 8_000] {
+            var photos = (0..<60).map { index in
+                FixturePhoto(id: "other-\(index)", localIdentifier: "other-\(index)", date: nil,
+                             city: "Paris", embedding: float16Vector(first: 0.045 + Float(index % 10) * 0.001))
+            }
+            photos.append(FixturePhoto(id: "berlin-match", localIdentifier: "berlin-match", date: nil,
+                                       city: "Berlin", embedding: float16Vector(first: 0.105)))
+            let engine = SearchEngine(textEncoder: FakeTextEncoder(["dog": floatVector(first: 1)]),
+                                      database: SearchFixtureDatabase(photos: photos),
+                                      residentMediaLimit: residentLimit)
+            try engine.loadIndex()
+            let response = try engine.hybridSearch(hints: hints(text: "dog", locationHint: "Berlin"),
+                                                   featurePolicy: .pro)
+            XCTAssertEqual(response.results.map(\.id), ["berlin-match"], "residentLimit=\(residentLimit)")
+        }
+    }
+
     func testCompletePhraseSurvivesMoreThanOnePageOfPartialMatches() throws {
         for residentLimit in [1, 8_000] {
             var photos = (0..<520).map {

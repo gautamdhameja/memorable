@@ -958,18 +958,26 @@ final class SearchEngine: Sendable {
         )
         #endif
 
+        // The cutoff comes from this query's raw scores across every indexed
+        // item, before boosts and hard filters, so it describes the query
+        // rather than the filtered subset.
+        var scoreSample = VisualScoreSample()
+        scoreSample.append(contentsOf: photoScoring.rawScores)
+        scoreSample.append(contentsOf: videoScoring.rawScores)
+        let visualThreshold = VisualMatchThresholdPolicy.threshold(rawScores: scoreSample.scores)
+
         // Text matches qualify independently of visual scores. Keep both in
         // the bounded result set; the UI displays each photo in one section.
         let photoResults = try SearchResultRanking.results(
             for: photos,
             scores: scores,
-            threshold: minimumScoreThreshold,
+            threshold: visualThreshold,
             textMatches: photoScoring.textMatches
         )
         let videoResults = try SearchResultRanking.results(
             for: videos,
             scores: videoScores,
-            threshold: minimumScoreThreshold
+            threshold: visualThreshold
         )
         let makeVideoNearMissResults: () throws -> [SearchResult] = {
             var maskedScores = videoScores
@@ -994,9 +1002,9 @@ final class SearchEngine: Sendable {
         #if DEBUG
         let photoResultCount = photoResults.count
         let videoResultCount = videoResults.count
-        let thresholdVal = self.minimumScoreThreshold
+        let thresholdVal = visualThreshold
         let textResultCount = allResults.filter(\.isTextMatch).count
-        logger.info("[Results] \(photoResultCount) photos + \(videoResultCount) videos = \(allResults.count) total (visual threshold=\(String(format: "%.2f", thresholdVal)), text matches=\(textResultCount))")
+        logger.info("[Results] \(photoResultCount) photos + \(videoResultCount) videos = \(allResults.count) total (visual threshold=\(String(format: "%.4f", thresholdVal)), text matches=\(textResultCount))")
 
         // Top 10 results with type and score
         for (rank, r) in allResults.prefix(10).enumerated() {
@@ -1123,6 +1131,7 @@ final class SearchEngine: Sendable {
         var locationCandidates: [SearchResult] = []
         var photoCandidateCount = 0
         var videoCandidateFrameCount = 0
+        var scoreSample = VisualScoreSample()
 
         mutating func retainPhoto(_ result: SearchResult) {
             BoundedTopK.insert(
@@ -1319,6 +1328,9 @@ final class SearchEngine: Sendable {
             gpuSearch: page.videoGPU
         )
 
+        accumulator.scoreSample.append(contentsOf: photoScoring.rawScores)
+        accumulator.scoreSample.append(contentsOf: videoScoring.rawScores)
+
         for row in 0..<page.photos.count {
             try SearchCancellation.check(row)
             if photoMask[row] {
@@ -1386,9 +1398,17 @@ final class SearchEngine: Sendable {
             accumulator.videoCandidates,
             isPreferred: SearchResultRanking.isPreferred
         )
+        // Pages keep their best candidates regardless of score, so the
+        // cutoff can be chosen once every page has contributed to the sample.
+        let visualThreshold = VisualMatchThresholdPolicy.threshold(
+            rawScores: accumulator.scoreSample.scores
+        )
+        #if DEBUG
+        logger.info("[Results] whole-library visual threshold=\(String(format: "%.4f", visualThreshold)) sample=\(accumulator.scoreSample.scores.count)")
+        #endif
         let main = try BoundedTopK.select(
-            from: sortedPhotos.filter { $0.isTextMatch || $0.score >= minimumScoreThreshold }
-                + sortedVideos.filter { $0.score >= minimumScoreThreshold },
+            from: sortedPhotos.filter { $0.isTextMatch || $0.score >= visualThreshold }
+                + sortedVideos.filter { $0.score >= visualThreshold },
             limit: Self.maximumRetainedResults,
             isPreferred: SearchResultRanking.isPreferred,
             cancellationCheck: SearchCancellation.check

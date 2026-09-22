@@ -19,6 +19,59 @@ struct ScoredMedia {
     let textMatches: [OCRTextMatch?]
 }
 
+/// Chooses the visual cutoff for one query from how that query scores across
+/// the library. The result is never stricter than the fixed
+/// `SearchConfig.minimumScoreThreshold`; it only admits photos that stand far
+/// above the library's typical score for the same query. Offline evaluation
+/// against 10,000 Flickr30k photos with the reference SigLIP2 model found more
+/// short-query matches at equal or better precision, without admitting
+/// results for queries whose subject is absent.
+enum VisualMatchThresholdPolicy {
+    /// Bounds the memory used to estimate the distribution on very large
+    /// libraries. The sample is taken in scan order, newest media first.
+    static let maximumSampleCount = 16_384
+
+    /// Converts a median absolute deviation to a standard deviation under a
+    /// normal distribution.
+    static let madToStandardDeviation: Float = 1.4826
+
+    static func threshold(
+        rawScores: [Float],
+        ceiling: Float = SearchConfig.minimumScoreThreshold,
+        floor: Float = SearchConfig.relativeThresholdFloor,
+        spreadMultiplier: Float = SearchConfig.relativeThresholdSpreadMultiplier,
+        minimumSampleCount: Int = SearchConfig.relativeThresholdMinimumSampleCount
+    ) -> Float {
+        var sample = rawScores.filter(\.isFinite)
+        guard sample.count >= max(minimumSampleCount, 1) else { return ceiling }
+        let center = median(&sample)
+        var deviations = sample.map { abs($0 - center) }
+        let spread = median(&deviations) * madToStandardDeviation
+        // Identical scores carry no evidence that any item stands out.
+        guard spread.isFinite, spread > 0 else { return ceiling }
+        return min(ceiling, max(floor, center + spreadMultiplier * spread))
+    }
+
+    private static func median(_ values: inout [Float]) -> Float {
+        values.sort()
+        let middle = values.count / 2
+        return values.count.isMultiple(of: 2)
+            ? (values[middle - 1] + values[middle]) / 2
+            : values[middle]
+    }
+}
+
+/// Collects raw visual scores across search pages for the threshold policy.
+struct VisualScoreSample {
+    private(set) var scores: [Float] = []
+
+    mutating func append(contentsOf pageScores: [Float]) {
+        let room = VisualMatchThresholdPolicy.maximumSampleCount - scores.count
+        guard room > 0 else { return }
+        scores.append(contentsOf: pageScores.prefix(room))
+    }
+}
+
 enum SearchCancellation {
     static let checkInterval = 256
 

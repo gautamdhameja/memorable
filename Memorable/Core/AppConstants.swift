@@ -85,7 +85,25 @@ enum SearchConfig {
     /// Minimum similarity score to include a result.
     /// SigLIP2 (sigmoid loss) produces lower raw cosine similarities than
     /// softmax-based CLIP models. Matching pairs typically score 0.10-0.25.
+    /// A visual search never requires more than this; see the relative
+    /// constants below for when it accepts less.
     static let minimumScoreThreshold: Float = 0.12
+
+    /// Short queries score low even for clear matches, and how low depends on
+    /// the query: a correct "dog" photo scored 0.100 while an unrelated
+    /// kitchen scored 0.099 for "quantum marmalade observatory". A fixed
+    /// cutoff cannot separate them. Each visual query therefore also accepts
+    /// a photo that stands far above that query's scores across the library:
+    /// at least the median plus this many robust standard deviations
+    /// (scaled median absolute deviation) of the raw scores.
+    static let relativeThresholdSpreadMultiplier: Float = 6
+
+    /// The relative cutoff never drops below this raw similarity.
+    static let relativeThresholdFloor: Float = 0.09
+
+    /// Fewer scored items than this give an unreliable spread, so the query
+    /// keeps the fixed `minimumScoreThreshold`.
+    static let relativeThresholdMinimumSampleCount = 20
 
     /// Duplicate detection threshold (cosine similarity for near-identical images)
     static let duplicateThreshold: Float = 0.95
