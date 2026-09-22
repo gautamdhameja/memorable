@@ -270,7 +270,10 @@ enum SearchResultRanking {
                 localIdentifier: index.localIdentifiers[row],
                 creationDate: index.dates[row], isVideo: false,
                 bestFramePosition: nil, sourceId: index.sourceIds[row],
-                filePath: index.filePaths[row], textMatch: textMatch
+                filePath: index.filePaths[row],
+                pixelWidth: index.pixelWidths[row],
+                pixelHeight: index.pixelHeights[row],
+                textMatch: textMatch
             )
         case .videoFrame:
             guard let framePosition = index.framePositions[row] else {
@@ -281,7 +284,9 @@ enum SearchResultRanking {
                 localIdentifier: index.localIdentifiers[row],
                 creationDate: index.dates[row], isVideo: true,
                 bestFramePosition: framePosition, sourceId: index.sourceIds[row],
-                filePath: index.filePaths[row]
+                filePath: index.filePaths[row],
+                pixelWidth: index.pixelWidths[row],
+                pixelHeight: index.pixelHeights[row]
             )
         }
     }

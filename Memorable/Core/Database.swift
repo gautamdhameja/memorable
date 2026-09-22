@@ -98,6 +98,10 @@ struct MediaIndex: Sendable {
         let state: String?
         let country: String?
         let locationName: String?
+        /// Source dimensions in pixels. Zero means the indexer did not record
+        /// them; callers fall back to a neutral ratio.
+        let pixelWidth: Int
+        let pixelHeight: Int
         let details: RowDetails
 
         init(
@@ -112,6 +116,8 @@ struct MediaIndex: Sendable {
             state: String?,
             country: String?,
             locationName: String?,
+            pixelWidth: Int = 0,
+            pixelHeight: Int = 0,
             details: RowDetails
         ) {
             self.id = id
@@ -125,6 +131,8 @@ struct MediaIndex: Sendable {
             self.state = state
             self.country = country
             self.locationName = locationName
+            self.pixelWidth = pixelWidth
+            self.pixelHeight = pixelHeight
             self.details = details
         }
     }
@@ -144,6 +152,8 @@ struct MediaIndex: Sendable {
     private(set) var locationNames: [String?]
     private(set) var sceneLabels: [String?]
     private(set) var framePositions: [Double?]
+    private(set) var pixelWidths: [Int]
+    private(set) var pixelHeights: [Int]
     private(set) var embeddings: [Float16]
 
     var count: Int { ids.count }
@@ -165,6 +175,8 @@ struct MediaIndex: Sendable {
         locationNames = []
         sceneLabels = []
         framePositions = []
+        pixelWidths = []
+        pixelHeights = []
         embeddings = []
     }
 
@@ -184,18 +196,23 @@ struct MediaIndex: Sendable {
         locationNames: [String?],
         sceneLabels: [String?],
         framePositions: [Double?],
+        pixelWidths: [Int]? = nil,
+        pixelHeights: [Int]? = nil,
         embeddings: [Float16]
     ) throws {
         let count = ids.count
         let resolvedSourceIds = sourceIds
             ?? [String](repeating: PhotoSourceType.photokit.rawValue, count: count)
         let resolvedFilePaths = filePaths ?? [String?](repeating: nil, count: count)
+        let resolvedPixelWidths = pixelWidths ?? [Int](repeating: 0, count: count)
+        let resolvedPixelHeights = pixelHeights ?? [Int](repeating: 0, count: count)
         let metadataCounts = [
             localIdentifiers.count, resolvedSourceIds.count, resolvedFilePaths.count,
             dates.count, latitudes.count,
             longitudes.count, ocrTexts.count, locationCities.count,
             locationStates.count, locationCountries.count, locationNames.count,
-            sceneLabels.count, framePositions.count
+            sceneLabels.count, framePositions.count,
+            resolvedPixelWidths.count, resolvedPixelHeights.count
         ]
         let (expectedEmbeddingCount, overflow) = count.multipliedReportingOverflow(
             by: EmbeddingConfig.dimensions
@@ -243,6 +260,8 @@ struct MediaIndex: Sendable {
         self.locationNames = locationNames
         self.sceneLabels = sceneLabels
         self.framePositions = framePositions
+        self.pixelWidths = resolvedPixelWidths
+        self.pixelHeights = resolvedPixelHeights
         self.embeddings = embeddings
     }
 
@@ -308,6 +327,8 @@ struct MediaIndex: Sendable {
             maximumCharacters: PersistedMetadataTextPolicy.maximumSceneLabelCharacters
         ))
         framePositions.append(framePosition)
+        pixelWidths.append(max(0, row.pixelWidth))
+        pixelHeights.append(max(0, row.pixelHeight))
         embeddings.append(contentsOf: embedding)
     }
 
@@ -332,6 +353,8 @@ struct MediaIndex: Sendable {
         locationNames.reserveCapacity(rowCount)
         sceneLabels.reserveCapacity(rowCount)
         framePositions.reserveCapacity(rowCount)
+        pixelWidths.reserveCapacity(rowCount)
+        pixelHeights.reserveCapacity(rowCount)
         embeddings.reserveCapacity(rowCount * EmbeddingConfig.dimensions)
     }
 }

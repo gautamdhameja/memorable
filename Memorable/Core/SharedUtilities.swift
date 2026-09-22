@@ -123,6 +123,32 @@ enum MemoryPressureImageRecoveryPolicy {
     }
 }
 
+/// Shared proportions for photo and video tiles in the result and memory
+/// grids. The ratio comes from indexed pixel dimensions rather than the decoded
+/// image, so a tile reserves its real shape before the image arrives and never
+/// resizes while the user scrolls. Extremes are clamped so a panorama or a very
+/// tall photo cannot dominate a row.
+enum MediaTileAspectRatio {
+    static let minimum: CGFloat = 3.0 / 4.0
+    static let maximum: CGFloat = 16.0 / 9.0
+    static let fallback: CGFloat = 4.0 / 3.0
+
+    static func ratio(pixelWidth: Int, pixelHeight: Int) -> CGFloat {
+        guard pixelWidth > 0, pixelHeight > 0 else { return fallback }
+        let ratio = CGFloat(pixelWidth) / CGFloat(pixelHeight)
+        guard ratio.isFinite, ratio > 0 else { return fallback }
+        return min(max(ratio, minimum), maximum)
+    }
+
+    static func ratio(for result: SearchResult) -> CGFloat {
+        ratio(pixelWidth: result.pixelWidth, pixelHeight: result.pixelHeight)
+    }
+
+    static func ratio(for photo: IndexedPhotoReference) -> CGFloat {
+        ratio(pixelWidth: photo.pixelWidth, pixelHeight: photo.pixelHeight)
+    }
+}
+
 /// The full-screen viewer pages through results with a `TabView`. Only the
 /// pages inside this window keep a decoded image, so swiping to a neighbour
 /// shows the photo immediately while viewer memory stays bounded regardless of

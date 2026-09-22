@@ -1058,7 +1058,9 @@ final class SearchEngine: Sendable {
                              creationDate: photos.dates[index], isVideo: false,
                              bestFramePosition: nil,
                              sourceId: photos.sourceIds[index],
-                             filePath: photos.filePaths[index])
+                             filePath: photos.filePaths[index],
+                             pixelWidth: photos.pixelWidths[index],
+                             pixelHeight: photos.pixelHeights[index])
             }
             let nearMissResults = try BoundedTopK.select(
                 from: photoNearMissResults + makeVideoNearMissResults(),

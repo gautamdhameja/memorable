@@ -119,6 +119,81 @@ final class DataModelTests: XCTestCase {
         }
     }
 
+    func testSearchResultTilesUseTheIndexedShapeAndClampExtremes() {
+        func result(width: Int, height: Int) -> SearchResult {
+            SearchResult(
+                id: "\(width)x\(height)", score: 1, localIdentifier: "asset",
+                creationDate: nil, isVideo: false, bestFramePosition: nil,
+                pixelWidth: width, pixelHeight: height
+            )
+        }
+
+        XCTAssertEqual(
+            MediaTileAspectRatio.ratio(for: result(width: 3_024, height: 4_032)),
+            3.0 / 4.0, accuracy: 0.001
+        )
+        XCTAssertEqual(
+            MediaTileAspectRatio.ratio(for: result(width: 4_032, height: 3_024)),
+            4.0 / 3.0, accuracy: 0.001
+        )
+        // A very tall photo and a panorama are clamped so one result cannot
+        // take over the grid.
+        XCTAssertEqual(
+            MediaTileAspectRatio.ratio(for: result(width: 1_080, height: 2_400)),
+            MediaTileAspectRatio.minimum, accuracy: 0.001
+        )
+        XCTAssertEqual(
+            MediaTileAspectRatio.ratio(for: result(width: 4_000, height: 1_000)),
+            MediaTileAspectRatio.maximum, accuracy: 0.001
+        )
+        // An index written before dimensions were recorded falls back rather
+        // than producing an invalid ratio.
+        XCTAssertEqual(
+            MediaTileAspectRatio.ratio(for: result(width: 0, height: 0)),
+            MediaTileAspectRatio.fallback, accuracy: 0.001
+        )
+        XCTAssertEqual(
+            MediaTileAspectRatio.ratio(for: result(width: -4, height: 3)),
+            MediaTileAspectRatio.fallback, accuracy: 0.001
+        )
+    }
+
+    @MainActor
+    func testSearchTilesReserveTheIndexedShapeBeforeTheImageLoads() {
+        // A portrait result must already be taller than a landscape one while
+        // both are still placeholders, and loading must not change either.
+        for (width, height) in [(300, 400), (400, 300), (800, 200)] {
+            let ratio = MediaTileAspectRatio.ratio(pixelWidth: width, pixelHeight: height)
+            for proposedWidth: CGFloat in [125, 190, 350] {
+                let proposal = CGSize(width: proposedWidth, height: 1_000)
+                let placeholder = UIHostingController(rootView:
+                    PhotoThumbnailView.imageContent(
+                        thumbnail: nil, isVideo: false, aspectRatio: ratio
+                    )
+                ).sizeThatFits(in: proposal)
+                XCTAssertEqual(placeholder.width, proposedWidth, accuracy: 0.5)
+                XCTAssertEqual(
+                    placeholder.height, proposedWidth / ratio, accuracy: 0.5,
+                    "A \(width)x\(height) tile must reserve its indexed shape"
+                )
+
+                let loaded = UIHostingController(rootView:
+                    PhotoThumbnailView.imageContent(
+                        thumbnail: memoryLayoutImage(
+                            size: CGSize(width: width, height: height)
+                        ),
+                        isVideo: false, aspectRatio: ratio
+                    )
+                ).sizeThatFits(in: proposal)
+                XCTAssertEqual(loaded.width, placeholder.width, accuracy: 0.5)
+                XCTAssertEqual(
+                    loaded.height, placeholder.height, accuracy: 0.5,
+                    "Loading must not move the rows below a \(width)x\(height) tile"
+                )
+            }
+        }
+    }
+
     @MainActor
     func testSearchThumbnailsKeepPlaceholderSizeWhenPhotosOrVideoFramesLoad() {
         for isVideo in [false, true] {

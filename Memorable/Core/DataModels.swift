@@ -45,7 +45,9 @@ struct IndexedPhoto: Codable, FetchableRecord, PersistableRecord, Identifiable {
             isVideo: false,
             bestFramePosition: nil,
             sourceId: sourceId,
-            filePath: filePath
+            filePath: filePath,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight
         )
     }
 }
@@ -85,7 +87,9 @@ struct IndexedPhotoReference: Identifiable, Sendable {
             isVideo: false,
             bestFramePosition: nil,
             sourceId: sourceId,
-            filePath: filePath
+            filePath: filePath,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight
         )
     }
 }
@@ -289,6 +293,11 @@ struct SearchResult: Identifiable, Equatable {
     let bestFramePosition: Double?
     let sourceId: String
     let filePath: String?
+    /// Source dimensions in pixels. Zero means the indexer did not record them.
+    /// Result tiles reserve their space from this before the image loads, so a
+    /// photo keeps its real proportions without shifting the grid.
+    let pixelWidth: Int
+    let pixelHeight: Int
     var isTextMatch: Bool { textMatch != nil }
     let textMatch: OCRTextMatch?
     var supportsFindSimilar: Bool { !isVideo }
@@ -302,6 +311,8 @@ struct SearchResult: Identifiable, Equatable {
         bestFramePosition: Double?,
         sourceId: String = PhotoSourceType.photokit.rawValue,
         filePath: String? = nil,
+        pixelWidth: Int = 0,
+        pixelHeight: Int = 0,
         textMatch: OCRTextMatch? = nil
     ) {
         self.id = id
@@ -312,6 +323,8 @@ struct SearchResult: Identifiable, Equatable {
         self.bestFramePosition = bestFramePosition
         self.sourceId = sourceId
         self.filePath = filePath
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
         self.textMatch = textMatch
     }
 }

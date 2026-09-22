@@ -2037,17 +2037,13 @@ private enum SearchHomeCardMetrics {
 }
 
 enum MemoryCardLayout {
-    static let minimumAspectRatio: CGFloat = 3.0 / 4.0
-    static let maximumAspectRatio: CGFloat = 16.0 / 9.0
-    static let fallbackAspectRatio: CGFloat = 4.0 / 3.0
+    static let minimumAspectRatio = MediaTileAspectRatio.minimum
+    static let maximumAspectRatio = MediaTileAspectRatio.maximum
+    static let fallbackAspectRatio = MediaTileAspectRatio.fallback
     static let targetWidth: CGFloat = 1_024
 
     static func aspectRatio(for photo: IndexedPhotoReference) -> CGFloat {
-        guard photo.pixelWidth > 0, photo.pixelHeight > 0 else {
-            return fallbackAspectRatio
-        }
-        let aspectRatio = CGFloat(photo.pixelWidth) / CGFloat(photo.pixelHeight)
-        return min(max(aspectRatio, minimumAspectRatio), maximumAspectRatio)
+        MediaTileAspectRatio.ratio(for: photo)
     }
 
     static func targetSize(

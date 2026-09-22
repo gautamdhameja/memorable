@@ -18,13 +18,15 @@ struct PhotoThumbnailView: View {
 
     static func imageContent(
         thumbnail: UIImage?, isVideo: Bool, contentMode: ContentMode = .fill,
-        isLoading: Bool = true
+        isLoading: Bool = true,
+        aspectRatio: CGFloat = MediaTileAspectRatio.fallback
     ) -> some View {
-        // Reserve the same canvas before and after loading; image dimensions
-        // must not change masonry row heights while the user is scrolling.
+        // The indexed pixel dimensions decide the canvas, so the tile already
+        // has the photo's real shape before the image arrives and its height
+        // never changes while the user is scrolling.
         Rectangle()
             .fill(Celestial.Colors.surfaceContainer)
-            .aspectRatio(4.0 / 3.0, contentMode: .fit)
+            .aspectRatio(aspectRatio, contentMode: .fit)
             .overlay {
                 if let thumbnail {
                     GeometryReader { geometry in
@@ -62,7 +64,8 @@ struct PhotoThumbnailView: View {
     var body: some View {
         Self.imageContent(
             thumbnail: thumbnail, isVideo: result.isVideo,
-            contentMode: contentMode, isLoading: isLoading
+            contentMode: contentMode, isLoading: isLoading,
+            aspectRatio: MediaTileAspectRatio.ratio(for: result)
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(

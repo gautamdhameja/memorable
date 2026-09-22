@@ -77,6 +77,7 @@ extension AppDatabase {
                        substr(v.locationState, 1, 256) AS locationState,
                        substr(v.locationCountry, 1, 256) AS locationCountry,
                        substr(v.locationName, 1, 256) AS locationName,
+                       v.pixelWidth, v.pixelHeight,
                        f.framePosition,
                        CASE WHEN length(f.embedding) = ? THEN f.embedding END AS embedding
                 FROM indexed_video_frames f
@@ -114,6 +115,8 @@ extension AppDatabase {
                     state: row["locationState"],
                     country: row["locationCountry"],
                     locationName: row["locationName"],
+                    pixelWidth: row["pixelWidth"] ?? 0,
+                    pixelHeight: row["pixelHeight"] ?? 0,
                     details: .videoFrame(position: row["framePosition"])
                 )
                 guard let embedding = embeddingData.validatedFloat16Embedding() else {
@@ -468,6 +471,7 @@ extension AppDatabase {
                        substr(locationName, 1, 256) AS locationName,
                        substr(ocrText, 1, 4096) AS ocrText,
                        substr(sceneLabels, 1, 1024) AS sceneLabels,
+                       pixelWidth, pixelHeight,
                        CASE WHEN length(embedding) = ? THEN embedding END AS embedding
                 FROM indexed_photos
                 WHERE id IN (\(placeholders))
@@ -490,6 +494,8 @@ extension AppDatabase {
                     longitude: row["longitude"], city: row["locationCity"],
                     state: row["locationState"], country: row["locationCountry"],
                     locationName: row["locationName"],
+                    pixelWidth: row["pixelWidth"] ?? 0,
+                    pixelHeight: row["pixelHeight"] ?? 0,
                     details: .photo(ocrText: row["ocrText"], sceneLabels: row["sceneLabels"])
                 ),
                 embedding: embedding
@@ -532,6 +538,7 @@ extension AppDatabase {
                        substr(v.locationState, 1, 256) AS locationState,
                        substr(v.locationCountry, 1, 256) AS locationCountry,
                        substr(v.locationName, 1, 256) AS locationName,
+                       v.pixelWidth, v.pixelHeight,
                        f.framePosition,
                        CASE WHEN length(f.embedding) = ? THEN f.embedding END AS embedding
                 FROM indexed_video_frames f
@@ -556,6 +563,8 @@ extension AppDatabase {
                     longitude: row["longitude"], city: row["locationCity"],
                     state: row["locationState"], country: row["locationCountry"],
                     locationName: row["locationName"],
+                    pixelWidth: row["pixelWidth"] ?? 0,
+                    pixelHeight: row["pixelHeight"] ?? 0,
                     details: .videoFrame(position: row["framePosition"])
                 ),
                 embedding: embedding
@@ -599,6 +608,7 @@ extension AppDatabase {
                            substr(p.locationName, 1, 256) AS locationName,
                            substr(p.ocrText, 1, 4096) AS ocrText,
                            substr(p.sceneLabels, 1, 1024) AS sceneLabels,
+                           p.pixelWidth, p.pixelHeight,
                            CASE WHEN length(p.embedding) = ? THEN p.embedding END AS embedding
                     FROM indexed_photos p
                     JOIN selected_media s ON s.mediaType = 'photo' AND s.id = p.id
@@ -626,6 +636,8 @@ extension AppDatabase {
                     state: photo["locationState"],
                     country: photo["locationCountry"],
                     locationName: photo["locationName"],
+                    pixelWidth: photo["pixelWidth"] ?? 0,
+                    pixelHeight: photo["pixelHeight"] ?? 0,
                     details: .photo(
                         ocrText: photo["ocrText"],
                         sceneLabels: photo["sceneLabels"]
@@ -666,6 +678,7 @@ extension AppDatabase {
                            substr(locationName, 1, 256) AS locationName,
                            substr(ocrText, 1, 4096) AS ocrText,
                            substr(sceneLabels, 1, 1024) AS sceneLabels,
+                           pixelWidth, pixelHeight,
                            CASE WHEN length(embedding) = ? THEN embedding END AS embedding
                     FROM indexed_photos
                     WHERE sourceId = ?
@@ -700,6 +713,8 @@ extension AppDatabase {
                         state: photo["locationState"],
                         country: photo["locationCountry"],
                         locationName: photo["locationName"],
+                        pixelWidth: photo["pixelWidth"] ?? 0,
+                        pixelHeight: photo["pixelHeight"] ?? 0,
                         details: .photo(
                             ocrText: photo["ocrText"],
                             sceneLabels: photo["sceneLabels"]
