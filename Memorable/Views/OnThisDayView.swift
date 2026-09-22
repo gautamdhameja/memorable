@@ -6,6 +6,7 @@ struct OnThisDayView: View {
     @State private var isLoading = true
     @State private var showSlideshow = false
     @State private var indexedCount = 0
+    @State private var loadFailed = false
 
     var body: some View {
         ZStack {
@@ -17,6 +18,25 @@ struct OnThisDayView: View {
                         ProgressView()
                             .tint(Celestial.Colors.primaryDim)
                             .padding(.top, 60)
+                    } else if loadFailed {
+                        // A failed read says nothing about the index. Without
+                        // this branch the screen told the user to build one.
+                        VStack(spacing: Celestial.Spacing.contentGap) {
+                            CelestialGlassIcon(
+                                systemName: "exclamationmark.triangle",
+                                tint: Celestial.Colors.error,
+                                size: 64
+                            )
+                            Text("Memories couldn't load")
+                                .font(Celestial.Typography.supporting)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                            Text("Go back and open Memories again.")
+                                .font(Celestial.Typography.caption)
+                                .foregroundStyle(Celestial.Colors.outline)
+                        }
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 60)
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
                     } else if yearGroups.isEmpty {
                         VStack(spacing: Celestial.Spacing.contentGap) {
                             CelestialGlassIcon(
@@ -31,7 +51,7 @@ struct OnThisDayView: View {
                                     .multilineTextAlignment(.center)
                                 Text("Go to Search and tap \"Build Search Index\"")
                                     .font(Celestial.Typography.caption)
-                                    .foregroundStyle(Celestial.Colors.outlineVariant)
+                                    .foregroundStyle(Celestial.Colors.outline)
                             } else {
                                 Text("No memories from this day in previous years")
                                     .font(Celestial.Typography.supporting)
@@ -51,7 +71,7 @@ struct OnThisDayView: View {
                                 .font(Celestial.Typography.display)
                                 .foregroundStyle(Celestial.Colors.onSurface)
                                 .padding(.top, 10)
-                            Text("\(yearGroups.reduce(0) { $0 + $1.photos.count }) photos across \(yearGroups.count) years")
+                            Text(memorySummary)
                                 .font(Celestial.Typography.supporting)
                                 .foregroundStyle(Celestial.Colors.secondary)
                                 .padding(.top, 8)
@@ -77,7 +97,7 @@ struct OnThisDayView: View {
                                             .font(Celestial.Typography.title2)
                                             .foregroundStyle(Celestial.Colors.onSurface)
                                         Spacer()
-                                        Text("\(allPhotos(in: group.year).count) photos")
+                                        Text(CountPhrase.string(allPhotos(in: group.year).count, "photo"))
                                             .font(Celestial.Typography.caption)
                                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                     }
@@ -85,7 +105,7 @@ struct OnThisDayView: View {
 
                                     MasonryGrid(
                                         Array(group.photos.prefix(20)),
-                                        spacing: 5,
+                                        spacing: 4,
                                         aspectRatio: { MediaTileAspectRatio.ratio(for: $0) }
                                     ) { photo in
                                         MemoryThumbnail(
@@ -93,7 +113,7 @@ struct OnThisDayView: View {
                                             groupPhotos: allPhotos(in: group.year)
                                         )
                                     }
-                                    .padding(.horizontal, 5)
+                                    .padding(.horizontal, 4)
                                 }
                             }
                         }
@@ -123,9 +143,16 @@ struct OnThisDayView: View {
                 return
             } catch {
                 logger.error("On This Day error: \(error.safeDiagnosticCode)")
+                loadFailed = true
             }
             isLoading = false
         }
+    }
+
+    private var memorySummary: String {
+        let photos = CountPhrase.string(yearGroups.reduce(0) { $0 + $1.photos.count }, "photo")
+        guard yearGroups.count > 1 else { return photos }
+        return "\(photos) across \(CountPhrase.string(yearGroups.count, "year"))"
     }
 
     private func allPhotos(in year: Int) -> [IndexedPhotoReference] {
@@ -226,7 +253,7 @@ struct MemoryThumbnail: View {
             }
         }
         .aspectRatio(aspectRatio, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
     }
 
     var body: some View {

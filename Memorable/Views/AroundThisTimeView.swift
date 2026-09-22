@@ -29,16 +29,18 @@ struct AroundThisTimeView: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
-                            Text("One hour before and after")
-                                .font(Celestial.Typography.supporting)
-                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             if let date = photo.creationDate {
                                 Text(date.formatted(date: .long, time: .shortened))
                                     .font(Celestial.Typography.bodyStrong)
+                                    .foregroundStyle(Celestial.Colors.onSurface)
                             }
+                            Text("Photos from one hour before and after")
+                                .font(Celestial.Typography.supporting)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                .padding(.top, -10)
                             MasonryGrid(
                                 entitledPhotos,
-                                spacing: 5,
+                                spacing: 4,
                                 aspectRatio: { MediaTileAspectRatio.ratio(for: $0) }
                             ) { nearby in
                                 MemoryThumbnail(photo: nearby, groupPhotos: entitledPhotos,
@@ -50,6 +52,8 @@ struct AroundThisTimeView: View {
                             if photos.count == 100 {
                                 Text("Showing the 100 closest photos.")
                                     .font(Celestial.Typography.caption)
+                                    .foregroundStyle(Celestial.Colors.outline)
+                                    .frame(maxWidth: .infinity)
                             }
                         }
                         .padding(Celestial.Spacing.pageHorizontalInset)
