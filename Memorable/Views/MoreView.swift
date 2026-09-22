@@ -58,18 +58,21 @@ struct MoreView: View {
                                 toolRow(
                                     icon: "square.on.square",
                                     title: proManager.isPro ? "Find duplicates" : "Find duplicates · Pro",
-                                    subtitle: "Compare near-identical photos safely"
+                                    // A disabled row needs to say why.
+                                    subtitle: isDuplicateFinderAvailable
+                                        ? "Compare near-identical photos safely"
+                                        : "Available once indexing finishes"
                                 )
                             }
-                            .disabled(
-                                indexingService.progress.isRunning
-                                    || !indexingService.isReady
-                                    || indexingService.isThermallyPaused
-                                    || !database.allowsIndexingWrites
-                            )
+                            .disabled(!isDuplicateFinderAvailable)
 
                             Button(action: { showSources = true }) {
-                                toolRow(icon: "photo.stack", title: "Photo sources", subtitle: "Library and custom folders")
+                                toolRow(
+                                    icon: "folder",
+                                    title: "Photo sources",
+                                    subtitle: "Library and custom folders",
+                                    showsDivider: false
+                                )
                             }
                         }
                         .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
@@ -81,37 +84,45 @@ struct MoreView: View {
                             .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
                             .padding(.top, Celestial.Spacing.stackedContainerGap)
 
-                        VStack(alignment: .leading, spacing: 0) {
-                            if MoreNavigationPolicy.showsReindexShortcut(
+                        // Maintenance and legal links share one quiet list
+                        // instead of loose caption links of mixed sizes.
+                        VStack(spacing: 0) {
+                            let showsReindex = MoreNavigationPolicy.showsReindexShortcut(
                                 isReady: indexingService.isReady,
                                 isIndexing: indexingService.progress.isRunning
-                            ) {
-                                Button("Re-index library") { showReindexConfirm = true }
-                                    .disabled(!database.allowsIndexingWrites)
-                                    .frame(minHeight: 44)
+                            )
+                            if showsReindex {
+                                Button { showReindexConfirm = true } label: {
+                                    footerRow("Re-index library")
+                                }
+                                .disabled(!database.allowsIndexingWrites)
                             }
-
-                            HStack(spacing: 20) {
-                                NavigationLink("Privacy") { PrivacyPolicyView() }
-                                    .frame(minHeight: 44)
-                                NavigationLink("Licenses") { LicensesView() }
-                                    .frame(minHeight: 44)
+                            NavigationLink { PrivacyPolicyView() } label: {
+                                footerRow("Privacy policy")
                             }
-
-                            Text(appVersionString)
-                                .padding(.top, 2)
+                            NavigationLink { LicensesView() } label: {
+                                footerRow("Licenses", showsDivider: false)
+                            }
                         }
-                        .font(Celestial.Typography.caption)
-                        .foregroundStyle(Celestial.Colors.outline)
-                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
+                        .modifier(GlassPanelModifier(cornerRadius: 20))
+                        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
                         .padding(.top, Celestial.Spacing.sectionGap)
 
-                        Text(AppCopy.aiDisclaimer)
-                            .font(Celestial.Typography.micro)
-                            .foregroundStyle(Celestial.Colors.outlineVariant)
-                            .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
-                            .padding(.top, Celestial.Spacing.contentGap)
-                            .padding(.bottom, 32)
+                        VStack(spacing: 6) {
+                            Text("Memorable \(appVersionString)")
+                                .font(Celestial.Typography.caption)
+                                .foregroundStyle(Celestial.Colors.outline)
+                            Text(AppCopy.aiDisclaimer)
+                                .font(Celestial.Typography.micro)
+                                .foregroundStyle(Celestial.Colors.outline)
+                        }
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                        .padding(.top, Celestial.Spacing.contentGap)
+                        .padding(.bottom, 32)
                     }
                 }
             }
@@ -231,12 +242,42 @@ struct MoreView: View {
             return "Free storage, then close and reopen Memorable"
         }
         let searchableCount = searchEngine.indexSize + searchEngine.videoSize
-        if searchableCount > 0 { return "\(searchableCount) items searchable" }
+        if searchableCount > 0 { return "\(CountPhrase.string(searchableCount, "item")) searchable" }
         if indexingService.indexRebuildRequired { return "Rebuild once to keep search results accurate" }
         return "Build the on-device index to start searching"
     }
 
-    private func toolRow(icon: String, title: String, subtitle: String) -> some View {
+    private var isDuplicateFinderAvailable: Bool {
+        !indexingService.progress.isRunning
+            && indexingService.isReady
+            && !indexingService.isThermallyPaused
+            && database.allowsIndexingWrites
+    }
+
+    private func footerRow(_ title: String, showsDivider: Bool = true) -> some View {
+        HStack {
+            Text(title)
+                .font(Celestial.Typography.supporting)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(Celestial.Typography.caption)
+                .foregroundStyle(Celestial.Colors.outlineVariant)
+                .accessibilityHidden(true)
+        }
+        .frame(minHeight: 48)
+        .contentShape(Rectangle())
+        .overlay(alignment: .bottom) {
+            if showsDivider { CelestialHairline() }
+        }
+    }
+
+    private func toolRow(
+        icon: String,
+        title: String,
+        subtitle: String,
+        showsDivider: Bool = true
+    ) -> some View {
         HStack(spacing: 14) {
             CelestialGlassIcon(systemName: icon, size: 34)
             VStack(alignment: .leading, spacing: 3) {
@@ -254,7 +295,9 @@ struct MoreView: View {
         }
         .frame(minHeight: 68)
         .contentShape(Rectangle())
-        .overlay(alignment: .bottom) { CelestialHairline() }
+        .overlay(alignment: .bottom) {
+            if showsDivider { CelestialHairline() }
+        }
     }
 
     private var proStatus: some View {
@@ -281,7 +324,7 @@ struct MoreView: View {
                             Text("Memorable Pro")
                                 .font(Celestial.Typography.bodyEmphasized)
                                 .foregroundStyle(Celestial.Colors.amber)
-                            Text("Search all locally available media. One-time purchase.")
+                            Text("Search all local photos and videos. Pay once.")
                                 .font(Celestial.Typography.caption)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                 .multilineTextAlignment(.leading)
