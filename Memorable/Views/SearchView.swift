@@ -286,16 +286,18 @@ struct SearchView: View {
                                 }
 
                                 // Memory warning
+                                // A large library is supported; searches past the
+                                // resident window just take longer. Inform, not warn.
                                 if searchEngine.isLargeLibrary {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "exclamationmark.triangle.fill")
-                                            .foregroundStyle(Celestial.Colors.error)
-                                            .font(Celestial.Typography.footnote)
-                                        Text("Large library (\(searchEngine.indexSize) photos)")
-                                            .font(Celestial.Typography.footnote)
+                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                        Image(systemName: "info.circle")
+                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                            .accessibilityHidden(true)
+                                        Text("Large library: searches of \((searchEngine.indexSize + searchEngine.videoSize).formatted()) photos & videos can take a little longer")
                                             .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                     }
-                                    .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                                    .font(Celestial.Typography.footnote)
+                                    .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset + 2)
                                     .padding(.bottom, 8)
                                 }
 
@@ -612,8 +614,11 @@ struct SearchView: View {
                     Image(systemName: "xmark")
                         .font(Celestial.Typography.captionStrong)
                         .foregroundStyle(Celestial.Colors.outline)
-                        .frame(width: 28, height: 28)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                // Keep the glyph where it was while the target grows to 44.
+                .padding(.trailing, -8)
                 .accessibilityLabel("Clear search")
             }
         }
@@ -741,38 +746,49 @@ struct SearchView: View {
     // MARK: - Banners
 
     private var upgradeBanner: some View {
-        HStack(spacing: 10) {
+        // The count, the action and the dismiss control shared one line and
+        // squeezed the count into several wrapped lines. Stack the action
+        // under the count instead.
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: "sparkles")
                 .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.amber)
-            Text("Searching \(searchEngine.totalSize) of \(totalLibraryCount) photos & videos")
-                .font(Celestial.Typography.supporting)
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-            Spacer()
-            Button("Unlock full library") {
-                showUpgrade = true
+                .padding(.top, 12)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Searching \(searchEngine.totalSize.formatted()) of \(totalLibraryCount.formatted()) photos & videos")
+                    .font(Celestial.Typography.supporting)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 10)
+                Button("Unlock full library") {
+                    showUpgrade = true
+                }
+                .font(Celestial.Typography.supportingEmphasized)
+                .foregroundStyle(Celestial.Colors.primary)
+                .frame(minHeight: 44)
             }
-            .font(Celestial.Typography.supportingEmphasized)
-            .foregroundStyle(Celestial.Colors.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
             Button {
                 viewModel.dismissUpgradeBanner()
             } label: {
                 Image(systemName: "xmark")
                     .font(Celestial.Typography.caption)
                     .foregroundStyle(Celestial.Colors.outline)
-                    .padding(6)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
+            .padding(.trailing, -10)
             .accessibilityLabel("Dismiss upgrade banner")
         }
-        .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
-        .padding(.vertical, 10)
+        .padding(.leading, Celestial.Spacing.surfaceContentInset)
+        .padding(.trailing, Celestial.Spacing.surfaceContentInset)
         .modifier(
             GlassPanelModifier(
                 cornerRadius: 12,
                 tint: Celestial.Colors.amber.opacity(0.09)
             )
         )
-        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
     }
 
     // MARK: - Home (Albums + History)
@@ -804,14 +820,14 @@ struct SearchView: View {
             }
             if indexingService.hitFreeLimit
                 && totalLibraryCount > searchEngine.totalSize {
-                Text("\(searchEngine.totalSize) of \(totalLibraryCount) photos & videos searchable")
+                Text("\(searchEngine.totalSize.formatted()) of \(totalLibraryCount.formatted()) photos & videos searchable")
                     .font(Celestial.Typography.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
                 resumeIndexingButton
             } else if searchEngine.totalSize > 0 {
-                Text("\(searchEngine.totalSize) photos & videos searchable")
+                Text("\(searchEngine.totalSize.formatted()) photos & videos searchable")
                     .font(Celestial.Typography.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
                     .frame(maxWidth: .infinity)
@@ -838,9 +854,7 @@ struct SearchView: View {
 
     private var todayMemoryLoadingView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Today in Your Memories")
-                .font(Celestial.Typography.bodyEmphasized)
-                .foregroundStyle(Celestial.Colors.onSurface)
+            homeSectionTitle("Today in Your Memories")
                 .padding(.horizontal, 2)
 
             VStack(spacing: 0) {
@@ -863,15 +877,13 @@ struct SearchView: View {
 
     private var validatedSuggestionsView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("MATCHED IN YOUR LIBRARY")
-                .font(Celestial.Typography.eyebrow)
-                .tracking(0.6)
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
-                .padding(.bottom, 8)
+            homeSectionTitle("Matched in Your Library")
+                .padding(.horizontal, 2)
+                .padding(.bottom, 12)
 
+            let suggestions = Array(indexingService.validatedSearchSuggestions.prefix(3))
             VStack(spacing: 0) {
-                ForEach(indexingService.validatedSearchSuggestions.prefix(3), id: \.self) { suggestion in
+                ForEach(suggestions, id: \.self) { suggestion in
                     Button {
                         viewModel.setQueryText(suggestion)
                         performSearch(saveToHistory: true)
@@ -888,7 +900,10 @@ struct SearchView: View {
                         .frame(minHeight: 50)
                         .contentShape(Rectangle())
                     }
-                    CelestialHairline()
+                    // Between rows only; the panel draws its own edge.
+                    if suggestion != suggestions.last {
+                        CelestialHairline()
+                    }
                 }
             }
             .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
@@ -1015,17 +1030,14 @@ struct SearchView: View {
 
     private var smartAlbumsView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("SMART ALBUMS")
-                    .font(Celestial.Typography.eyebrow)
-                    .tracking(0.6)
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            HStack(alignment: .firstTextBaseline) {
+                homeSectionTitle("Smart Albums")
                 Spacer()
-                Text("\(smartAlbums.count) saved")
+                Text("\(smartAlbums.count.formatted()) saved")
                     .font(Celestial.Typography.caption)
-                    .foregroundStyle(Celestial.Colors.primaryDim)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
             }
-            .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+            .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset + 2)
             .padding(.top, Celestial.Spacing.sectionGap)
             .padding(.bottom, 12)
 
@@ -1051,7 +1063,7 @@ struct SearchView: View {
                                         .padding(8)
                                 }
                                 Text(album.name)
-                                    .font(Celestial.Typography.eyebrow)
+                                    .font(Celestial.Typography.captionStrong)
                                     .foregroundStyle(Celestial.Colors.onSurface)
                                     .lineLimit(1)
                                     .frame(width: 108, alignment: .leading)
@@ -1074,7 +1086,7 @@ struct SearchView: View {
                         }
                     }
                 }
-                .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
             }
         }
     }
@@ -1082,21 +1094,13 @@ struct SearchView: View {
     // MARK: - Recent Queries
 
     private func todayMemoryView(_ memory: OnThisDaySummary) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Today in Your Memories")
-                    .font(Celestial.Typography.bodyEmphasized)
-                    .foregroundStyle(Celestial.Colors.onSurface)
-                Spacer()
-                Text("View memories")
-                    .font(Celestial.Typography.caption)
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-            }
-            .padding(.horizontal, 2)
+        NavigationLink {
+            OnThisDayView()
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                homeSectionTitle("Today in Your Memories")
+                    .padding(.horizontal, 2)
 
-            NavigationLink {
-                OnThisDayView()
-            } label: {
                 Group {
                     if memory.heroPhoto.pixelWidth > 0,
                        memory.heroPhoto.pixelHeight > memory.heroPhoto.pixelWidth {
@@ -1128,13 +1132,23 @@ struct SearchView: View {
                     SearchHomeCardMetrics.cardShape
                         .stroke(Celestial.Colors.hairline, lineWidth: 0.8)
                 }
-                .contentShape(SearchHomeCardMetrics.cardShape)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Today in Your Memories, \(Self.memoryTitle)")
-            .accessibilityHint("Opens memories from this day")
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Today in Your Memories, \(Self.memoryTitle), \(memorySummary(memory))")
+        .accessibilityHint("Opens memories from this day")
+        .accessibilityAddTraits(.isButton)
         .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+    }
+
+    /// One heading style for every section on the search home.
+    private func homeSectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(Celestial.Typography.bodyEmphasized)
+            .foregroundStyle(Celestial.Colors.onSurface)
+            .accessibilityAddTraits(.isHeader)
     }
 
     private func todayMemoryImage(
@@ -1180,19 +1194,19 @@ struct SearchView: View {
 
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Recent Searches")
-                    .font(Celestial.Typography.bodyEmphasized)
-                    .foregroundStyle(Celestial.Colors.onSurface)
+                homeSectionTitle("Recent Searches")
                 Spacer()
                 Menu {
                     Button("Clear recent searches", role: .destructive) {
                         viewModel.clearSearchHistory()
                     }
                 } label: {
+                    // Trailing-aligned so the glyph lines up with the row
+                    // chevrons below while keeping a 44-point target.
                     Image(systemName: "ellipsis")
                         .font(Celestial.Typography.supportingEmphasized)
                         .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 44, height: 44, alignment: .trailing)
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Recent search options")
@@ -1291,9 +1305,7 @@ struct SearchView: View {
             parts.append(relativeSearchDate(searchedAt))
         }
         if preview.resultCount > 0 {
-            parts.append(
-                "\(preview.resultCount.formatted()) \(preview.resultCount == 1 ? "result" : "results")"
-            )
+            parts.append(CountPhrase.string(preview.resultCount, "result"))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -1346,10 +1358,11 @@ struct SearchView: View {
 
     private func errorState(_ error: String) -> some View {
         VStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 32, weight: .thin))
-                .foregroundStyle(Celestial.Colors.error)
-                .accessibilityHidden(true)
+            CelestialGlassIcon(
+                systemName: "exclamationmark.triangle",
+                tint: Celestial.Colors.error,
+                size: 56
+            )
             Text(error)
                 .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
@@ -1509,12 +1522,12 @@ struct SearchView: View {
             if indexingService.isReady && searchEngine.totalSize > 0 {
                 if indexingService.hitFreeLimit
                     && totalLibraryCount > searchEngine.totalSize {
-                    Text("\(searchEngine.totalSize) of \(totalLibraryCount) photos & videos searchable")
+                    Text("\(searchEngine.totalSize.formatted()) of \(totalLibraryCount.formatted()) photos & videos searchable")
                         .font(Celestial.Typography.interfaceTitle3)
                         .foregroundStyle(Celestial.Colors.onSurface)
                     resumeIndexingButton
                 } else {
-                    Text("\(searchEngine.totalSize) photos & videos searchable")
+                    Text("\(searchEngine.totalSize.formatted()) photos & videos searchable")
                         .font(Celestial.Typography.interfaceTitle3)
                         .foregroundStyle(Celestial.Colors.onSurface)
                 }
@@ -1577,7 +1590,7 @@ struct SearchView: View {
                 // The count takes the leading slack directly. A Spacer here
                 // competed with it for the same space and truncated the count
                 // while leaving a visible gap beside it.
-                Text("\(filteredCount) \(filteredCount == 1 ? "result" : "results")")
+                Text(CountPhrase.string(filteredCount, "result"))
                     .font(Celestial.Typography.supportingEmphasized)
                     .foregroundStyle(Celestial.Colors.onSurface)
                     .contentTransition(.numericText())
@@ -1763,7 +1776,7 @@ struct SearchView: View {
             }
             if !textMatches.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Text matches · \(textMatches.count)")
+                    Text("Text matches · \(textMatches.count.formatted())")
                         .font(Celestial.Typography.button)
                         .foregroundStyle(Celestial.Colors.onSurface)
                     ScrollView(.horizontal) {
@@ -1810,7 +1823,7 @@ struct SearchView: View {
                             .tracking(1.5)
                             .foregroundStyle(Celestial.Colors.amber)
                         Spacer()
-                        Text("\(group.results.count) \(group.results.count == 1 ? "result" : "results")")
+                        Text(CountPhrase.string(group.results.count, "result"))
                             .font(Celestial.Typography.footnote)
                             .foregroundStyle(Celestial.Colors.outline)
                     }
@@ -1832,7 +1845,7 @@ struct SearchView: View {
                     Haptics.light()
                     viewModel.showAllResults(count: visualMatches.count)
                 } label: {
-                    Text("Show all \(visualMatches.count) matching results")
+                    Text("Show all \(visualMatches.count.formatted()) matching results")
                         .font(Celestial.Typography.button)
                         .foregroundStyle(Celestial.Colors.primary)
                 }
@@ -1971,9 +1984,9 @@ struct SearchView: View {
     private static let memoryTitle = "Memories from this date"
 
     private func memorySummary(_ memory: OnThisDaySummary) -> String {
-        let photos = "\(memory.photoCount.formatted()) \(memory.photoCount == 1 ? "photo" : "photos")"
+        let photos = CountPhrase.string(memory.photoCount, "photo")
         guard memory.yearCount > 1 else { return photos }
-        return "\(photos) across \(memory.yearCount.formatted()) years"
+        return "\(photos) across \(CountPhrase.string(memory.yearCount, "year"))"
     }
 
     private func relativeSearchDate(_ date: Date) -> String {
