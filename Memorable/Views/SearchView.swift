@@ -10,6 +10,7 @@ struct SearchView: View {
     let surpriseRequestID: Int
     let searchHomeRequestID: Int
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var viewModel: SearchViewModel
     @State private var selectedPhoto: SearchResult?
     @State private var showUpgrade = false
@@ -1619,13 +1620,17 @@ struct SearchView: View {
             }
 
             HStack(spacing: 10) {
+                // The count takes the leading slack directly. A Spacer here
+                // competed with it for the same space and truncated the count
+                // while leaving a visible gap beside it.
                 Text("\(filteredCount) \(filteredCount == 1 ? "result" : "results")")
                     .font(Celestial.Typography.supportingEmphasized)
                     .foregroundStyle(Celestial.Colors.onSurface)
                     .contentTransition(.numericText())
                     .lineLimit(1)
-
-                Spacer(minLength: 8)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, 8)
 
                 Menu {
                     ForEach(SearchMediaFilter.allCases, id: \.self) { filter in
@@ -1641,14 +1646,23 @@ struct SearchView: View {
                         }
                     }
                 } label: {
-                    ViewThatFits(in: .horizontal) {
-                        Label(
-                            viewModel.mediaFilter.label,
-                            systemImage: "line.3.horizontal.decrease"
-                        )
-                        Image(systemName: "line.3.horizontal.decrease")
+                    // ViewThatFits dropped the name even with room to spare,
+                    // because the glass button style proposes a narrow width to
+                    // its label. Collapse on text size instead, so the active
+                    // filter stays readable at normal sizes.
+                    Group {
+                        if dynamicTypeSize.isAccessibilitySize {
+                            Image(systemName: "line.3.horizontal.decrease")
+                        } else {
+                            Label(
+                                viewModel.mediaFilter.label,
+                                systemImage: "line.3.horizontal.decrease"
+                            )
+                        }
                     }
                     .font(Celestial.Typography.captionStrong)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .celestialGlassCapsuleButtonStyle(
                     tint: Celestial.Colors.surfaceContainerHigh.opacity(0.22),
@@ -1668,14 +1682,19 @@ struct SearchView: View {
                         sortModeRaw = SearchSortMode.recent.rawValue
                     }
                 } label: {
-                    ViewThatFits(in: .horizontal) {
-                        Label(
-                            viewModel.sortMode == .relevance ? "Relevance" : "Recent",
-                            systemImage: "arrow.up.arrow.down"
-                        )
-                        Image(systemName: "arrow.up.arrow.down")
+                    Group {
+                        if dynamicTypeSize.isAccessibilitySize {
+                            Image(systemName: "arrow.up.arrow.down")
+                        } else {
+                            Label(
+                                viewModel.sortMode == .relevance ? "Relevance" : "Recent",
+                                systemImage: "arrow.up.arrow.down"
+                            )
+                        }
                     }
                     .font(Celestial.Typography.captionStrong)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .celestialGlassCapsuleButtonStyle(
                     tint: Celestial.Colors.primaryDim.opacity(0.14),
@@ -1783,6 +1802,11 @@ struct SearchView: View {
         let visible = Array(visualMatches.prefix(viewModel.visibleCount))
         let hasMore = visualMatches.count > visible.count
         return VStack(alignment: .leading, spacing: 0) {
+            // The search matched, but the media filter excluded every result.
+            // Without this the screen is blank below the controls.
+            if filtered.isEmpty {
+                noMatchesForFilterState
+            }
             if !textMatches.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Text matches · \(textMatches.count)")
@@ -1873,6 +1897,36 @@ struct SearchView: View {
                     .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    private var noMatchesForFilterState: some View {
+        VStack(spacing: Celestial.Spacing.contentGap) {
+            CelestialGlassIcon(
+                systemName: "line.3.horizontal.decrease",
+                tint: Celestial.Colors.onSurfaceVariant,
+                size: 56
+            )
+            Text("No \(viewModel.mediaFilter.label.lowercased()) in these results")
+                .font(Celestial.Typography.interfaceTitle)
+                .foregroundStyle(Celestial.Colors.onSurface)
+                .multilineTextAlignment(.center)
+            Text("This search matched other media types.")
+                .font(Celestial.Typography.body)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .multilineTextAlignment(.center)
+            Button {
+                Haptics.selection()
+                viewModel.setMediaFilter(.all)
+            } label: {
+                Text("Show all results")
+                    .font(Celestial.Typography.button)
+                    .foregroundStyle(Celestial.Colors.primary)
+            }
+            .frame(minHeight: 44)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 60)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
     }
 
     private func masonryGrid(results: [SearchResult]) -> some View {
