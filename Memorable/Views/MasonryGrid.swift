@@ -109,19 +109,28 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
         }
     }
 
-    // Pattern types with rough probabilities:
-    // After a feature: always pairs/triples (2-4 rows) before next feature
-    // Varies the count of pairs between features so it doesn't feel repetitive
+    /// Only landscape tiles span the full width. A full-width square or
+    /// portrait tile is taller than most of the screen, so it joins a row
+    /// instead and keeps its real proportions there.
+    static var featureMinimumAspectRatio: CGFloat { 1.25 }
+
+    private func canFeature(_ item: Item) -> Bool {
+        aspectRatio(item) >= Self.featureMinimumAspectRatio
+    }
+
+    // After a feature: always pairs/triples (2-5 rows) before the next one.
+    // Varies the count of rows between features so it doesn't feel repetitive.
     private var rows: [MasonryRow] {
         guard !items.isEmpty else { return [] }
         var result: [MasonryRow] = []
         var i = 0
 
-        // First item is always a feature
-        result.append(.feature(items[i]))
-        i += 1
+        // Lead with the first item when it suits a full-width row.
+        if canFeature(items[i]) {
+            result.append(.feature(items[i]))
+            i += 1
+        }
 
-        // Use item count as seed for deterministic but varied patterns
         let patterns: [Int] = [2, 3, 4, 2, 3, 5, 2, 4, 3, 2]
         var patternIndex = 0
         var rowsSinceFeature = 0
@@ -136,7 +145,7 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
             let remaining = items.count - i
 
             // Time for a feature row?
-            if rowsSinceFeature >= currentInterval && remaining >= 3 {
+            if rowsSinceFeature >= currentInterval && remaining >= 3 && canFeature(items[i]) {
                 result.append(.feature(items[i]))
                 i += 1
                 rowsSinceFeature = 0
@@ -152,6 +161,10 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
             } else if remaining >= 2 {
                 result.append(.pair(items[i], items[i + 1]))
                 i += 2
+            } else if case .pair(let a, let b)? = result.last {
+                // A lone last tile would stretch across the whole row.
+                result[result.count - 1] = .triple(a, b, items[i])
+                i += 1
             } else {
                 result.append(.single(items[i]))
                 i += 1
