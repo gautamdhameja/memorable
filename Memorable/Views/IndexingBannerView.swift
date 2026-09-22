@@ -40,6 +40,8 @@ struct IndexingBannerView: View {
         var parts: [String] = []
         if progress.searchableCount > 0 {
             parts.append("\(CountPhrase.string(progress.searchableCount, "item")) searchable")
+        } else if indexingService.isRebuildingForUpdate {
+            parts.append("Re-reading your library")
         } else {
             parts.append("Finding your first searchable moments")
         }

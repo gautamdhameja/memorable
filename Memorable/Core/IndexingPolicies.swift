@@ -35,9 +35,21 @@ enum InitialIndexingExperienceStore {
         defaults.bool(forKey: AppKeys.initialIndexingExperiencePending)
     }
 
-    static func begin(in defaults: UserDefaults = .standard) {
+    /// `isUpdate` records why the run began: true when an app update made the
+    /// existing index incompatible. Nil keeps the recorded reason, so resuming
+    /// the same run after a relaunch or pause does not forget it.
+    static func begin(in defaults: UserDefaults = .standard, isUpdate: Bool? = nil) {
         defaults.set(false, forKey: AppKeys.initialIndexingExperienceCompleted)
         defaults.set(true, forKey: AppKeys.initialIndexingExperiencePending)
+        if let isUpdate {
+            defaults.set(isUpdate, forKey: AppKeys.initialIndexingExperienceIsUpdate)
+        }
+    }
+
+    /// Whether the pending run rebuilds an index an app update invalidated.
+    static func isUpdate(in defaults: UserDefaults = .standard) -> Bool {
+        isPending(in: defaults)
+            && defaults.bool(forKey: AppKeys.initialIndexingExperienceIsUpdate)
     }
 
     static func isCompleted(in defaults: UserDefaults = .standard) -> Bool {
@@ -50,11 +62,13 @@ enum InitialIndexingExperienceStore {
     static func stop(in defaults: UserDefaults = .standard) {
         defaults.set(false, forKey: AppKeys.initialIndexingExperienceCompleted)
         defaults.set(false, forKey: AppKeys.initialIndexingExperiencePending)
+        defaults.removeObject(forKey: AppKeys.initialIndexingExperienceIsUpdate)
     }
 
     static func complete(in defaults: UserDefaults = .standard) {
         defaults.set(false, forKey: AppKeys.initialIndexingExperiencePending)
         defaults.set(true, forKey: AppKeys.initialIndexingExperienceCompleted)
+        defaults.removeObject(forKey: AppKeys.initialIndexingExperienceIsUpdate)
     }
 }
 

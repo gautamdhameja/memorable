@@ -672,12 +672,18 @@ struct SearchView: View {
 
     private var indexingExperience: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("BUILDING YOUR SEARCH")
+            // An update that invalidated the index must say so; first-run
+            // wording would leave an existing user wondering why search reset.
+            Text(indexingService.isRebuildingForUpdate ? "UPDATING YOUR SEARCH" : "BUILDING YOUR SEARCH")
                 .font(Celestial.Typography.eyebrow)
                 .tracking(1.2)
                 .foregroundStyle(Celestial.Colors.amber)
 
-            Text("A few memories while indexing continues.")
+            Text(
+                indexingService.isRebuildingForUpdate
+                    ? "Re-indexing once for this update. Your albums and recent searches are kept."
+                    : "A few memories while indexing continues."
+            )
                 .font(Celestial.Typography.compactMemoryCaption)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .lineSpacing(3)

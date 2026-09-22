@@ -60,7 +60,7 @@ struct IndexingSlideshowView: View {
                             VStack(spacing: 8) {
                                 ProgressView()
                                     .tint(Celestial.Colors.outlineVariant)
-                                Text("Finding your first memories...")
+                                Text("Finding memories...")
                                     .font(Celestial.Typography.caption)
                                     .foregroundStyle(Celestial.Colors.outline)
                             }

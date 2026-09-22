@@ -33,6 +33,11 @@ class IndexingService: ObservableObject {
     @Published private(set) var indexRebuildRequired = false
     @Published private(set) var isDeletingDuplicatePhoto = false
     @Published private(set) var isInitialIndexingExperiencePending: Bool
+    /// True while the indexing experience rebuilds an index that an app update
+    /// made incompatible, so the home can say why instead of using first-run
+    /// wording. Persisted, because the rebuild marker in the database clears
+    /// at the first compatible write while the rebuild is still running.
+    @Published private(set) var isRebuildingForUpdate: Bool
     @Published private(set) var isInitialLibraryIndexingActive = false
     @Published private(set) var backgroundExecutionState: IndexingBackgroundExecutionState = .foreground
     @Published var indexVersion: Int = 0 {
@@ -212,6 +217,9 @@ class IndexingService: ObservableObject {
             in: initialIndexingDefaults
         )
         self.isInitialIndexingExperiencePending = initialIndexingExperiencePending
+        self.isRebuildingForUpdate = InitialIndexingExperienceStore.isUpdate(
+            in: initialIndexingDefaults
+        )
         self.hasCompletedInitialIndexingExperience = InitialIndexingExperienceStore.isCompleted(
             in: initialIndexingDefaults
         )
@@ -318,7 +326,8 @@ class IndexingService: ObservableObject {
             if rebuildRequired {
                 hasCompletedInitialIndexingExperience = false
                 isInitialIndexingExperiencePending = true
-                InitialIndexingExperienceStore.begin(in: initialIndexingDefaults)
+                isRebuildingForUpdate = true
+                InitialIndexingExperienceStore.begin(in: initialIndexingDefaults, isUpdate: true)
                 searchEngine.dropIndex()
                 isReady = false
                 progress = IndexingProgress(total: 0, completed: 0, isRunning: false)
@@ -503,6 +512,7 @@ class IndexingService: ObservableObject {
         stopIndexing(preserveThermalResume: false)
         if stoppedInitialIndexing {
             isInitialIndexingExperiencePending = false
+            isRebuildingForUpdate = false
             hasCompletedInitialIndexingExperience = false
             backgroundExecutionState = .foreground
             InitialIndexingExperienceStore.stop(in: initialIndexingDefaults)
@@ -1034,7 +1044,10 @@ class IndexingService: ObservableObject {
         indexRebuildRequired = true
         hasCompletedInitialIndexingExperience = false
         isInitialIndexingExperiencePending = true
-        InitialIndexingExperienceStore.begin(in: initialIndexingDefaults)
+        // A re-index the user asked for also clears history, so it is not
+        // described as an update that keeps their searches.
+        isRebuildingForUpdate = false
+        InitialIndexingExperienceStore.begin(in: initialIndexingDefaults, isUpdate: false)
         searchEngine.dropIndex()
         isReady = false
         onIndexUnavailable?()
@@ -1211,6 +1224,7 @@ class IndexingService: ObservableObject {
             return
         }
         isInitialIndexingExperiencePending = false
+        isRebuildingForUpdate = false
         hasCompletedInitialIndexingExperience = true
         backgroundExecutionState = .foreground
         InitialIndexingExperienceStore.complete(in: initialIndexingDefaults)

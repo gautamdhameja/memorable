@@ -70,6 +70,90 @@ final class IndexingPolicyTests: XCTestCase {
         }
     }
 
+    func testUpdateReasonPersistsUntilTheRunEnds() {
+        let suite = "UpdateReason.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        InitialIndexingExperienceStore.begin(in: defaults, isUpdate: true)
+        XCTAssertTrue(InitialIndexingExperienceStore.isUpdate(in: defaults))
+        // Resuming the same run keeps the reason.
+        InitialIndexingExperienceStore.begin(in: defaults)
+        XCTAssertTrue(InitialIndexingExperienceStore.isUpdate(in: defaults))
+        InitialIndexingExperienceStore.complete(in: defaults)
+        XCTAssertFalse(InitialIndexingExperienceStore.isUpdate(in: defaults))
+
+        InitialIndexingExperienceStore.begin(in: defaults, isUpdate: true)
+        InitialIndexingExperienceStore.stop(in: defaults)
+        XCTAssertFalse(InitialIndexingExperienceStore.isUpdate(in: defaults))
+        // A later first-run style start is not an update.
+        InitialIndexingExperienceStore.begin(in: defaults)
+        XCTAssertFalse(InitialIndexingExperienceStore.isUpdate(in: defaults))
+    }
+
+    @MainActor
+    func testUpgradeFromShippedSchemaPresentsAnUpdateRebuild() async throws {
+        let suite = "UpgradeRebuild.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        // The released app shipped migrations v1 and v2 only.
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v2-siglip2-model-swap")
+        try await queue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO indexed_photos
+                    (id, localIdentifier, pixelWidth, pixelHeight, embedding, indexedAt)
+                    VALUES ('shipped', 'shipped/L0/001', 4, 3, zeroblob(1536), CURRENT_TIMESTAMP)
+                """
+            )
+            try db.execute(
+                sql: "INSERT INTO smart_albums (id, name, query, createdAt) VALUES ('a', 'Beach', 'beach', CURRENT_TIMESTAMP)"
+            )
+        }
+        let database = AppDatabase(openQueue: { queue }, migrate: { try AppDatabase.migrator.migrate($0) })
+        XCTAssertTrue(try database.indexRebuildRequired())
+        XCTAssertEqual(try database.indexedCount(), 0)
+        XCTAssertEqual(try database.loadSmartAlbums().map(\.name), ["Beach"])
+
+        let service = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: SearchEngine(database: database), database: database,
+            initialIndexingDefaults: defaults
+        )
+        defer { service.stopIndexing() }
+        let loaded = await service.loadExistingIndexIfAvailable()
+        XCTAssertFalse(loaded)
+        XCTAssertTrue(service.isRebuildingForUpdate)
+        XCTAssertTrue(InitialIndexingExperienceStore.isUpdate(in: defaults))
+
+        // A relaunch mid-rebuild still knows why the index is being rebuilt.
+        let relaunched = IndexingService(
+            imageEncoder: ImageEncoder(model: UnusedImagePredictionModel()),
+            searchEngine: SearchEngine(database: database), database: database,
+            initialIndexingDefaults: defaults
+        )
+        XCTAssertTrue(relaunched.isRebuildingForUpdate)
+    }
+
+    @MainActor
+    func testStoppingAnUpdateRebuildClearsTheReason() async throws {
+        let suite = "UserReindex.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        InitialIndexingExperienceStore.begin(in: defaults, isUpdate: true)
+        let database = SearchFixtureDatabase(photos: [surpriseFixturePhoto()])
+        let service = makeSurpriseLaunchService(
+            database: database,
+            cachedState: SurpriseQueryCache.State(validatedQueries: [], lastValidatedCount: 0),
+            initialIndexingDefaults: defaults
+        )
+        XCTAssertTrue(service.isRebuildingForUpdate)
+        service.stopIndexing()
+        XCTAssertFalse(service.isRebuildingForUpdate)
+        XCTAssertFalse(InitialIndexingExperienceStore.isUpdate(in: defaults))
+    }
+
     @MainActor
     func testLibraryPersistenceFailureDoesNotCertifyCompletion() async throws {
         let suite = "FailedInitialIndex.\(UUID().uuidString)"
@@ -2026,6 +2110,8 @@ final class IndexingPolicyTests: XCTestCase {
         XCTAssertTrue(try database.loadSearchHistory().isEmpty)
         XCTAssertEqual(try database.indexedCount(), 0)
         XCTAssertTrue(service.indexRebuildRequired)
+        // The user's own re-index clears history, so it is not an update.
+        XCTAssertFalse(service.isRebuildingForUpdate)
         XCTAssertFalse(service.isReady)
         XCTAssertFalse(service.progress.isRunning)
     }
