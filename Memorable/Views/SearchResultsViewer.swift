@@ -237,6 +237,10 @@ struct SearchResultsViewer: View {
                             withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
                         }
                     )
+                    // A paged TabView passes its safe area insets down to each
+                    // page, which centred the photo inside the inset area
+                    // rather than on the black backdrop behind it.
+                    .ignoresSafeArea()
                     .tag(index)
                 }
             }
