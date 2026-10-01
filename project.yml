@@ -4,7 +4,17 @@ options:
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "16.0"
+configs:
+  Debug: debug
+  Release: release
+  ReleaseTest: release
+settings:
+  base:
+    SWIFT_VERSION: "6"
+    DEVELOPMENT_TEAM: GHL726VCA6
 packages:
+  SentencePiece:
+    path: Packages/SentencePiece
   GRDB:
     url: https://github.com/groue/GRDB.swift
     from: "7.0.0"
@@ -15,6 +25,49 @@ targets:
   Memorable:
     type: application
     platform: iOS
+    configFiles:
+      Debug: Config/Build.xcconfig
+      Release: Config/Build.xcconfig
+      ReleaseTest: Config/Build.xcconfig
+    preBuildScripts:
+      - name: Verify bundled models
+        script: |
+          set -eu
+          python3 "$SRCROOT/scripts/verify_models.py"
+          touch "$DERIVED_FILE_DIR/memorable-models-verified"
+        inputFiles:
+          - "$(SRCROOT)/scripts/verify_models.py"
+          - "$(SRCROOT)/scripts/model_manifest.json"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/analytics/coremldata.bin"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/coremldata.bin"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/metadata.json"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/model.mil"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/weights/weight.bin"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc/analytics/coremldata.bin"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc/coremldata.bin"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc/metadata.json"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc/model.mil"
+          - "$(SRCROOT)/Memorable/Models/SigLIP2_TextEncoder.mlmodelc/weights/weight.bin"
+        outputFiles:
+          - "$(DERIVED_FILE_DIR)/memorable-models-verified"
+        basedOnDependencyAnalysis: true
+    postBuildScripts:
+      - name: Verify packaged models
+        script: |
+          set -eu
+          python3 "$SRCROOT/scripts/verify_models.py" \
+            --packaged-models-root "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          touch "$DERIVED_FILE_DIR/memorable-packaged-models-verified"
+        inputFiles:
+          - "$(SRCROOT)/scripts/verify_models.py"
+          - "$(SRCROOT)/scripts/model_manifest.json"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/SigLIP2_ImageEncoder.mlmodelc"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/SigLIP2_TextEncoder.mlmodelc"
+        outputFiles:
+          - "$(DERIVED_FILE_DIR)/memorable-packaged-models-verified"
+        basedOnDependencyAnalysis: true
     sources:
       - path: Memorable
         excludes:
@@ -25,19 +78,33 @@ targets:
       - path: Memorable/Models/SigLIP2_TextEncoder.mlmodelc
         type: folder
         buildPhase: resources
+      - path: PRIVACY_POLICY.txt
+        type: file
+        buildPhase: resources
     resources:
       - path: Memorable/Resources
     dependencies:
+      - package: SentencePiece
       - package: GRDB
       - package: SwiftProtobuf
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.blockdeep.memorable
         INFOPLIST_FILE: Memorable/Info.plist
-        SWIFT_VERSION: "5.10"
-        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_CFBundleDisplayName: Memorable
+        MARKETING_VERSION: "1.0.2"
+        CURRENT_PROJECT_VERSION: "8"
+        TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Automatic
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        SUPPORTS_MACCATALYST: "NO"
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: "NO"
+      configs:
+        ReleaseTest:
+          ENABLE_TESTABILITY: "YES"
   MemorableTests:
     type: bundle.unit-test
     platform: iOS
@@ -48,7 +115,37 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.blockdeep.memorable.tests
-        SWIFT_VERSION: "5.10"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Memorable.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Memorable"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  MemorableRelevanceTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: MemorableRelevanceTests
+    resources:
+      - path: MemorableRelevanceTests/Fixtures
+    dependencies:
+      - target: Memorable
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.blockdeep.memorable.relevance-tests
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Memorable.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Memorable"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  MemorableReleaseTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: MemorableReleaseTests
+    dependencies:
+      - target: Memorable
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.blockdeep.memorable.release-tests
+        TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Memorable.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Memorable"
         BUNDLE_LOADER: "$(TEST_HOST)"
@@ -59,10 +156,31 @@ schemes:
         Memorable: all
         MemorableTests: [test]
     run:
-      config: Debug
+      config: Release
     test:
       config: Debug
       targets:
         - MemorableTests
     archive:
       config: Release
+  MemorableRelevanceTests:
+    build:
+      targets:
+        Memorable: all
+        MemorableRelevanceTests: [test]
+    test:
+      config: Debug
+      targets:
+        - MemorableRelevanceTests
+      environmentVariables:
+        MEMORABLE_RELEVANCE_PERTURBATION: "$(MEMORABLE_RELEVANCE_PERTURBATION)"
+        MEMORABLE_RELEVANCE_SKIP_BASELINE: "$(MEMORABLE_RELEVANCE_SKIP_BASELINE)"
+  MemorableReleaseTests:
+    build:
+      targets:
+        Memorable: all
+        MemorableReleaseTests: [test]
+    test:
+      config: ReleaseTest
+      targets:
+        - MemorableReleaseTests

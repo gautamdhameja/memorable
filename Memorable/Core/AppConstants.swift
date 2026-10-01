@@ -7,6 +7,45 @@ enum PhotoSourceType: String {
     case folder = "folder"
 }
 
+enum PhotoSourcePolicy {
+    static let maximumFolderSources = 32
+
+    static func canonicalPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    static func pathsOverlap(_ first: String, _ second: String) -> Bool {
+        let first = canonicalPath(URL(fileURLWithPath: first))
+        let second = canonicalPath(URL(fileURLWithPath: second))
+        guard first != second else { return true }
+        return isAncestor(first, of: second) || isAncestor(second, of: first)
+    }
+
+    private static func isAncestor(_ candidate: String, of path: String) -> Bool {
+        if candidate == "/" {
+            return path.hasPrefix("/") && path != "/"
+        }
+        return path.hasPrefix(candidate + "/")
+    }
+}
+
+enum PhotoSourceRegistrationError: LocalizedError, Equatable {
+    case duplicateFolder
+    case overlappingFolder
+    case sourceLimitReached
+
+    var errorDescription: String? {
+        switch self {
+        case .duplicateFolder:
+            return "This folder is already added."
+        case .overlappingFolder:
+            return "Choose a folder that is not inside an added folder and does not contain one."
+        case .sourceLimitReached:
+            return "You can add up to \(PhotoSourcePolicy.maximumFolderSources) folders."
+        }
+    }
+}
+
 // MARK: - Copy
 
 enum AppCopy {
@@ -20,12 +59,24 @@ enum AppCopy {
 enum AppKeys {
     // Keys must match what was originally shipped — do not rename
     static let onboardingComplete = "onboarding_complete"
+    static let startIndexAfterOnboarding = "start_index_after_onboarding"
+    static let initialIndexingExperiencePending = "indexing.initialExperiencePending"
+    static let initialIndexingExperienceCompleted = "indexing.initialExperienceCompleted"
+    static let initialIndexingExperienceIsUpdate = "indexing.initialExperienceIsUpdate"
     static let surpriseValidatedQueries = "memorable_validated_surprise_queries"
     static let surpriseLastValidatedCount = "memorable_surprise_last_validated_count"
+    static let persistentStoreReset = "storage.resetPersistentStoreOnNextLaunch"
+    static let persistentStoreResetStoreDeleted = "storage.resetPersistentStoreFilesDeleted"
+    static let folderBookmarkPrefix = "folder_bookmark_"
 
     static func folderBookmark(sourceId: String) -> String {
-        "folder_bookmark_\(sourceId)"
+        "\(folderBookmarkPrefix)\(sourceId)"
     }
+}
+
+enum MemoryConfig {
+    static let maximumOnThisDayYears = 50
+    static let maximumOnThisDayPhotosPerYear = 100
 }
 
 // MARK: - Search Scoring
@@ -34,7 +85,25 @@ enum SearchConfig {
     /// Minimum similarity score to include a result.
     /// SigLIP2 (sigmoid loss) produces lower raw cosine similarities than
     /// softmax-based CLIP models. Matching pairs typically score 0.10-0.25.
+    /// A visual search never requires more than this; see the relative
+    /// constants below for when it accepts less.
     static let minimumScoreThreshold: Float = 0.12
+
+    /// Short queries score low even for clear matches, and how low depends on
+    /// the query: a correct "dog" photo scored 0.100 while an unrelated
+    /// kitchen scored 0.099 for "quantum marmalade observatory". A fixed
+    /// cutoff cannot separate them. Each visual query therefore also accepts
+    /// a photo that stands far above that query's scores across the library:
+    /// at least the median plus this many robust standard deviations
+    /// (scaled median absolute deviation) of the raw scores.
+    static let relativeThresholdSpreadMultiplier: Float = 6
+
+    /// The relative cutoff never drops below this raw similarity.
+    static let relativeThresholdFloor: Float = 0.09
+
+    /// Fewer scored items than this give an unreliable spread, so the query
+    /// keeps the fixed `minimumScoreThreshold`.
+    static let relativeThresholdMinimumSampleCount = 20
 
     /// Duplicate detection threshold (cosine similarity for near-identical images)
     static let duplicateThreshold: Float = 0.95
@@ -42,27 +111,8 @@ enum SearchConfig {
     /// Max results per search
     static let topK = 50
 
-    /// Max results for location-only and sparse CLIP fallback queries
+    /// Maximum retained search results, including location-only queries.
     static let locationResultsCap = 500
-
-    /// Sparse CLIP fallback: minimum result count below which fallback triggers
-    static let sparseClipMinResults = 5
-
-    /// Sparse CLIP fallback: max ratio of results to candidates for fallback to trigger
-    static let sparseClipMaxRatio = 0.1
-
-    /// Sparse CLIP fallback: minimum top-candidate score to show results in the
-    /// main grid. Below this, results are demoted to the "Other X photos" fallback
-    /// section. Prevents irrelevant location-filtered photos from filling the grid
-    /// when no actual visual matches exist (e.g., "dog in California" with no dog
-    /// photos in California).
-    static let sparseClipMinScore: Float = 0.07
-
-    // Location proximity boost (additive, applied within the filtered radius)
-    // These are mild -- the hard filter already removed irrelevant locations.
-    // Scaled for SigLIP2's lower score range.
-    static let locationCloseBoost: Float = 0.025   // Within 10% of radius
-    static let locationNearBoost: Float = 0.015    // Within 30% of radius
 
     // Time-of-day boost (boost only, no penalty for wrong time)
     static let timeOfDayMatchBoost: Float = 0.03
@@ -70,14 +120,11 @@ enum SearchConfig {
     // Negative term penalty weight (multiplier on negative similarity)
     static let negativeTermWeight: Float = 0.3
 
-    // OCR text boost per matching word (scaled by match ratio)
-    static let ocrBoostPerWord: Float = 0.08
-
     // Scene label boost per matching label (additive on top of similarity)
     static let sceneLabelBoostPerMatch: Float = 0.04
 
-    // Video frames lack scene labels, OCR text, and location-name boosts
-    // that photos receive. This flat compensation partially offsets the
+    // Video frames lack the scene-label enrichment that photos receive.
+    // This flat compensation partially offsets the
     // asymmetry so that a genuinely relevant video isn't buried under
     // photos whose scores were inflated by non-similarity boosts.
     static let videoRelevanceCompensation: Float = 0.03
@@ -88,10 +135,8 @@ enum SearchConfig {
 
 /// Used by QueryParser Strategy 3 and SmartQueryParser to distinguish
 /// genuine city names from pet names, people names, and other proper nouns
-/// when the input is a single capitalized word. Multi-word place names
-/// ("San Diego", "New York") don't need this list because they're far
-/// less ambiguous. NLTagger (Strategy 1) catches most well-known cities,
-/// so this is the fallback for cases it misses.
+/// when the input is a single capitalized word. NLTagger (Strategy 1)
+/// catches most well-known cities, so this is the fallback for cases it misses.
 ///
 /// Loaded from Resources/known_cities.json (9,695 single-word cities with
 /// population >= 50,000, sourced from dr5hn/countries-states-cities-database).
@@ -119,6 +164,25 @@ enum KnownRegions {
               let data = try? Data(contentsOf: url),
               let names = try? JSONDecoder().decode([String].self, from: data) else {
             logger.error("Failed to load known_regions.json")
+            return []
+        }
+        return Set(names)
+    }()
+}
+
+/// Multi-word city, country, and state/province names used to validate bare
+/// proper-noun location queries. Exact gazetteer membership prevents arbitrary
+/// capitalized phrases such as a person's name from becoming hard filters.
+///
+/// Loaded from Resources/known_multiword_locations.json, derived from the
+/// dr5hn/countries-states-cities-database v3.1-export.2 country/city and
+/// country/state exports.
+enum KnownMultiwordLocations {
+    static let names: Set<String> = {
+        guard let url = Bundle.main.url(forResource: "known_multiword_locations", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let names = try? JSONDecoder().decode([String].self, from: data) else {
+            logger.error("Failed to load known_multiword_locations.json")
             return []
         }
         return Set(names)
@@ -180,9 +244,23 @@ enum TimeOfDayConfig {
 
     /// Detect time-of-day from a lowercased query string
     static func detect(in text: String) -> (start: Int, end: Int)? {
-        for entry in entries {
-            if entry.keywords.contains(where: { text.contains($0) }) {
-                return (entry.startHour, entry.endHour)
+        // A longer activity phrase (such as afternoon tea) takes precedence
+        // over a general time word. Substrings such as knight are not intent.
+        let keywords = entries.flatMap { entry in
+            entry.keywords.map { (phrase: $0, entry: entry) }
+        }.sorted { $0.phrase.count > $1.phrase.count }
+        for keyword in keywords {
+            var searchStart = text.startIndex
+            while let range = text.range(of: keyword.phrase, range: searchStart..<text.endIndex) {
+                let before = range.lowerBound == text.startIndex
+                    || !text[text.index(before: range.lowerBound)].isLetter
+                        && !text[text.index(before: range.lowerBound)].isNumber
+                let after = range.upperBound == text.endIndex
+                    || !text[range.upperBound].isLetter && !text[range.upperBound].isNumber
+                if before && after {
+                    return (keyword.entry.startHour, keyword.entry.endHour)
+                }
+                searchStart = range.upperBound
             }
         }
         return nil
@@ -195,8 +273,40 @@ enum IndexingConfig {
     /// Photos per DB transaction
     static let batchInsertSize = 20
 
-    /// Images per Core ML batch prediction
-    static let batchEncodeSize = 16
+    /// Failed enrichment loads are retried by a later pass, not repeatedly in
+    /// the same pass while the underlying media is still unavailable.
+    static let enrichmentRetryDelaySeconds: TimeInterval = 24 * 60 * 60
+
+    /// Images retained by one indexing batch. Keep this small because model
+    /// prediction and decoded image buffers can overlap during cancellation.
+    static let batchEncodeSize = 4
+
+    /// First photo count at which a new index should become searchable.
+    static let firstSearchableCheckpoint = 500
+
+    /// Subsequent photo count interval for progressive search refreshes.
+    static let searchableCheckpointInterval = 500
+
+    /// Minimum number of newly indexed items between full-index reloads for
+    /// very large libraries, where each reload scans the full persisted index.
+    static let largeLibrarySearchableCheckpointInterval = 5_000
+
+    /// Library size at which progressive reloads switch to the larger interval.
+    static let largeLibraryProgressiveReloadThreshold = 20_000
+
+    /// Minimum time between progressive search index reloads.
+    static let minSearchReloadIntervalSeconds: TimeInterval = 5
+
+    /// Number of batches allowed to be loaded ahead of the encoder.
+    static let prefetchBatchCapacity = 1
+
+    /// Photos processed per enrichment fetch/update batch.
+    static let enrichmentBatchSize = 20
+    static let enrichmentConcurrency = 2
+    static let enrichmentSearchReloadIntervalSeconds: TimeInterval = 15
+
+    /// Completed items needed before speed/ETA estimates are shown.
+    static let progressEstimateMinCompleted = 5
 
     /// Max photos for duplicate scanning
     static let maxDuplicateScanPhotos = 10_000
@@ -209,6 +319,60 @@ enum IndexingConfig {
 
     /// Library size above which a "large library" warning is shown
     static let largeLibraryThreshold = 100_000
+
+    /// The searchable index and model warmup already complete before automatic
+    /// resume is enqueued, so unfinished user-visible work can start immediately.
+    static let postLaunchAutoResumeDelaySeconds: TimeInterval = 0
+
+    /// Nonessential cleanup and suggestion validation stay out of the launch
+    /// critical path even though indexing and location work resume immediately.
+    static let postLaunchMaintenanceDelaySeconds: TimeInterval = 8
+
+    /// Surprise validation performs many searches, so it runs only after base
+    /// search is usable and other indexing work is no longer in the critical path.
+    static let surpriseValidationDelaySeconds: TimeInterval = 5
+
+    /// User-entered searches take priority over maintenance work that publishes
+    /// progress on the main actor or writes to the search database.
+    static let userSearchBackgroundWorkDelaySeconds: TimeInterval = 30
+
+    /// Bounds SwiftUI invalidations while cached reverse-geocoding results are
+    /// being persisted much faster than uncached network-backed results.
+    static let geocodingProgressPublishIntervalSeconds: TimeInterval = 1
+}
+
+enum GeocodingProgressPublicationPolicy {
+    static func shouldPublish(elapsed: TimeInterval) -> Bool {
+        elapsed >= IndexingConfig.geocodingProgressPublishIntervalSeconds
+    }
+}
+
+enum GeocodingRetryPolicy {
+    static let maximumAutomaticAttempts = 5
+    private static let initialDelaySeconds: TimeInterval = 30
+    private static let maximumDelaySeconds: TimeInterval = 15 * 60
+
+    static func delaySeconds(afterAttempt attempt: Int) -> TimeInterval {
+        let exponent = min(max(0, attempt), 5)
+        return min(
+            maximumDelaySeconds,
+            initialDelaySeconds * TimeInterval(1 << exponent)
+        )
+    }
+
+    static func allowsAutomaticRetry(afterAttempt attempt: Int) -> Bool {
+        attempt < maximumAutomaticAttempts
+    }
+}
+
+enum ReverseGeocodeCachePolicy {
+    /// Refresh old labels occasionally so renamed or reclassified places do not
+    /// remain stale forever, while normal relaunches remain fully cached.
+    static let maximumAgeSeconds: TimeInterval = 365 * 24 * 60 * 60
+
+    /// Apple's explicit no-result response is terminal for the current data,
+    /// but retry occasionally in case its placemark coverage later improves.
+    static let noResultRetryDelaySeconds: TimeInterval = 30 * 24 * 60 * 60
 }
 
 // MARK: - Timeouts
@@ -219,6 +383,10 @@ enum TimeoutConfig {
 
     /// Video asset and Quick Look file loading
     static let videoLoad: Double = 15
+
+    /// One Apple reverse-geocoding request. A timeout cancels the underlying
+    /// request so a service outage cannot stall the background worker.
+    static let reverseGeocoding: Double = 15
 }
 
 // MARK: - Video Frame Extraction

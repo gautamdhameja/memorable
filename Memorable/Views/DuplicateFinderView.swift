@@ -1,163 +1,328 @@
 import SwiftUI
-import Photos
 
 struct DuplicateFinderView: View {
-    let searchEngine: SearchEngine
+    @ObservedObject var indexingService: IndexingService
+    @ObservedObject private var proManager = ProManager.shared
     @Environment(\.database) private var database
     @State private var duplicates: [DuplicatePair] = []
     @State private var isScanning = false
     @State private var scanComplete = false
+    @State private var scanTask: Task<Void, Never>?
+    @State private var scanGeneration: UInt = 0
+    @State private var deletionAlertTitle = "Couldn't delete photo"
+    @State private var deletionAlertMessage: String?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             ZStack {
-                Celestial.Colors.background.ignoresSafeArea()
+                CelestialBackdrop()
 
                 Group {
                     if isScanning {
-                        VStack(spacing: 16) {
+                        VStack(spacing: Celestial.Spacing.contentGap) {
                             ProgressView()
                                 .tint(Celestial.Colors.primaryDim)
                             Text("Scanning for duplicates...")
-                                .font(.subheadline)
+                                .font(Celestial.Typography.supporting)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
                     } else if duplicates.isEmpty && scanComplete {
-                        VStack(spacing: 16) {
-                            Image(systemName: "checkmark.circle")
-                                .font(.system(size: 48, weight: .thin))
-                                .foregroundStyle(Celestial.Colors.primaryDim)
+                        VStack(spacing: Celestial.Spacing.contentGap) {
+                            CelestialGlassIcon(
+                                systemName: "checkmark",
+                                tint: Celestial.Colors.emerald,
+                                size: 64
+                            )
                             Text("No duplicates found")
-                                .font(.subheadline)
+                                .font(Celestial.Typography.supporting)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                         }
                     } else if !duplicates.isEmpty {
                         List {
                             Section {
                                 ForEach(duplicates) { pair in
-                                    DuplicatePairRow(pair: pair) { deletedPair in
-                                        duplicates.removeAll { $0.id == deletedPair.id }
+                                    DuplicatePairRow(
+                                        pair: pair,
+                                        indexingService: indexingService
+                                    ) { deletedIdentifier, result in
+                                        handleDeletionResult(
+                                            result,
+                                            localIdentifier: deletedIdentifier
+                                        )
                                     }
-                                    .listRowBackground(Celestial.Colors.surfaceContainerHigh)
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
+                                    .listRowInsets(containerRowInsets)
                                 }
                             } header: {
-                                Text("\(duplicates.count) potential duplicates")
+                                HStack {
+                                    Text(CountPhrase.string(duplicates.count, "potential duplicate"))
+                                    Spacer()
+                                    Text("Review before deleting")
+                                }
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
                         }
+                        .listStyle(.plain)
                         .scrollContentBackground(.hidden)
                     } else {
-                        VStack(spacing: 16) {
-                            Image(systemName: "doc.on.doc")
-                                .font(.system(size: 48, weight: .thin))
-                                .foregroundStyle(Celestial.Colors.outlineVariant)
+                        VStack(spacing: Celestial.Spacing.contentGap) {
+                            CelestialGlassIcon(
+                                systemName: "square.on.square",
+                                tint: Celestial.Colors.onSurfaceVariant,
+                                size: 64
+                            )
                             Text("Find near-identical photos in your library")
-                                .font(.subheadline)
+                                .font(Celestial.Typography.supporting)
                                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             Button("Scan for Duplicates") {
                                 Haptics.medium()
                                 startScan()
                             }
-                            .buttonStyle(CelestialButtonStyle())
+                            .celestialPrimaryButtonStyle()
                         }
                     }
                 }
             }
-            .navigationTitle("Duplicate Finder")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
+            .celestialNavigationTitle("Duplicates")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                         .foregroundStyle(Celestial.Colors.primaryDim)
+                        .disabled(indexingService.isDeletingDuplicatePhoto)
                 }
             }
             .preferredColorScheme(.dark)
         }
+        .onDisappear {
+            cancelScan(clearResults: false)
+        }
+        .onAppear {
+            guard !proManager.isPro else { return }
+            dismiss()
+        }
+        .onChange(of: proManager.isPro) { _, isPro in
+            guard !isPro else { return }
+            cancelScan(clearResults: true)
+            dismiss()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            cancelScan(clearResults: true)
+        }
+        .interactiveDismissDisabled(indexingService.isDeletingDuplicatePhoto)
+        .alert(
+            deletionAlertTitle,
+            isPresented: Binding(
+                get: { deletionAlertMessage != nil },
+                set: { if !$0 { deletionAlertMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deletionAlertMessage ?? "Try again.")
+        }
+    }
+
+    private var containerRowInsets: EdgeInsets {
+        let halfGap = Celestial.Spacing.stackedContainerGap / 2
+        return EdgeInsets(
+            top: halfGap,
+            leading: Celestial.Spacing.surfaceHorizontalInset,
+            bottom: halfGap,
+            trailing: Celestial.Spacing.surfaceHorizontalInset
+        )
     }
 
     private func startScan() {
+        guard proManager.isPro else {
+            dismiss()
+            return
+        }
+        scanTask?.cancel()
+        scanGeneration &+= 1
+        let generation = scanGeneration
         isScanning = true
         let db = database
-        Task.detached(priority: .userInitiated) {
+        let featurePolicy = ProFeatureAccessPolicy(isPro: proManager.isPro)
+        scanTask = Task.detached(priority: .userInitiated) {
             do {
-                let data = try db.loadAllEmbeddings()
+                let data = try db.loadEmbeddingsForDuplicateScan(
+                    limit: IndexingConfig.maxDuplicateScanPhotos
+                )
+                guard !Task.isCancelled else { return }
                 let found = DuplicateFinder.findDuplicates(
                     ids: data.ids,
                     localIdentifiers: data.localIdentifiers,
-                    embeddings: data.embeddings
+                    embeddings: data.embeddings,
+                    featurePolicy: featurePolicy
                 )
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
+                    guard DuplicateScanGenerationPolicy.acceptsCompletion(
+                        startedGeneration: generation,
+                        currentGeneration: scanGeneration,
+                        isCancelled: Task.isCancelled
+                    ), proManager.isPro else { return }
                     duplicates = found
                     isScanning = false
                     scanComplete = true
+                    scanTask = nil
                     if !found.isEmpty { Haptics.success() }
                 }
             } catch {
-                logger.error("Duplicate scan failed: \(error.localizedDescription)")
+                guard !Task.isCancelled else { return }
+                logger.error("Duplicate scan failed: \(error.safeDiagnosticCode)")
                 await MainActor.run {
+                    guard DuplicateScanGenerationPolicy.acceptsCompletion(
+                        startedGeneration: generation,
+                        currentGeneration: scanGeneration,
+                        isCancelled: Task.isCancelled
+                    ) else { return }
                     isScanning = false
-                    scanComplete = true
+                    scanComplete = false
+                    deletionAlertTitle = "Couldn't scan for duplicates"
+                    deletionAlertMessage = "The scan couldn't finish. Try again."
+                    scanTask = nil
                 }
             }
+        }
+    }
+
+    private func cancelScan(clearResults: Bool) {
+        scanGeneration &+= 1
+        scanTask?.cancel()
+        scanTask = nil
+        isScanning = false
+        scanComplete = false
+        if clearResults {
+            duplicates.removeAll(keepingCapacity: false)
+        }
+    }
+
+    private func handleDeletionResult(
+        _ result: Result<DuplicatePhotoDeletionOutcome, Error>,
+        localIdentifier: String
+    ) {
+        switch result {
+        case .success(let outcome):
+            duplicates.removeAll {
+                $0.photo1LocalId == localIdentifier
+                    || $0.photo2LocalId == localIdentifier
+            }
+            if outcome == .indexRefreshPending {
+                deletionAlertTitle = "Photo deleted"
+                deletionAlertMessage = "Search is refreshing in the background."
+            }
+        case .failure(let error):
+            logger.error("Failed to delete duplicate photo: \(error.safeDiagnosticCode)")
+            deletionAlertTitle = "Couldn't delete photo"
+            deletionAlertMessage = UserFacingErrorMessage.message(
+                for: error,
+                fallback: "The photo couldn't be deleted. Try again."
+            )
         }
     }
 }
 
 struct DuplicatePairRow: View {
     let pair: DuplicatePair
-    var onDelete: ((DuplicatePair) -> Void)?
+    @ObservedObject var indexingService: IndexingService
+    var onDeletionComplete: ((String, Result<DuplicatePhotoDeletionOutcome, Error>) -> Void)?
     @State private var image1: UIImage?
     @State private var image2: UIImage?
+    @State private var imageLoadGeneration: UInt = 0
+    @State private var imageLoadTask: Task<Void, Never>?
     @State private var showDeleteConfirm = false
     @State private var deleteTarget: String?
     @State private var isDeleting = false
 
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 12) {
-                thumbnailView(image: image1, localId: pair.photo1LocalId)
-                thumbnailView(image: image2, localId: pair.photo2LocalId)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(Int(pair.similarity * 100))% match")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Celestial.Colors.onSurface)
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(pair.similarity > 0.98 ? Celestial.Colors.error : Celestial.Colors.amber)
+                    .frame(width: 6, height: 6)
+                Text("\(matchPercent)% match")
+                    .font(Celestial.Typography.supportingEmphasized)
+                    .foregroundStyle(pair.similarity > 0.98 ? Celestial.Colors.error : Celestial.Colors.amber)
                 Spacer()
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 5) {
+                Self.thumbnailView(image: image1, label: "LEFT", alignment: .topLeading)
+                Self.thumbnailView(image: image2, label: "RIGHT", alignment: .topTrailing)
+            }
+
+            HStack(spacing: 5) {
                 Button {
                     deleteTarget = pair.photo1LocalId
                     showDeleteConfirm = true
                 } label: {
                     Label("Delete Left", systemImage: "trash")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Celestial.Colors.error)
+                        .frame(maxWidth: .infinity)
                 }
-                .disabled(isDeleting)
+                .celestialSecondaryButtonStyle(tint: Celestial.Colors.error)
+                .disabled(
+                    isDeleting
+                        || indexingService.isDeletingDuplicatePhoto
+                        || indexingService.isThermallyPaused
+                )
 
                 Button {
                     deleteTarget = pair.photo2LocalId
                     showDeleteConfirm = true
                 } label: {
                     Label("Delete Right", systemImage: "trash")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Celestial.Colors.error)
+                        .frame(maxWidth: .infinity)
                 }
-                .disabled(isDeleting)
-
-                Spacer()
+                .celestialSecondaryButtonStyle(tint: Celestial.Colors.error)
+                .disabled(
+                    isDeleting
+                        || indexingService.isDeletingDuplicatePhoto
+                        || indexingService.isThermallyPaused
+                )
             }
         }
+        .padding(Celestial.Spacing.surfaceContentInset)
+        .modifier(GlassPanelModifier(cornerRadius: 18))
         .task {
-            if let asset = PhotoLibrary.getAsset(by: pair.photo1LocalId) {
-                image1 = await PhotoLibrary.loadThumbnail(for: asset)
+            imageLoadTask?.cancel()
+            let task = Task { @MainActor in
+                imageLoadGeneration &+= 1
+                let generation = imageLoadGeneration
+                await PhotoLibrary.prefetchAssets(localIdentifiers: [
+                    pair.photo1LocalId,
+                    pair.photo2LocalId,
+                ])
+                if let asset = await PhotoLibrary.resolveAsset(by: pair.photo1LocalId) {
+                    let loaded = await PhotoLibrary.loadThumbnail(for: asset)
+                    guard ImageLoadGenerationPolicy.acceptsCompletion(
+                        startedGeneration: generation,
+                        currentGeneration: imageLoadGeneration,
+                        isCancelled: Task.isCancelled
+                    ) else { return }
+                    image1 = loaded
+                }
+                if let asset = await PhotoLibrary.resolveAsset(by: pair.photo2LocalId) {
+                    let loaded = await PhotoLibrary.loadThumbnail(for: asset)
+                    guard ImageLoadGenerationPolicy.acceptsCompletion(
+                        startedGeneration: generation,
+                        currentGeneration: imageLoadGeneration,
+                        isCancelled: Task.isCancelled
+                    ) else { return }
+                    image2 = loaded
+                }
             }
-            if let asset = PhotoLibrary.getAsset(by: pair.photo2LocalId) {
-                image2 = await PhotoLibrary.loadThumbnail(for: asset)
-            }
+            imageLoadTask = task
+            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&image1)
+            MemoryPressureReleasePolicy.release(&image2)
         }
         .confirmationDialog("Delete this photo?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("Move to Recently Deleted", role: .destructive) {
@@ -170,38 +335,49 @@ struct DuplicatePairRow: View {
         }
     }
 
-    private func thumbnailView(image: UIImage?, localId: String) -> some View {
-        Group {
-            if let img = image {
-                Image(uiImage: img)
-                    .resizable()
-                    .aspectRatio(1, contentMode: .fill)
-                    .frame(width: 80, height: 80)
-                    .clipped()
-            } else {
-                Rectangle()
-                    .fill(Celestial.Colors.surfaceContainer)
-                    .frame(width: 80, height: 80)
+    private var matchPercent: Int {
+        guard pair.similarity.isFinite else { return 0 }
+        return min(100, max(0, Int((pair.similarity * 100).rounded())))
+    }
+
+    static func thumbnailView(
+        image: UIImage?,
+        label: String,
+        alignment: Alignment
+    ) -> some View {
+        Rectangle()
+            .fill(Celestial.Colors.surfaceContainer)
+            .aspectRatio(1.16, contentMode: .fit)
+            .overlay {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                }
             }
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(alignment: alignment) {
+            Text(label)
+                .font(Celestial.Typography.microStrong)
+                .foregroundStyle(.white)
+                .padding(8)
+                .shadow(radius: 3)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16))
         .accessibilityLabel("Photo")
     }
 
     private func deletePhoto(localIdentifier: String) {
-        guard let asset = PhotoLibrary.getAsset(by: localIdentifier) else { return }
         isDeleting = true
-
-        PHPhotoLibrary.shared().performChanges {
-            PHAssetChangeRequest.deleteAssets([asset] as NSArray)
-        } completionHandler: { success, error in
-            DispatchQueue.main.async {
-                isDeleting = false
-                if success {
-                    onDelete?(pair)
-                } else if let error {
-                    logger.error("Failed to delete photo: \(error.localizedDescription)")
-                }
+        Task { @MainActor in
+            defer { isDeleting = false }
+            do {
+                let outcome = try await indexingService.deleteDuplicatePhoto(
+                    localIdentifier: localIdentifier
+                )
+                onDeletionComplete?(localIdentifier, .success(outcome))
+            } catch {
+                onDeletionComplete?(localIdentifier, .failure(error))
             }
         }
     }

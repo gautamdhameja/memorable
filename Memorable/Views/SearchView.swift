@@ -1,233 +1,377 @@
 import SwiftUI
 import Photos
 import AVKit
-
-private enum SortMode: String {
-    case relevance
-    case recent
-}
-
-private enum MediaFilter: String, CaseIterable {
-    case all
-    case photos
-    case videos
-    case screenshots
-
-    var label: String {
-        switch self {
-        case .all: return "All"
-        case .photos: return "Photos"
-        case .videos: return "Videos"
-        case .screenshots: return "Screenshots"
-        }
-    }
-}
+import Combine
 
 struct SearchView: View {
     @ObservedObject var indexingService: IndexingService
     let searchEngine: SearchEngine
-    let captionService: PhotoCaptionService
+    @ObservedObject var semanticRuntime: SemanticSearchRuntime
+    let surpriseRequestID: Int
+    let searchHomeRequestID: Int
 
-    @State private var searchText = ""
-    @State private var results: [SearchResult] = []
-    @State private var isSearching = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @StateObject private var viewModel: SearchViewModel
     @State private var selectedPhoto: SearchResult?
-    @State private var searchError: String?
-    // Tracks the query string that produced the current `results`. Used so the
-    // "no results" view only appears after a search has actually completed for
-    // the text currently in the field, not while the user is mid-typing.
-    @State private var lastSearchedQuery: String?
     @State private var showUpgrade = false
     @State private var showSaveAlbum = false
     @State private var albumName = ""
+    @State private var smartAlbumError: String?
+    @State private var isUpdatingSmartAlbums = false
+    @State private var smartAlbumRevision = 0
     @ObservedObject private var proManager = ProManager.shared
+    @Environment(\.database) private var database
     @Environment(\.scenePhase) private var scenePhase
-    @State private var searchHistory: [String] = []
+    @Environment(\.displayScale) private var displayScale
     @State private var smartAlbums: [SmartAlbum] = []
+    @State private var todayMemory: OnThisDaySummary?
+    @State private var isTodayMemoryResolved = false
+    @State private var todayMemoryLoadTask: Task<Void, Never>?
+    @State private var todayMemoryRefreshState = TodayMemoryRefreshState()
+    @State private var isViewVisible = false
     @State private var totalLibraryCount: Int = 0
-    @State private var searchTimeMs: Int = 0
-    @State private var fallbackResults: [SearchResult] = []
-    @State private var filterSummary: FilterSummary?
     @State private var placeholderIndex: Int = 0
     @State private var placeholderTimer: Task<Void, Never>?
+    @State private var indexingBackdropImage: UIImage?
+    @State private var enrichmentStatusDismissed = false
+    @State private var showStorageResetConfirm = false
+    @AppStorage(AppKeys.persistentStoreReset) private var storageResetScheduled = false
 
-    // Persisted sort mode. Stored as rawValue because @AppStorage doesn't
-    // support RawRepresentable enums directly.
-    @AppStorage("searchSortMode") private var sortModeRaw: String = SortMode.relevance.rawValue
-    private var sortMode: SortMode {
-        SortMode(rawValue: sortModeRaw) ?? .relevance
+    // Keep the existing persisted key stable. SearchViewModel owns the runtime
+    // sort state; this wrapper is the SwiftUI persistence adapter.
+    @AppStorage(SearchViewModel.sortModeStorageKey) private var sortModeRaw: String = SearchSortMode.relevance.rawValue
+
+    private func saveSmartAlbum() async {
+        guard !isUpdatingSmartAlbums, let query = viewModel.smartAlbumQuery else { return }
+        isUpdatingSmartAlbums = true
+        smartAlbumRevision += 1
+        defer { isUpdatingSmartAlbums = false }
+        let album = SmartAlbum(
+            id: UUID().uuidString,
+            name: SmartAlbumPolicy.boundedName(albumName),
+            query: query,
+            createdAt: Date()
+        )
+        do {
+            let database = database
+            try await CancellableDetachedOperation.run {
+                try database.saveSmartAlbum(album)
+            }
+            smartAlbums.insert(album, at: 0)
+            smartAlbums = Array(smartAlbums.prefix(SmartAlbumPolicy.maximumAlbums))
+            albumName = ""
+        } catch {
+            logger.error("Failed to save smart album: \(error.safeDiagnosticCode)")
+            smartAlbumError = "The album couldn’t be saved. Please try again."
+        }
     }
 
-    // Progressive reveal: engine returns every matching result, UI windows to
-    // `initialVisibleCount` until the user taps "Show all N matching results".
-    private let initialVisibleCount = 50
-    @State private var visibleCount: Int = 50
-
-    // Tracks the in-flight search so we can cancel it when a new search
-    // starts or when the index is rebuilt under us.
-    @State private var searchTask: Task<Void, Never>?
-
-    // Media type filter (All / Photos / Videos / Screenshots)
-    @State private var mediaFilter: MediaFilter = .all
-    @State private var screenshotIds: Set<String> = []
-
-    // Post-search upgrade flow (free tier)
-    @State private var hasCompletedFirstSearch = false
-    @State private var searchesSinceDismiss = 0
-    @State private var upgradeBannerDismissed = false
+    private func deleteSmartAlbum(_ album: SmartAlbum) async {
+        guard !isUpdatingSmartAlbums else { return }
+        isUpdatingSmartAlbums = true
+        smartAlbumRevision += 1
+        defer { isUpdatingSmartAlbums = false }
+        do {
+            let database = database
+            try await CancellableDetachedOperation.run {
+                try database.deleteSmartAlbum(id: album.id)
+            }
+            smartAlbums.removeAll { $0.id == album.id }
+        } catch {
+            logger.error("Failed to delete smart album: \(error.safeDiagnosticCode)")
+            smartAlbumError = "The album couldn’t be deleted. Please try again."
+        }
+    }
 
     private static let placeholders = [
-        "Search for your moment...",
-        "Describe your memory...",
-        "What are you looking for?",
-        "Try \"sunset at the beach\"...",
-        "Try \"birthday cake\"...",
+        "Search your photos...",
+        "Describe what you remember...",
     ]
-
-    // Last successful search — shown when search box is cleared
-    @State private var lastQuery: String = ""
-    @State private var lastResults: [SearchResult] = []
-
-    private var currentDisplayedResults: [SearchResult] {
-        if !results.isEmpty { return results }
-        if !lastResults.isEmpty { return lastResults }
-        return []
+    init(
+        indexingService: IndexingService,
+        searchEngine: SearchEngine,
+        semanticRuntime: SemanticSearchRuntime,
+        surpriseRequestID: Int,
+        searchHomeRequestID: Int
+    ) {
+        self.indexingService = indexingService
+        self.searchEngine = searchEngine
+        self.semanticRuntime = semanticRuntime
+        self.surpriseRequestID = surpriseRequestID
+        self.searchHomeRequestID = searchHomeRequestID
+        _viewModel = StateObject(wrappedValue: SearchViewModel(dependencies: .init(
+            prioritizeUserSearch: { indexingService.prioritizeUserSearch() },
+            isSemanticSearchReady: { semanticRuntime.readiness.isSemanticSearchReady },
+            isIndexReady: { indexingService.isReady },
+            isIndexLoaded: { searchEngine.isIndexLoaded },
+            isMaintenanceWorkIdle: { !indexingService.progress.isRunning },
+            prepareForSearch: { try await semanticRuntime.prepareForSearch() },
+            search: { query in
+                try await searchEngine.search(
+                    query: query,
+                    featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro)
+                )
+            },
+            searchForHistoryPreview: { query in
+                try await searchEngine.search(
+                    query: query,
+                    featurePolicy: SearchFeaturePolicy(isPro: ProManager.shared.isPro),
+                    recordsUserTiming: false
+                )
+            },
+            detectScreenshotIDs: { searchResults in
+                let task = Task.detached {
+                    guard !Task.isCancelled else { return Set<String>() }
+                    let identifiers = searchResults.map(\.localIdentifier)
+                    let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+                    var screenshotIdentifiers = Set<String>()
+                    assets.enumerateObjects { asset, _, _ in
+                        if asset.mediaSubtypes.contains(.photoScreenshot) {
+                            screenshotIdentifiers.insert(asset.localIdentifier)
+                        }
+                    }
+                    return Set(searchResults.compactMap { result in
+                        screenshotIdentifiers.contains(result.localIdentifier) ? result.id : nil
+                    })
+                }
+                return await withTaskCancellationHandler {
+                    await task.value
+                } onCancel: {
+                    task.cancel()
+                }
+            },
+            validResultIDs: { candidates in
+                let isPro = ProManager.shared.isPro
+                let task = Task.detached {
+                    guard !Task.isCancelled else { return Set<String>() }
+                    let photoKitCandidates = candidates.filter {
+                        $0.sourceId == PhotoSourceType.photokit.rawValue
+                    }
+                    let identifiers = photoKitCandidates.map(\.localIdentifier)
+                    let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+                    var validIdentifiers = Set<String>()
+                    assets.enumerateObjects { asset, _, _ in
+                        validIdentifiers.insert(asset.localIdentifier)
+                    }
+                    let folderCandidates = candidates.filter {
+                        FolderResultAccessPolicy.allows(
+                            sourceId: $0.sourceId,
+                            isPro: isPro
+                        ) && $0.filePath != nil
+                    }
+                    var accessibleFolderResultIDs = Set<String>()
+                    for (sourceId, sourceCandidates) in Dictionary(
+                        grouping: folderCandidates,
+                        by: \SearchResult.sourceId
+                    ) {
+                        guard !Task.isCancelled else { return Set<String>() }
+                        let accessiblePaths = FolderScanner.accessibleBookmarkedImagePaths(
+                            sourceCandidates.compactMap(\.filePath),
+                            sourceId: sourceId
+                        )
+                        accessibleFolderResultIDs.formUnion(sourceCandidates.compactMap { result in
+                            guard let filePath = result.filePath,
+                                  accessiblePaths.contains(filePath) else { return nil }
+                            return result.id
+                        })
+                    }
+                    return SearchResultForegroundValidator.validResultIDs(
+                        candidates: candidates,
+                        validPhotoKitIdentifiers: validIdentifiers,
+                        isFolderResultAccessible: { result in
+                            accessibleFolderResultIDs.contains(result.id)
+                        }
+                    )
+                }
+                return await withTaskCancellationHandler {
+                    await task.value
+                } onCancel: {
+                    task.cancel()
+                }
+            },
+            addHistory: {
+                await SearchHistory.add(
+                    query: $0,
+                    previewResult: $1,
+                    resultCount: $2
+                )
+            },
+            backfillHistoryPreviews: { await SearchHistory.backfill(previews: $0) },
+            loadHistory: { await SearchHistory.load() },
+            loadHistoryPreviews: { await SearchHistory.loadPreviews() },
+            clearHistory: { await SearchHistory.clear() },
+            removeHistory: { await SearchHistory.remove(at: $0) },
+            now: { CFAbsoluteTimeGetCurrent() },
+            searchActivityChanged: { indexingService.setUserSearchActive($0) }
+        )))
     }
 
     var body: some View {
-        NavigationStack {
+        let filteredSearchResults = viewModel.filteredResults(viewModel.results)
+        // Erase the large navigation subtree before attaching presentation and
+        // lifecycle observers so Swift can type-check each graph independently.
+        let navigationContent = AnyView(NavigationStack {
             ZStack {
-                Celestial.Colors.background.ignoresSafeArea()
+                CelestialBackdrop()
 
                 VStack(spacing: 0) {
-                    // Search bar pinned at top
-                    searchBar
-                        .padding(.horizontal, 12)
-                        .padding(.top, 8)
-                        .padding(.bottom, 14)
+                    if !indexingService.shouldShowInitialIndexingExperience {
+                        // Search stays out of the first indexing experience so
+                        // the unfinished index never looks ready for use.
+                        searchBar
+                            .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                            .padding(.top, 20)
+                            .padding(.bottom, Celestial.Spacing.stackedContainerGap)
+                    }
 
                     // Database warning
                     if AppDatabase.isInMemoryFallback {
-                        HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 10) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(Celestial.Colors.error)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Storage issue")
-                                    .font(.subheadline.weight(.medium))
+                                Text("Indexing is unavailable")
+                                    .font(Celestial.Typography.supportingEmphasized)
                                     .foregroundStyle(Celestial.Colors.onSurface)
-                                Text("Your search index won't be saved between sessions. Free up device storage.")
-                                    .font(.caption)
+                                Text("Memorable could not open its local search database. Free storage, then close and reopen the app.")
+                                    .font(Celestial.Typography.caption)
                                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                             }
+                            }
+                            Button(storageResetScheduled ? "Reset scheduled for next launch" : "Reset local search data") {
+                                showStorageResetConfirm = true
+                            }
+                            .font(Celestial.Typography.captionStrong)
+                            .foregroundStyle(Celestial.Colors.primaryDim)
+                            .disabled(storageResetScheduled)
                         }
-                        .padding(16)
+                        .padding(Celestial.Spacing.surfaceContentInset)
                         .modifier(GlassPanelModifier(cornerRadius: 16))
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
+                        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
+                    }
+
+                    if let message = searchPreparationError {
+                        recoveryNotice(message: message) {
+                            semanticRuntime.retryIndexLoading()
+                        }
+                    } else if let message = indexingService.libraryIndexingError {
+                        recoveryNotice(message: message) {
+                            indexingService.startIndexing()
+                        }
                     }
 
                     // Sticky controls panel (above scroll)
-                    if !searchText.isEmpty && !results.isEmpty && !isSearching {
-                        let filtered = applyMediaFilter(applySort(results, mode: sortMode))
-                        controlsPanel(filteredCount: filtered.count)
+                    if !indexingService.shouldShowInitialIndexingExperience,
+                       !viewModel.queryText.isEmpty,
+                       !viewModel.results.isEmpty,
+                       !viewModel.isSearching {
+                        controlsPanel(filteredCount: filteredSearchResults.count)
                     }
 
                     ScrollView {
-                    VStack(spacing: 0) {
-                        // Indexing banners
-                        if indexingService.progress.isRunning {
-                            IndexingBannerView(indexingService: indexingService)
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 12)
-                        }
+                        if shouldShowIndexingExperience {
+                            indexingExperience
+                        } else {
+                            VStack(spacing: 0) {
+                                // Indexing banners
+                                if indexingService.progress.phase != .enrichment,
+                                   indexingService.progress.isRunning
+                                    || indexingService.isThermallyPaused
+                                    || indexingService.backgroundExecutionState == .pausedAwaitingForeground {
+                                    IndexingBannerView(indexingService: indexingService)
+                                        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                                        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
+                                }
 
-                        // Memory warning
-                        if searchEngine.isLargeLibrary {
-                            HStack(spacing: 6) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(Celestial.Colors.error)
-                                    .font(.footnote)
-                                Text("Large library (\(searchEngine.indexSize) photos)")
-                                    .font(.footnote)
-                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                // Memory warning
+                                // A large library is supported; searches past the
+                                // resident window just take longer. Inform, not warn.
+                                if searchEngine.isLargeLibrary {
+                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                        Image(systemName: "info.circle")
+                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                            .accessibilityHidden(true)
+                                        Text("Large library: searches of \((searchEngine.indexSize + searchEngine.videoSize).formatted()) photos & videos can take a little longer")
+                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                    }
+                                    .font(Celestial.Typography.footnote)
+                                    .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset + 2)
+                                    .padding(.bottom, 8)
+                                }
+
+                                // Deferred reverse-geocoding progress
+                                if indexingService.progress.phase == .enrichment,
+                                   indexingService.progress.isRunning,
+                                   !viewModel.isSearching,
+                                   !enrichmentStatusDismissed {
+                                    enrichmentProgressStrip
+                                }
+
+                                if let geo = indexingService.geocodingProgress,
+                                   !indexingService.progress.isRunning {
+                                    geocodingProgressStrip(geo)
+                                }
+
+                                if let restriction = viewModel.restrictionSummary,
+                                   !viewModel.isSearching {
+                                    searchRestrictionStrip(restriction)
+                                }
+
+                                // Content
+                                if semanticRuntime.isCheckingIndexAvailability,
+                                   !indexingService.shouldKeepSearchHomeVisible {
+                                    indexReadinessCheckingState
+                                } else if searchPreparationError != nil,
+                                          !indexingService.shouldKeepSearchHomeVisible {
+                                    // A failed load does not establish that an
+                                    // index is absent. Keep setup actions hidden.
+                                    EmptyView()
+                                } else if viewModel.isSearching {
+                                    searchingState
+                                } else if let error = viewModel.searchError {
+                                    errorState(error)
+                                } else if viewModel.hasNoResultsForCurrentQuery {
+                                    noResultsState
+                                } else if !viewModel.queryText.isEmpty {
+                                    resultsGrid(
+                                        results: viewModel.results,
+                                        filteredResults: filteredSearchResults
+                                    )
+                                } else if !viewModel.lastResults.isEmpty {
+                                    lastResultsView
+                                } else if viewModel.results.isEmpty,
+                                          viewModel.queryText.isEmpty {
+                                    if indexingService.shouldKeepSearchHomeVisible {
+                                        homeView
+                                    } else {
+                                        emptyState
+                                    }
+                                }
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 8)
-                        }
-
-                        // Background reverse-geocoding progress
-                        if let geo = indexingService.geocodingProgress, !indexingService.progress.isRunning {
-                            geocodingProgressStrip(completed: geo.completed, total: geo.total)
-                        }
-
-                        // Content
-                        if isSearching {
-                            searchingState
-                        } else if let error = searchError {
-                            errorState(error)
-                        } else if !searchText.isEmpty && results.isEmpty && !isSearching && lastSearchedQuery == searchText {
-                            noResultsState
-                        } else if !searchText.isEmpty {
-                            resultsGrid(results: results)
-                        } else if !lastResults.isEmpty {
-                            lastResultsView
-                        } else if indexingService.progress.isRunning && searchText.isEmpty && !indexingService.progress.photosComplete {
-                            // Slideshow while indexing
-                            IndexingSlideshowView(captionService: captionService)
-                                .padding(.top, 8)
-                        } else if results.isEmpty && searchText.isEmpty && (!indexingService.progress.isRunning || indexingService.progress.photosComplete) {
-                            if indexingService.isReady && (!searchHistory.isEmpty || !smartAlbums.isEmpty) {
-                                homeView
-                            } else {
-                                emptyState
-                            }
+                            .padding(.bottom, 40)
                         }
                     }
-                    .padding(.bottom, 40)
-                }
+                    .scrollDismissesKeyboard(.interactively)
+                    .scrollBounceBehavior(.basedOnSize)
                 } // VStack
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 10) {
-                        Image("AppIconTransparent")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 36, height: 36)
-                        Text("Memorable")
-                            .font(.system(.title3, design: .rounded, weight: .semibold))
-                            .foregroundStyle(Celestial.Colors.onSurface)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    if !results.isEmpty && !smartAlbums.contains(where: { $0.query.lowercased() == searchText.lowercased() }) {
-                        Button(action: {
-                            albumName = searchText
-                            showSaveAlbum = true
-                        }) {
-                            Image(systemName: "folder.badge.plus")
-                                .font(.system(size: 16))
-                                .foregroundStyle(Celestial.Colors.primaryDim)
-                        }
-                        .accessibilityLabel("Save as smart album")
-                    }
-                }
-            }
+            .celestialSearchNavigation()
             .preferredColorScheme(.dark)
+        })
+
+        let presentedContent = navigationContent
             .fullScreenCover(item: $selectedPhoto) { result in
                 if result.isVideo {
                     Color.clear.onAppear {
                         selectedPhoto = nil
-                        if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                            presentVideoPlayer(for: asset)
-                        }
+                        presentVideoPlayer(localIdentifier: result.localIdentifier)
                     }
                 } else {
                     SearchResultsViewer(
                         initialResult: result,
-                        allResults: currentDisplayedResults.filter { !$0.isVideo },
+                        allResults: viewModel.photoViewerResults,
                         searchEngine: searchEngine
                     )
                 }
@@ -238,52 +382,189 @@ struct SearchView: View {
             .alert("Save as Smart Album", isPresented: $showSaveAlbum) {
                 TextField("Album name", text: $albumName)
                 Button("Save") {
-                    if !albumName.isEmpty && !searchText.isEmpty {
-                        SmartAlbumStore.add(name: albumName, query: searchText)
-                        smartAlbums = SmartAlbumStore.load()
-                        albumName = ""
+                    if !albumName.isEmpty && viewModel.smartAlbumQuery != nil {
+                        Task { await saveSmartAlbum() }
                     }
                 }
+                .disabled(isUpdatingSmartAlbums || viewModel.smartAlbumQuery == nil)
                 Button("Cancel", role: .cancel) { albumName = "" }
             } message: {
                 Text("This album will auto-update when new matching photos are indexed.")
             }
-            .onAppear {
+            .alert("Smart albums", isPresented: Binding(
+                get: { smartAlbumError != nil },
+                set: { if !$0 { smartAlbumError = nil } }
+            )) {
+                Button("OK", role: .cancel) { smartAlbumError = nil }
+            } message: {
+                Text(smartAlbumError ?? "")
+            }
+            .alert("Reset local search data?", isPresented: $showStorageResetConfirm) {
+                Button("Reset on next launch", role: .destructive) {
+                    AppDatabase.schedulePersistentStoreReset()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Close and reopen Memorable to complete the reset. Apple Photos are not changed. The reset deletes the local search index, search history, saved albums, and folder registrations. Rebuild the index and add folders again afterward.")
+            }
+
+        let lifecycleContent = presentedContent
+            // The reset callbacks outlive this view on the indexing service, so
+            // they hold the view model weakly. Capture it explicitly here so the
+            // outer closure's strong reference is stated rather than implied.
+            .onAppear { [viewModel] in
+                indexingService.onIndexResetStarted = { [weak viewModel] in
+                    viewModel?.beginIndexReset()
+                    await viewModel?.waitForHistoryUpdates()
+                }
+                indexingService.onIndexResetFinished = { [weak viewModel] didReset in
+                    viewModel?.finishIndexReset(didReset: didReset)
+                }
+                isViewVisible = true
+                viewModel.setSortMode(rawValue: sortModeRaw)
                 if indexingService.isReady {
                     startPlaceholderRotation()
                 }
+                requestTodayMemoryRefresh()
             }
             .task {
                 // Load DB-backed data off the main thread's critical path so
                 // the search bar is tappable immediately on appear.
-                let history = SearchHistory.load()
-                let albums = SmartAlbumStore.load()
-                searchHistory = history
-                smartAlbums = albums
-
-                let count = await Task.detached {
+                let database = database
+                let albumRevision = smartAlbumRevision
+                async let savedData = Task.detached(priority: .utility) {
+                    let history = await SearchHistory.load()
+                    return (
+                        albums: Result { try database.loadSmartAlbums() },
+                        history: history,
+                        previews: await SearchHistory.loadPreviews()
+                    )
+                }.value
+                async let libraryCount = Task.detached(priority: .utility) {
                     PhotoLibrary.fetchAllMedia().count
                 }.value
+                let data = await savedData
+                guard !Task.isCancelled else { return }
+                switch data.albums {
+                case .success(let albums):
+                    if albumRevision == smartAlbumRevision { smartAlbums = albums }
+                case .failure(let error):
+                    logger.error("Failed to load smart albums: \(error.safeDiagnosticCode)")
+                    smartAlbumError = "Your saved albums couldn’t be loaded. Reopen this screen to try again."
+                }
+                viewModel.applyInitialSearchHistory(
+                    data.history,
+                    previews: data.previews
+                )
+                viewModel.startRecentSearchPreviewBackfill()
+                requestTodayMemoryRefresh()
+
+                let count = await libraryCount
+                guard !Task.isCancelled else { return }
                 totalLibraryCount = count
             }
             .onDisappear {
+                isViewVisible = false
                 placeholderTimer?.cancel()
+                cancelFindSimilar()
+                cancelPendingVideoPlayerPresentation()
+                viewModel.cancelRecentSearchPreviewBackfill()
+                todayMemoryLoadTask?.cancel()
+                todayMemoryRefreshState.cancel()
             }
-            .onChange(of: indexingService.isReady) {
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                cancelFindSimilar()
+                viewModel.handleMemoryPressure()
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
+                    .merge(with: NotificationCenter.default.publisher(
+                        for: UIApplication.significantTimeChangeNotification
+                    ))
+            ) { _ in
+                todayMemory = nil
+                isTodayMemoryResolved = false
+                requestTodayMemoryRefresh()
+            }
+
+        let searchObservationContent = lifecycleContent
+            .onChange(of: sortModeRaw) { _, newValue in
+                viewModel.setSortMode(rawValue: newValue)
+            }
+            .onChange(of: viewModel.queryText) { _, query in
+                if query.isEmpty {
+                    requestTodayMemoryRefresh()
+                } else {
+                    todayMemoryLoadTask?.cancel()
+                }
+            }
+            .onChange(of: proManager.isPro) { _, isPro in
+                guard !isPro else { return }
+                viewModel.handleProEntitlementRevoked()
+                cancelFindSimilar()
+                if let selectedPhoto,
+                   !FolderResultAccessPolicy.allows(
+                       sourceId: selectedPhoto.sourceId,
+                       isPro: false
+                   ) {
+                    self.selectedPhoto = nil
+                }
+                if let todayMemory,
+                   !FolderResultAccessPolicy.allows(
+                       sourceId: todayMemory.heroPhoto.sourceId,
+                       isPro: false
+                   ) {
+                    self.todayMemory = nil
+                    isTodayMemoryResolved = true
+                }
+                viewModel.validateVisibleResults(reason: "Pro entitlement changed")
+            }
+            .onChange(of: viewModel.results.map(\.localIdentifier)) { _, identifiers in
+                Task {
+                    await PhotoLibrary.prefetchAssets(localIdentifiers: identifiers)
+                }
+            }
+            .onChange(of: indexingService.isReady) { oldValue, newValue in
+                #if DEBUG
+                logger.info("[SearchView] indexingService.isReady changed \(oldValue) -> \(newValue); indexLoaded=\(searchEngine.isIndexLoaded), totalSize=\(searchEngine.totalSize), indexVersion=\(indexingService.indexVersion)")
+                #endif
                 if indexingService.isReady {
                     startPlaceholderRotation()
+                    viewModel.startRecentSearchPreviewBackfill()
+                    requestTodayMemoryRefresh()
                 }
             }
-            .onChange(of: indexingService.indexVersion) {
-                // Index changed (e.g., photos deleted). Cancel any in-flight
-                // search so it can't land stale results on top, then clear.
-                searchTask?.cancel()
-                if !results.isEmpty {
-                    results = []
-                    lastResults = []
-                    searchText = ""
-                    lastSearchedQuery = nil
+            .onChange(of: indexingService.progress.isRunning) { _, isRunning in
+                if !isRunning {
+                    viewModel.startRecentSearchPreviewBackfill()
+                    requestTodayMemoryRefresh()
                 }
+            }
+            .onChange(of: semanticRuntime.readiness.isSemanticSearchReady) { _, isReady in
+                if isReady {
+                    viewModel.startRecentSearchPreviewBackfill()
+                }
+            }
+
+        searchObservationContent
+            .onChange(of: indexingService.indexVersion) { oldValue, newValue in
+                #if DEBUG
+                logger.info("[SearchView] indexVersion changed \(oldValue) -> \(newValue); activeSearchID=\(viewModel.activeSearchID.map(String.init) ?? "nil"), results=\(viewModel.results.count), lastResults=\(viewModel.lastResults.count)")
+                #endif
+                // SearchEngine snapshots under lock, so an in-flight submitted
+                // search can safely finish against its snapshot. Do not clear
+                // visible results here: background enrichment/reloads can advance
+                // indexVersion without invalidating the user's current UI.
+                viewModel.validateVisibleResults(reason: "indexVersion changed")
+                requestTodayMemoryRefresh()
+            }
+            .onChange(of: surpriseRequestID) { _, _ in
+                performSurpriseSearch()
+            }
+            .onChange(of: searchHomeRequestID) { _, _ in
+                cancelFindSimilar()
+                viewModel.setQueryText("")
+                requestTodayMemoryRefresh()
             }
             .onChange(of: scenePhase) {
                 if scenePhase == .active {
@@ -291,40 +572,23 @@ struct SearchView: View {
                     if !searchEngine.isIndexLoaded {
                         Task {
                             do {
-                                try searchEngine.loadIndex()
+                                try await semanticRuntime.prepareForSearch()
                                 #if DEBUG
                                 logger.info("[SearchView] Reloaded search index after foreground return")
                                 #endif
                             } catch {
-                                logger.error("Failed to reload index on foreground: \(error.localizedDescription)")
+                                logger.error("Failed to reload index on foreground: \(error.safeDiagnosticCode)")
                             }
                         }
                     }
 
-                    // Remove any results pointing to deleted assets.
-                    // Run off the main thread because each getAsset call is a
-                    // synchronous PHFetchRequest. With 50+ results this blocks
-                    // the UI for hundreds of milliseconds.
-                    if !results.isEmpty {
-                        let currentResults = results
-                        let currentLast = lastResults
-                        Task.detached {
-                            let validIds = Set(
-                                currentResults
-                                    .filter { PhotoLibrary.getAsset(by: $0.localIdentifier) != nil }
-                                    .map(\.id)
-                            )
-                            await MainActor.run { [self] in
-                                if validIds.count != currentResults.count {
-                                    results = currentResults.filter { validIds.contains($0.id) }
-                                    lastResults = currentLast.filter { validIds.contains($0.id) }
-                                }
-                            }
-                        }
-                    }
+                    viewModel.validateVisibleResults(reason: "foreground return")
+                    viewModel.startRecentSearchPreviewBackfill()
+                    requestTodayMemoryRefresh()
+                } else {
+                    viewModel.cancelRecentSearchPreviewBackfill()
                 }
             }
-        }
     }
 
     // MARK: - Search Bar
@@ -334,100 +598,243 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
                 .accessibilityHidden(true)
-            TextField(indexingService.isReady ? Self.placeholders[placeholderIndex] : "Indexing your photos...", text: $searchText)
-                .font(.body)
+            TextField(searchPlaceholder, text: Binding(
+                get: { viewModel.queryText },
+                set: { viewModel.setQueryText($0) }
+            ))
+                .font(Celestial.Typography.body)
                 .foregroundStyle(Celestial.Colors.onSurface)
-                .onChange(of: searchText) { _, newValue in
-                    if newValue.isEmpty {
-                        results = []
-                        searchError = nil
-                        lastSearchedQuery = nil
-                    }
-                }
+                .submitLabel(.search)
                 .onSubmit {
                     performSearch(saveToHistory: true)
                 }
-                .disabled(!indexingService.isReady)
                 .accessibilityLabel("Search photos")
-            if !searchText.isEmpty {
-                Button(action: { searchText = ""; results = []; searchError = nil; lastSearchedQuery = nil }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Celestial.Colors.outlineVariant)
+            if !viewModel.queryText.isEmpty {
+                Button(action: { viewModel.setQueryText("") }) {
+                    Image(systemName: "xmark")
+                        .font(Celestial.Typography.captionStrong)
+                        .foregroundStyle(Celestial.Colors.outline)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                // Keep the glyph where it was while the target grows to 44.
+                .padding(.trailing, -8)
                 .accessibilityLabel("Clear search")
             }
-            if indexingService.isReady {
-                Button(action: {
-                    let surprise = SurpriseQueries.random()
-                    searchText = surprise
-                    performSearch()
-                }) {
-                    Image(systemName: "sparkles")
-                        .foregroundStyle(Celestial.Colors.amber)
-                }
-                .accessibilityLabel("Surprise me with a random search")
-            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .modifier(GlassSearchBarModifier())
-        .opacity(indexingService.isReady ? 1.0 : 0.5)
+        .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
+        .frame(minHeight: 52)
+        .modifier(GlassSearchBarModifier(cornerRadius: 13))
+        .opacity(searchEngine.isIndexLoaded || !viewModel.queryText.isEmpty ? 1.0 : 0.85)
+        .disabled(!semanticRuntime.readiness.isSemanticSearchReady)
+        .accessibilityHint(
+            semanticRuntime.readiness.isSemanticSearchReady
+                ? ""
+                : searchPreparationStatusText
+        )
+    }
+
+    private var shouldShowIndexingExperience: Bool {
+        IndexingHomePresentationPolicy.showsSlideshow(
+            isInitialLibraryWorkflowActive: indexingService.shouldShowInitialIndexingExperience,
+            phase: indexingService.progress.phase
+        )
+    }
+
+    private var enrichmentProgressStrip: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "photo.badge.checkmark")
+                .foregroundStyle(Celestial.Colors.primary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Search is ready")
+                    .font(Celestial.Typography.captionStrong)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text("Adding photo details in the background")
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            }
+            Spacer(minLength: 0)
+            Button {
+                enrichmentStatusDismissed = true
+            } label: {
+                Image(systemName: "xmark")
+                    .font(Celestial.Typography.caption)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            .accessibilityLabel("Dismiss photo details status")
+        }
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
+    }
+
+    private var indexingExperience: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // An update that invalidated the index must say so; first-run
+            // wording would leave an existing user wondering why search reset.
+            Text(indexingService.isRebuildingForUpdate ? "UPDATING YOUR SEARCH" : "BUILDING YOUR SEARCH")
+                .font(Celestial.Typography.eyebrow)
+                .tracking(1.2)
+                .foregroundStyle(Celestial.Colors.amber)
+
+            Text(
+                indexingService.isRebuildingForUpdate
+                    ? "Re-indexing once for this update. Your albums and recent searches are kept."
+                    : "A few memories while indexing continues."
+            )
+                .font(Celestial.Typography.compactMemoryCaption)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .lineSpacing(3)
+                .padding(.top, 8)
+
+            IndexingSlideshowView(
+                onImageChange: { indexingBackdropImage = $0 }
+            )
+            .padding(.top, 20)
+
+            IndexingBannerView(
+                indexingService: indexingService,
+                backdropImage: indexingBackdropImage
+            )
+            .padding(.top, 16)
+        }
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+        .padding(.top, 18)
+        .padding(.bottom, 40)
+    }
+
+    private var searchPlaceholder: String {
+        guard semanticRuntime.readiness.isSemanticSearchReady else {
+            return Self.placeholders[0]
+        }
+        return Self.placeholders[placeholderIndex]
+    }
+
+    private var searchPreparationStatusText: String {
+        switch semanticRuntime.phase {
+        case .failed(let message):
+            return message
+        default:
+            return "Preparing search..."
+        }
+    }
+
+    private var searchPreparationError: String? {
+        if let message = indexingService.indexLoadError { return message }
+        if case .failed(let message) = semanticRuntime.phase { return message }
+        return nil
+    }
+
+    private func recoveryNotice(
+        message: String,
+        retry: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(message)
+                .font(Celestial.Typography.supporting)
+                .foregroundStyle(Celestial.Colors.onSurface)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Try Again", action: retry)
+                .font(Celestial.Typography.button)
+                .foregroundStyle(Celestial.Colors.primary)
+                .frame(minHeight: 44)
+                .disabled(!database.allowsIndexingWrites)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Celestial.Spacing.surfaceContentInset)
+        .modifier(GlassPanelModifier(cornerRadius: 16))
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
     }
 
     // MARK: - Banners
 
     private var upgradeBanner: some View {
-        HStack(spacing: 10) {
+        // The count, the action and the dismiss control shared one line and
+        // squeezed the count into several wrapped lines. Stack the action
+        // under the count instead.
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: "sparkles")
-                .font(.subheadline)
+                .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.amber)
-            Text("Searching \(searchEngine.totalSize) of \(totalLibraryCount) photos")
-                .font(.subheadline)
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-            Spacer()
-            Button("Unlock full library") {
-                showUpgrade = true
+                .padding(.top, 12)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Searching \(searchEngine.totalSize.formatted()) of \(totalLibraryCount.formatted()) photos & videos")
+                    .font(Celestial.Typography.supporting)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 10)
+                Button("Unlock full library") {
+                    showUpgrade = true
+                }
+                .font(Celestial.Typography.supportingEmphasized)
+                .foregroundStyle(Celestial.Colors.primary)
+                .frame(minHeight: 44)
             }
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(Celestial.Colors.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
             Button {
-                upgradeBannerDismissed = true
-                searchesSinceDismiss = 0
+                viewModel.dismissUpgradeBanner()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.caption)
+                    .font(Celestial.Typography.caption)
                     .foregroundStyle(Celestial.Colors.outline)
-                    .padding(6)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
+            .padding(.trailing, -10)
             .accessibilityLabel("Dismiss upgrade banner")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Celestial.Colors.surfaceVariant.opacity(0.5))
-        .cornerRadius(10)
-        .padding(.horizontal, 16)
+        .padding(.leading, Celestial.Spacing.surfaceContentInset)
+        .padding(.trailing, Celestial.Spacing.surfaceContentInset)
+        .modifier(
+            GlassPanelModifier(
+                cornerRadius: 12,
+                tint: Celestial.Colors.amber.opacity(0.09)
+            )
+        )
     }
 
     // MARK: - Home (Albums + History)
 
+    private var canShowValidatedSuggestions: Bool {
+        indexingService.canShowValidatedSearchSuggestions
+    }
+
     private var homeView: some View {
         VStack(alignment: .leading, spacing: 0) {
+            let primarySections = SearchHomeLayoutPolicy.primarySections(
+                isTodayMemoryResolved: isTodayMemoryResolved,
+                hasTodayMemory: todayMemory != nil,
+                hasRecentSearches: !viewModel.searchHistory.isEmpty
+            )
+            ForEach(primarySections, id: \.self) { section in
+                primaryHomeSection(section)
+                    .padding(
+                        .top,
+                        section == primarySections.first ? 0 : Celestial.Spacing.sectionGap
+                    )
+            }
+            if canShowValidatedSuggestions && viewModel.shouldShowDiscoverySuggestions {
+                validatedSuggestionsView
+                    .padding(.top, primarySections.isEmpty ? 0 : Celestial.Spacing.sectionGap)
+            }
             if !smartAlbums.isEmpty {
                 smartAlbumsView
             }
-            if !searchHistory.isEmpty {
-                searchHistoryView
-            }
-            if indexingService.hitFreeLimit && totalLibraryCount > searchEngine.totalSize {
-                Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos")
-                    .font(.footnote)
+            if indexingService.hitFreeLimit
+                && totalLibraryCount > searchEngine.totalSize {
+                Text("\(searchEngine.totalSize.formatted()) of \(totalLibraryCount.formatted()) photos & videos searchable")
+                    .font(Celestial.Typography.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
                 resumeIndexingButton
             } else if searchEngine.totalSize > 0 {
-                Text("Search your \(searchEngine.totalSize) photos & videos")
-                    .font(.footnote)
+                Text("\(searchEngine.totalSize.formatted()) photos & videos searchable")
+                    .font(Celestial.Typography.footnote)
                     .foregroundStyle(Celestial.Colors.outline)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
@@ -435,32 +842,176 @@ struct SearchView: View {
         }
     }
 
-    // Slim one-line progress strip shown while reverse-geocoding photos in the
-    // background. Location-filtered searches depend on city/state/country
-    // strings that this task populates, so surfacing progress explains why a
-    // location query may initially return incomplete results.
-    private func geocodingProgressStrip(completed: Int, total: Int) -> some View {
-        let progress = total > 0 ? Double(completed) / Double(total) : 0
-        return VStack(spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "location.circle")
-                    .font(.caption2)
-                    .foregroundStyle(Celestial.Colors.outline)
-                Text("Finding photo locations  \(completed) / \(total)")
-                    .font(.caption2)
-                    .foregroundStyle(Celestial.Colors.outline)
-                Spacer()
+    @ViewBuilder
+    private func primaryHomeSection(_ section: SearchHomePrimarySection) -> some View {
+        switch section {
+        case .todayMemoryLoading:
+            todayMemoryLoadingView
+        case .todayMemory:
+            if let todayMemory {
+                todayMemoryView(todayMemory)
             }
-            ProgressView(value: progress)
-                .tint(Celestial.Colors.primaryFixedDim)
-                .scaleEffect(y: 0.5)
-                .accessibilityLabel("Finding photo locations: \(completed) of \(total) complete")
+        case .recentSearches:
+            searchHistoryView
+                .allowsHitTesting(isTodayMemoryResolved)
+                .accessibilityHidden(!isTodayMemoryResolved)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
     }
 
-    // Shown after the "Search your N of M photos" hint once the user upgrades,
+    private var todayMemoryLoadingView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            homeSectionTitle("Today in Your Memories")
+                .padding(.horizontal, 2)
+
+            VStack(spacing: 0) {
+                Rectangle()
+                    .fill(Celestial.Colors.surfaceContainerLow.opacity(0.48))
+                    .frame(height: SearchHomeCardMetrics.memoryPreviewHeight)
+                    .overlay {
+                        ProgressView()
+                            .tint(Celestial.Colors.primaryDim)
+                            .accessibilityLabel("Looking for today's memories")
+                    }
+                Color.clear
+                    .frame(height: SearchHomeCardMetrics.captionHeight)
+            }
+            .background(Celestial.Colors.surfaceContainerLow.opacity(0.74))
+            .clipShape(SearchHomeCardMetrics.cardShape)
+        }
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+    }
+
+    private var validatedSuggestionsView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            homeSectionTitle("Matched in Your Library")
+                .padding(.horizontal, 2)
+                .padding(.bottom, 12)
+
+            let suggestions = Array(indexingService.validatedSearchSuggestions.prefix(3))
+            VStack(spacing: 0) {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Button {
+                        viewModel.setQueryText(suggestion)
+                        performSearch(saveToHistory: true)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Text(suggestion)
+                                .font(Celestial.Typography.body)
+                                .foregroundStyle(Celestial.Colors.secondary)
+                            Spacer()
+                            Image(systemName: "arrow.up.left")
+                                .font(Celestial.Typography.caption)
+                                .foregroundStyle(Celestial.Colors.outlineVariant)
+                        }
+                        .frame(minHeight: 50)
+                        .contentShape(Rectangle())
+                    }
+                    // Between rows only; the panel draws its own edge.
+                    if suggestion != suggestions.last {
+                        CelestialHairline()
+                    }
+                }
+            }
+            .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
+            .modifier(GlassPanelModifier(cornerRadius: 18))
+        }
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+    }
+
+    private func performSurpriseSearch() {
+        guard canShowValidatedSuggestions,
+              let suggestion = indexingService.validatedSearchSuggestions.randomElement() else { return }
+        Haptics.medium()
+        viewModel.setQueryText(suggestion)
+        performSearch()
+    }
+
+    // Persistent progress card shown while reverse geocoding is queued,
+    // running, or waiting to resume. Location-filtered searches depend on the
+    // metadata this task populates, so incomplete work must remain visible.
+    private func geocodingProgressStrip(_ state: GeocodingProgressState) -> some View {
+        let remaining = max(0, state.total - state.completed)
+        let detail: String
+        switch state.phase {
+        case .queued:
+            detail = state.total > 0
+                ? "\(remaining.formatted()) items waiting for a quiet moment"
+                : "Preparing location details"
+        case .running:
+            detail = "\(state.completed.formatted()) of \(state.total.formatted()) complete"
+        case .waitingToResume:
+            detail = "\(remaining.formatted()) items will continue when Memorable is active"
+        case .paused:
+            detail = "\(remaining.formatted()) items will retry the next time Memorable becomes active"
+        }
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "location.fill")
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.primaryFixedDim)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Finishing photo locations")
+                        .font(Celestial.Typography.captionStrong)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                    Text(detail)
+                        .font(Celestial.Typography.micro)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                }
+                Spacer()
+            }
+            if state.total > 0 {
+                ProgressView(value: Double(state.completed), total: Double(state.total))
+                    .accessibilityLabel(
+                        "Finishing photo locations: \(state.completed) of \(state.total) complete"
+                    )
+            } else {
+                ProgressView()
+                    .accessibilityLabel("Preparing photo location processing")
+            }
+        }
+        .tint(Celestial.Colors.primaryFixedDim)
+        .padding(Celestial.Spacing.surfaceContentInset)
+        .modifier(GlassPanelModifier(cornerRadius: 14))
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
+    }
+
+    private func searchRestrictionStrip(_ summary: SearchRestrictionSummary) -> some View {
+        Button {
+            showUpgrade = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "lock.fill")
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.amber)
+                    .accessibilityHidden(true)
+                Text(summary.message)
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 8)
+                Text("Upgrade")
+                    .font(Celestial.Typography.captionStrong)
+                    .foregroundStyle(Celestial.Colors.primaryDim)
+            }
+            .padding(.horizontal, Celestial.Spacing.surfaceContentInset)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .modifier(
+            GlassPanelModifier(
+                cornerRadius: 16,
+                tint: Celestial.Colors.surfaceContainerLow.opacity(0.30)
+            )
+        )
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
+        .accessibilityLabel("\(summary.message) Upgrade to Pro")
+    }
+
+    // Shown after the searchable-count hint once the user upgrades,
     // so they can resume indexing the remaining library without having to
     // re-scan already-indexed photos (startIndexing() skips those).
     @ViewBuilder
@@ -470,14 +1021,14 @@ struct SearchView: View {
                 Haptics.medium()
                 indexingService.startIndexing()
             }) {
-                Label("Index remaining photos", systemImage: "arrow.clockwise")
-                    .font(.subheadline.weight(.medium))
+                Label("Index remaining media", systemImage: "arrow.clockwise")
+                    .font(Celestial.Typography.supportingEmphasized)
             }
-            .buttonStyle(.bordered)
-            .tint(Celestial.Colors.primaryDim)
+            .celestialSecondaryButtonStyle()
             .padding(.top, 10)
             .frame(maxWidth: .infinity)
-            .accessibilityHint("Resumes indexing for the photos that were skipped under the free tier")
+            .accessibilityHint("Resumes indexing media that was skipped before the Pro upgrade")
+            .disabled(!database.allowsIndexingWrites)
         }
     }
 
@@ -485,117 +1036,284 @@ struct SearchView: View {
 
     private var smartAlbumsView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("SMART ALBUMS")
-                .font(.caption.weight(.medium))
-                .tracking(1.5)
-                .foregroundStyle(Celestial.Colors.amber)
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
+            HStack(alignment: .firstTextBaseline) {
+                homeSectionTitle("Smart Albums")
+                Spacer()
+                Text("\(smartAlbums.count.formatted()) saved")
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            }
+            .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset + 2)
+            .padding(.top, Celestial.Spacing.sectionGap)
+            .padding(.bottom, 12)
 
-            ForEach(Array(smartAlbums.enumerated()), id: \.element.id) { index, album in
-                Button {
-                    searchText = album.query
-                    performSearch(saveToHistory: true)
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "rectangle.stack.fill")
-                            .font(.subheadline)
-                            .foregroundStyle(Celestial.Colors.primaryDim)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(album.name)
-                                .font(.subheadline)
-                                .foregroundStyle(Celestial.Colors.onSurface)
-                            Text(album.query)
-                                .font(.footnote)
-                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                .lineLimit(1)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 10) {
+                    ForEach(smartAlbums) { album in
+                        Button {
+                            viewModel.setQueryText(album.query)
+                            performSearch(saveToHistory: true)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                LinearGradient(
+                                    colors: [Celestial.Colors.surfaceBright, Celestial.Colors.secondaryContainer],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                                .frame(width: 108, height: 82)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(alignment: .bottomTrailing) {
+                                    Image(systemName: "rectangle.stack")
+                                        .font(Celestial.Typography.caption)
+                                        .foregroundStyle(Celestial.Colors.primary)
+                                        .padding(8)
+                                }
+                                Text(album.name)
+                                    .font(Celestial.Typography.captionStrong)
+                                    .foregroundStyle(Celestial.Colors.onSurface)
+                                    .lineLimit(1)
+                                    .frame(width: 108, alignment: .leading)
+                            }
+                            .padding(8)
                         }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.footnote)
-                            .foregroundStyle(Celestial.Colors.outlineVariant)
+                        .celestialGlassCardButtonStyle(
+                            cornerRadius: 14,
+                            tint: Celestial.Colors.primaryDim.opacity(0.08)
+                        )
+                        .accessibilityLabel("Search smart album, \(album.name)")
+                        .accessibilityHint("Runs the saved search: \(album.query)")
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                Task { await deleteSmartAlbum(album) }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                            .disabled(isUpdatingSmartAlbums)
+                        }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
                 }
-                .contextMenu {
-                    Button(role: .destructive) {
-                        SmartAlbumStore.delete(id: album.id)
-                        smartAlbums = SmartAlbumStore.load()
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
-
-                if index < smartAlbums.count - 1 {
-                    Divider()
-                        .background(Celestial.Colors.outlineVariant.opacity(0.2))
-                        .padding(.leading, 48)
-                }
+                .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
             }
         }
     }
 
     // MARK: - Recent Queries
 
-    private var searchHistoryView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("RECENT SEARCHES")
-                    .font(.caption.weight(.medium))
-                    .tracking(1.5)
-                    .foregroundStyle(Celestial.Colors.amber)
-                Spacer()
-                Button("Clear All") {
-                    SearchHistory.clear()
-                    searchHistory = []
-                    lastResults = []
-                    lastQuery = ""
+    private func todayMemoryView(_ memory: OnThisDaySummary) -> some View {
+        NavigationLink {
+            OnThisDayView()
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                homeSectionTitle("Today in Your Memories")
+                    .padding(.horizontal, 2)
+
+                Group {
+                    if memory.heroPhoto.pixelWidth > 0,
+                       memory.heroPhoto.pixelHeight > memory.heroPhoto.pixelWidth {
+                        HStack(spacing: 0) {
+                            GeometryReader { geometry in
+                                todayMemoryImage(memory, bounds: geometry.size, contentMode: .fill)
+                                    .frame(width: geometry.size.width, height: geometry.size.height)
+                                    .clipped()
+                            }
+                            .frame(height: SearchHomeCardMetrics.memoryCardHeight)
+                            todayMemoryCaption(memory)
+                                .frame(width: SearchHomeCardMetrics.portraitCaptionWidth)
+                                .padding(.vertical, 16)
+                        }
+                        .frame(minHeight: SearchHomeCardMetrics.memoryCardHeight)
+                    } else {
+                        VStack(alignment: .leading, spacing: 0) {
+                            todayMemoryImage(memory)
+                                .frame(height: SearchHomeCardMetrics.memoryPreviewHeight)
+                                .clipped()
+                            todayMemoryCaption(memory)
+                                .frame(minHeight: SearchHomeCardMetrics.captionHeight)
+                        }
+                    }
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Celestial.Colors.primaryFixedDim)
+                .background(Celestial.Colors.surfaceContainerLow.opacity(0.74))
+                .clipShape(SearchHomeCardMetrics.cardShape)
+                .overlay {
+                    SearchHomeCardMetrics.cardShape
+                        .stroke(Celestial.Colors.hairline, lineWidth: 0.8)
+                }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Today in Your Memories, \(Self.memoryTitle), \(memorySummary(memory))")
+        .accessibilityHint("Opens memories from this day")
+        .accessibilityAddTraits(.isButton)
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+    }
 
-            ForEach(Array(searchHistory.enumerated()), id: \.offset) { index, query in
-                Button {
-                    searchText = query
-                    performSearch(saveToHistory: true)
+    /// One heading style for every section on the search home.
+    private func homeSectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(Celestial.Typography.bodyEmphasized)
+            .foregroundStyle(Celestial.Colors.onSurface)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func todayMemoryImage(
+        _ memory: OnThisDaySummary,
+        bounds: CGSize? = nil,
+        contentMode: ContentMode = .fit
+    ) -> some View {
+        SearchHomePhotoImage(
+            result: memory.heroPhoto.searchResult,
+            targetSize: SearchHomeCardMetrics.memoryPreviewTargetSize,
+            fillsBackdrop: true,
+            bounds: bounds,
+            contentMode: contentMode
+        )
+    }
+
+    private func todayMemoryCaption(_ memory: OnThisDaySummary) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(Self.memoryTitle)
+                    .font(Celestial.Typography.bodyStrong)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text(memorySummary(memory))
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Image(systemName: "chevron.right")
+                .font(Celestial.Typography.microStrong)
+                .foregroundStyle(Celestial.Colors.outlineVariant)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var searchHistoryView: some View {
+        let items = RecentSearchHomePolicy.items(
+            history: viewModel.searchHistory,
+            previews: viewModel.recentSearchPreviews
+        )
+
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                homeSectionTitle("Recent Searches")
+                Spacer()
+                Menu {
+                    Button("Clear recent searches", role: .destructive) {
+                        viewModel.clearSearchHistory()
+                    }
                 } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.subheadline)
-                            .foregroundStyle(Celestial.Colors.tertiaryDim)
-                        Text(query)
-                            .font(.subheadline)
-                            .foregroundStyle(Celestial.Colors.onSurface)
-                        Spacer()
-                        Image(systemName: "arrow.up.left")
-                            .font(.footnote)
-                            .foregroundStyle(Celestial.Colors.outlineVariant)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    // Trailing-aligned so the glyph lines up with the row
+                    // chevrons below while keeping a 44-point target.
+                    Image(systemName: "ellipsis")
+                        .font(Celestial.Typography.supportingEmphasized)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .frame(width: 44, height: 44, alignment: .trailing)
+                        .contentShape(Rectangle())
                 }
-                .contextMenu {
-                    Button(role: .destructive) {
-                        SearchHistory.remove(at: index)
-                        searchHistory = SearchHistory.load()
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
+                .accessibilityLabel("Recent search options")
+            }
+            .padding(.leading, 2)
+            .padding(.bottom, 8)
 
-                if index < searchHistory.count - 1 {
-                    Divider()
-                        .background(Celestial.Colors.outlineVariant.opacity(0.2))
-                        .padding(.leading, 48)
+            LazyVStack(spacing: 0) {
+                ForEach(items) { item in
+                    recentSearchTimelineRow(
+                        item,
+                        isFirst: item.id == items.first?.id,
+                        isLast: item.id == items.last?.id
+                    )
                 }
             }
         }
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+    }
+
+    private func recentSearchTimelineRow(
+        _ item: RecentSearchHomeItem,
+        isFirst: Bool,
+        isLast: Bool
+    ) -> some View {
+        Button {
+            viewModel.setQueryText(item.query)
+            performSearch(saveToHistory: true)
+        } label: {
+            HStack(spacing: 12) {
+                RecentSearchTimelineRail(isFirst: isFirst, isLast: isLast)
+
+                Group {
+                    if let preview = item.preview,
+                       FolderResultAccessPolicy.allows(
+                           sourceId: preview.result.sourceId,
+                           isPro: proManager.isPro
+                       ) {
+                        SearchHomePhotoImage(
+                            result: preview.result,
+                            targetSize: CGSize(
+                                width: SearchHomeCardMetrics.recentThumbnailWidth * displayScale,
+                                height: SearchHomeCardMetrics.recentThumbnailHeight * displayScale
+                            )
+                        )
+                    } else {
+                        RecentSearchPlaceholder()
+                    }
+                }
+                .frame(
+                    width: SearchHomeCardMetrics.recentThumbnailWidth,
+                    height: SearchHomeCardMetrics.recentThumbnailHeight
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.query)
+                        .font(Celestial.Typography.supportingEmphasized)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    if let metadata = recentSearchMetadata(item) {
+                        Text(metadata)
+                            .font(Celestial.Typography.micro)
+                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(Celestial.Typography.microStrong)
+                    .foregroundStyle(Celestial.Colors.outlineVariant)
+                    .accessibilityHidden(true)
+            }
+            .frame(minHeight: 68)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                viewModel.removeSearchHistory(at: item.historyIndex)
+            } label: {
+                Label("Delete recent search", systemImage: "trash")
+            }
+        }
+        .accessibilityLabel("Search again for \(item.query)")
+        .accessibilityHint("Runs this recent search")
+    }
+
+    private func recentSearchMetadata(_ item: RecentSearchHomeItem) -> String? {
+        guard let preview = item.preview else { return nil }
+        var parts: [String] = []
+        if let searchedAt = preview.searchedAt {
+            parts.append(relativeSearchDate(searchedAt))
+        }
+        if preview.resultCount > 0 {
+            parts.append(CountPhrase.string(preview.resultCount, "result"))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     // MARK: - Last Results (when search cleared)
@@ -604,23 +1322,22 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.footnote)
+                    .font(Celestial.Typography.footnote)
                     .foregroundStyle(Celestial.Colors.tertiaryDim)
-                Text("Results for \"\(lastQuery)\"")
-                    .font(.caption.weight(.medium))
+                Text("Results for \"\(viewModel.lastQuery)\"")
+                    .font(Celestial.Typography.eyebrow)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 Spacer()
                 Button("Dismiss") {
-                    lastResults = []
-                    lastQuery = ""
+                    viewModel.dismissLastResults()
                 }
-                .font(.caption.weight(.semibold))
+                .font(Celestial.Typography.captionStrong)
                 .foregroundStyle(Celestial.Colors.primaryFixedDim)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
             .padding(.bottom, 8)
 
-            resultsGrid(results: lastResults)
+            resultsGrid(results: viewModel.lastResults)
         }
     }
 
@@ -630,22 +1347,30 @@ struct SearchView: View {
         VStack(spacing: 12) {
             ProgressView()
                 .tint(Celestial.Colors.primaryDim)
-            Text("Searching...")
-                .font(.subheadline)
+            Text(searchingStateText)
+                .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 80)
     }
 
+    private var searchingStateText: String {
+        if !semanticRuntime.readiness.isSemanticSearchReady {
+            return "Getting search ready..."
+        }
+        return "Searching..."
+    }
+
     private func errorState(_ error: String) -> some View {
         VStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 32, weight: .thin))
-                .foregroundStyle(Celestial.Colors.error)
-                .accessibilityHidden(true)
+            CelestialGlassIcon(
+                systemName: "exclamationmark.triangle",
+                tint: Celestial.Colors.error,
+                size: 56
+            )
             Text(error)
-                .font(.subheadline)
+                .font(Celestial.Typography.supporting)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                 .multilineTextAlignment(.center)
         }
@@ -654,293 +1379,489 @@ struct SearchView: View {
     }
 
     private var noResultsState: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 36, weight: .thin))
-                .foregroundStyle(Celestial.Colors.outlineVariant)
-                .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 0) {
+            if let summary = viewModel.filterSummary {
+                Text(SearchResultsPresentation.noResultsTitle(
+                    summary: summary,
+                    geocodingProgress: indexingService.geocodingProgress
+                ))
+                    .font(Celestial.Typography.interfaceTitle)
+                    .foregroundStyle(Celestial.Colors.onSurface)
 
-            if let summary = filterSummary {
-                VStack(spacing: 6) {
-                    Text("No photos found")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                Text(SearchResultsPresentation.noResultsExplanation(
+                    summary: summary,
+                    geocodingProgress: indexingService.geocodingProgress
+                ))
+                    .font(Celestial.Typography.body)
+                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    .lineSpacing(5)
+                    .padding(.top, 12)
 
-                    let constraints = [summary.locationDescription.map { "near \($0)" },
-                                       summary.dateDescription].compactMap { $0 }
-                    if !constraints.isEmpty {
-                        Text("for \"\(summary.visualQuery)\" \(constraints.joined(separator: ", "))")
-                            .font(.footnote)
-                            .foregroundStyle(Celestial.Colors.outline)
-                            .multilineTextAlignment(.center)
+                VStack(spacing: 0) {
+                    if summary.dateDescription != nil {
+                        relaxationButton("Try any date") {
+                            runRelaxedSearch(summary: summary, dropDate: true)
+                        }
                     }
+                    if summary.locationDescription != nil {
+                        relaxationButton("Drop the location") {
+                            runRelaxedSearch(summary: summary, dropLocation: true)
+                        }
+                    }
+                    if !summary.visualQuery.isEmpty,
+                       summary.dateDescription != nil || summary.locationDescription != nil {
+                        relaxationButton("Search “\(summary.visualQuery)” only") {
+                            viewModel.setQueryText(summary.visualQuery)
+                            performSearch(saveToHistory: true)
+                        }
+                    }
+                    CelestialHairline()
                 }
+                .padding(.top, Celestial.Spacing.sectionGap)
 
-                if !fallbackResults.isEmpty {
-                    VStack(spacing: 10) {
-                        HStack {
-                            Text(fallbackTitle(summary: summary))
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(Celestial.Colors.amber)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
-
-                        let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
-                        LazyVGrid(columns: columns, spacing: 8) {
-                            ForEach(fallbackResults) { result in
-                                FallbackThumbnail(result: result)
-                                    .onTapGesture {
-                                        if result.isVideo {
-                                            if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                                                presentVideoPlayer(for: asset)
-                                            }
-                                        } else {
-                                            // Use fallbackResults for the viewer since main results are empty
-                                            lastResults = fallbackResults.filter { !$0.isVideo }
-                                            selectedPhoto = result
-                                        }
-                                    }
+                if !viewModel.fallbackResults.isEmpty {
+                    DisclosureGroup("Show closest matches") {
+                        // Sort the same way the viewer pages, so a tile's
+                        // position matches the "n of m" it opens at.
+                        MasonryGrid(
+                            viewModel.filteredResults(viewModel.fallbackResults),
+                            spacing: 4,
+                            aspectRatio: { MediaTileAspectRatio.ratio(for: $0) }
+                        ) { result in
+                            Button {
+                                if result.isVideo {
+                                    presentVideoPlayer(localIdentifier: result.localIdentifier)
+                                } else {
+                                    // Use fallback results for the viewer since main results are empty.
+                                    viewModel.useFallbackResultsForViewer()
+                                    selectedPhoto = result
+                                }
+                            } label: {
+                                PhotoThumbnailView(result: result)
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(result.isVideo ? "Video result" : "Photo result")
                         }
-                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
                     }
+                    .font(Celestial.Typography.button)
+                    .tint(Celestial.Colors.primary)
+                    .padding(.top, Celestial.Spacing.sectionGap)
                 }
             } else {
-                Text("No matching photos found")
-                    .font(.subheadline.weight(.medium))
+                Text("No matching photos")
+                    .font(Celestial.Typography.interfaceTitle)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Text("Try a broader description or remove a detail.")
+                    .font(Celestial.Typography.body)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                Text("Try a different description")
-                    .font(.footnote)
-                    .foregroundStyle(Celestial.Colors.outline)
+                    .padding(.top, 12)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 60)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+        .padding(.top, Celestial.Spacing.sectionGap)
     }
 
-    private struct FallbackThumbnail: View {
-        let result: SearchResult
-        @State private var image: UIImage?
-
-        var body: some View {
-            Group {
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
-                        .clipped()
-                } else {
-                    Color(Celestial.Colors.surfaceContainer)
-                }
+    private func relaxationButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .font(Celestial.Typography.bodyEmphasized)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                Spacer()
+                Image(systemName: "arrow.right")
+                    .font(Celestial.Typography.caption)
+                    .foregroundStyle(Celestial.Colors.outline)
             }
-            .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .task {
-                if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                    image = await PhotoLibrary.loadThumbnail(for: asset)
-                }
-            }
+            .frame(minHeight: 54)
+            .contentShape(Rectangle())
         }
+        .overlay(alignment: .top) { CelestialHairline() }
+    }
+
+    private func runRelaxedSearch(
+        summary: FilterSummary,
+        dropDate: Bool = false,
+        dropLocation: Bool = false
+    ) {
+        var parts: [String] = summary.visualQuery.isEmpty ? [] : [summary.visualQuery]
+        if !dropLocation, let location = summary.locationDescription { parts.append("in \(location)") }
+        if !dropDate, let date = summary.dateDescription { parts.append(date) }
+        viewModel.setQueryText(parts.joined(separator: " "))
+        performSearch(saveToHistory: true)
+    }
+    private var indexReadinessCheckingState: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .tint(Celestial.Colors.primaryDim)
+            Text(searchPreparationStatusText)
+                .font(Celestial.Typography.supporting)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 52)
+        .accessibilityElement(children: .combine)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 52, weight: .thin))
-                .foregroundStyle(Celestial.Colors.outlineVariant)
-                .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack {
+                Circle()
+                    .stroke(Celestial.Colors.hairline, lineWidth: 1)
+                    .frame(width: 132, height: 132)
+                Circle()
+                    .stroke(Celestial.Colors.primaryDim.opacity(0.30), style: StrokeStyle(lineWidth: 1, dash: [2, 8]))
+                    .frame(width: 94, height: 94)
+                CelestialGlassIcon(
+                    systemName: "magnifyingglass",
+                    size: 58
+                )
+                Circle()
+                    .fill(Celestial.Colors.amber)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 66)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 42)
+
             if indexingService.isReady && searchEngine.totalSize > 0 {
-                if indexingService.hitFreeLimit && totalLibraryCount > searchEngine.totalSize {
-                    Text("Search your \(searchEngine.totalSize) of \(totalLibraryCount) photos")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                if indexingService.hitFreeLimit
+                    && totalLibraryCount > searchEngine.totalSize {
+                    Text("\(searchEngine.totalSize.formatted()) of \(totalLibraryCount.formatted()) photos & videos searchable")
+                        .font(Celestial.Typography.interfaceTitle3)
+                        .foregroundStyle(Celestial.Colors.onSurface)
                     resumeIndexingButton
                 } else {
-                    Text("Search your \(searchEngine.totalSize) photos & videos")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                    Text("\(searchEngine.totalSize.formatted()) photos & videos searchable")
+                        .font(Celestial.Typography.interfaceTitle3)
+                        .foregroundStyle(Celestial.Colors.onSurface)
                 }
                 Text("Describe what you're looking for")
-                    .font(.footnote)
-                    .foregroundStyle(Celestial.Colors.outline)
-                Button(action: {
-                    Haptics.medium()
-                    let surprise = SurpriseQueries.random()
-                    searchText = surprise
-                    performSearch()
-                }) {
-                    Label("Surprise Me", systemImage: "sparkles")
-                        .font(.subheadline.weight(.medium))
-                }
-                .buttonStyle(.bordered)
-                .tint(Celestial.Colors.primaryDim)
-                .padding(.top, 12)
-            } else {
-                Text("Index your media to start searching")
-                    .font(.subheadline.weight(.medium))
+                    .font(Celestial.Typography.body)
                     .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                Text("All processing happens on your device")
-                    .font(.footnote)
-                    .foregroundStyle(Celestial.Colors.outline)
-                Button(action: { indexingService.startIndexing() }) {
-                    Label("Build Search Index", systemImage: "sparkles")
-                        .font(.system(.subheadline, design: .rounded, weight: .semibold))
-                        .foregroundStyle(Celestial.Colors.onPrimaryContainer)
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 14)
-                        .background(Celestial.Colors.primaryContainer)
-                        .clipShape(Capsule())
+                    .padding(.top, 10)
+            } else {
+                if indexingService.indexRebuildRequired {
+                    Text("Update the search index")
+                        .font(Celestial.Typography.interfaceTitle)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                    Text("Memorable improved how it understands image orientation. Rebuild once to keep search results accurate.")
+                        .font(Celestial.Typography.body)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .lineSpacing(4)
+                        .padding(.top, 12)
+                    Button(action: { indexingService.rebuildRequiredIndex() }) {
+                        Label("Rebuild Search Index", systemImage: "arrow.triangle.2.circlepath")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .celestialPrimaryButtonStyle()
+                    .padding(.top, 24)
+                    .accessibilityHint("Clears the incompatible search index and rebuilds it on this device")
+                    .disabled(!database.allowsIndexingWrites)
+                } else {
+                    Text("Make your library searchable")
+                        .font(Celestial.Typography.interfaceTitle)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                    Text("A one-time scan runs on this iPhone. Photos become searchable as it goes.")
+                        .font(Celestial.Typography.body)
+                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        .lineSpacing(4)
+                        .padding(.top, 12)
+                    Button(action: { indexingService.startIndexing() }) {
+                        Text("Build Search Index")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .celestialPrimaryButtonStyle()
+                    .padding(.top, 24)
+                    .accessibilityHint("Scans your photo library and builds a searchable index")
+                    .disabled(!database.allowsIndexingWrites)
                 }
-                .padding(.top, 6)
-                .accessibilityHint("Scans your photo library and builds a searchable index")
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 80)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+        .padding(.top, 46)
     }
 
     // MARK: - Results Grid (Masonry Layout)
 
-    private func applyMediaFilter(_ input: [SearchResult]) -> [SearchResult] {
-        switch mediaFilter {
-        case .all:
-            return input
-        case .photos:
-            return input.filter { !$0.isVideo && !screenshotIds.contains($0.id) }
-        case .videos:
-            return input.filter { $0.isVideo }
-        case .screenshots:
-            return input.filter { screenshotIds.contains($0.id) }
-        }
-    }
-
     private func controlsPanel(filteredCount: Int) -> some View {
-        VStack(spacing: 0) {
-            // Location fallback banner
-            if let summary = filterSummary {
-                HStack(spacing: 6) {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(Celestial.Colors.amber)
-                    let location = summary.locationDescription ?? ""
-                    Text("Showing all relevant photos\(location.isEmpty ? "" : " near \(location)")")
-                        .font(.footnote)
-                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-            }
-
-            // Upgrade banner for free tier (after first successful search)
-            if !proManager.isPro && indexingService.hitFreeLimit && hasCompletedFirstSearch && !upgradeBannerDismissed {
+        VStack(alignment: .leading, spacing: 12) {
+            if !proManager.isPro && indexingService.hitFreeLimit && viewModel.hasCompletedFirstSearch && !viewModel.upgradeBannerDismissed {
                 upgradeBanner
-                    .padding(.bottom, 10)
             }
 
-            // Result summary + sort toggle
-            HStack {
-                Text("\(filteredCount) \(filteredCount == 1 ? "result" : "results")")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                if searchTimeMs > 0 {
-                    Text("in \(searchTimeMs)ms")
-                        .font(.caption)
-                        .foregroundStyle(Celestial.Colors.outline)
-                }
-                Spacer()
-                Picker("Sort", selection: Binding(
-                    get: { sortMode },
-                    set: { sortModeRaw = $0.rawValue }
-                )) {
-                    Text("Relevance").tag(SortMode.relevance)
-                    Text("Recent").tag(SortMode.recent)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 180)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
+            HStack(spacing: 10) {
+                // The count takes the leading slack directly. A Spacer here
+                // competed with it for the same space and truncated the count
+                // while leaving a visible gap beside it.
+                Text(CountPhrase.string(filteredCount, "result"))
+                    .font(Celestial.Typography.supportingEmphasized)
+                    .foregroundStyle(Celestial.Colors.onSurface)
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, 8)
 
-            // Media filter chips
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(MediaFilter.allCases, id: \.self) { filter in
-                        let isActive = mediaFilter == filter
+                Menu {
+                    ForEach(SearchMediaFilter.allCases, id: \.self) { filter in
                         Button {
                             Haptics.selection()
-                            mediaFilter = filter
-                            visibleCount = initialVisibleCount
+                            viewModel.setMediaFilter(filter)
                         } label: {
-                            Text(filter.label)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(isActive ? Celestial.Colors.onPrimaryContainer : Celestial.Colors.onSurfaceVariant)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 7)
-                                .background(isActive ? Celestial.Colors.primaryContainer : Celestial.Colors.surfaceContainerHigh)
-                                .clipShape(Capsule())
+                            if viewModel.mediaFilter == filter {
+                                Label(filter.label, systemImage: "checkmark")
+                            } else {
+                                Text(filter.label)
+                            }
                         }
                     }
+                } label: {
+                    // ViewThatFits dropped the name even with room to spare,
+                    // because the glass button style proposes a narrow width to
+                    // its label. Collapse on text size instead, so the active
+                    // filter stays readable at normal sizes.
+                    Group {
+                        if dynamicTypeSize.isAccessibilitySize {
+                            Image(systemName: "line.3.horizontal.decrease")
+                        } else {
+                            Label(
+                                viewModel.mediaFilter.label,
+                                systemImage: "line.3.horizontal.decrease"
+                            )
+                        }
+                    }
+                    .font(Celestial.Typography.captionStrong)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
-                .padding(.horizontal, 16)
+                .celestialGlassCapsuleButtonStyle(
+                    tint: Celestial.Colors.surfaceContainerHigh.opacity(0.22),
+                    foreground: Celestial.Colors.onSurfaceVariant
+                )
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Filter results by media type: \(viewModel.mediaFilter.label)")
+
+                Menu {
+                    Button("Relevance") {
+                        viewModel.selectSortMode(.relevance)
+                        sortModeRaw = SearchSortMode.relevance.rawValue
+                    }
+                    Button("Recent") {
+                        viewModel.selectSortMode(.recent)
+                        sortModeRaw = SearchSortMode.recent.rawValue
+                    }
+                } label: {
+                    Group {
+                        if dynamicTypeSize.isAccessibilitySize {
+                            Image(systemName: "arrow.up.arrow.down")
+                        } else {
+                            Label(
+                                viewModel.sortMode == .relevance ? "Relevance" : "Recent",
+                                systemImage: "arrow.up.arrow.down"
+                            )
+                        }
+                    }
+                    .font(Celestial.Typography.captionStrong)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+                .celestialGlassCapsuleButtonStyle(
+                    tint: Celestial.Colors.primaryDim.opacity(0.14),
+                    foreground: Celestial.Colors.primaryDim
+                )
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel(
+                    "Sort results by \(viewModel.sortMode == .relevance ? "relevance" : "recent")"
+                )
+
+                if let query = viewModel.smartAlbumQuery,
+                   !smartAlbums.contains(where: { $0.query.lowercased() == query.lowercased() }) {
+                    Button {
+                        albumName = query
+                        showSaveAlbum = true
+                    } label: {
+                        Image(systemName: "bookmark")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                    .celestialGlassCircleButtonStyle(
+                        tint: Celestial.Colors.amber.opacity(0.16),
+                        foreground: Celestial.Colors.amber
+                    )
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Circle())
+                    .accessibilityLabel("Save search as an album")
+                }
+            }
+
+            if let summary = viewModel.filterSummary {
+                interpretedQueryFacets(summary)
             }
         }
-        .padding(.vertical, 14)
-        .modifier(GlassPanelModifier(cornerRadius: Celestial.sharedCornerRadius))
-        .padding(.horizontal, 12)
-        .padding(.bottom, 10)
+        .padding(Celestial.Spacing.surfaceContentInset)
+        .modifier(
+            GlassPanelModifier(
+                cornerRadius: 16,
+                tint: Celestial.Colors.surfaceContainerLow.opacity(0.30)
+            )
+        )
+        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+        .padding(.bottom, Celestial.Spacing.stackedContainerGap)
     }
 
-    private func resultsGrid(results: [SearchResult]) -> some View {
-        let sorted = applySort(results, mode: sortMode)
-        let filtered = applyMediaFilter(sorted)
-        let visible = Array(filtered.prefix(visibleCount))
-        let hasMore = filtered.count > visible.count
+    private func interpretedQueryFacets(_ summary: FilterSummary) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if !summary.visualQuery.isEmpty {
+                    queryFacet(
+                        summary.visualQuery,
+                        systemImage: "photo",
+                        accent: Celestial.Colors.primaryDim
+                    )
+                }
+                if let location = summary.locationDescription {
+                    queryFacet(
+                        location,
+                        systemImage: "location.fill",
+                        accent: Celestial.Colors.emerald
+                    )
+                }
+                if let date = summary.dateDescription {
+                    queryFacet(
+                        date,
+                        systemImage: "calendar",
+                        accent: Celestial.Colors.amber
+                    )
+                }
+            }
+        }
+        .accessibilityLabel("Search details")
+    }
+
+    private func queryFacet(
+        _ label: String,
+        systemImage: String,
+        accent: Color
+    ) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .foregroundStyle(accent)
+                .accessibilityHidden(true)
+            Text(label)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .lineLimit(1)
+        }
+        .font(Celestial.Typography.caption)
+        .padding(.horizontal, 10)
+        .frame(minHeight: 32)
+        .modifier(
+            GlassCapsuleModifier(
+                tint: accent.opacity(0.10)
+            )
+        )
+    }
+
+    private func resultsGrid(
+        results: [SearchResult],
+        filteredResults: [SearchResult]? = nil
+    ) -> some View {
+        let filtered = filteredResults ?? viewModel.filteredResults(results)
+        let textMatches = filtered.filter(\.isTextMatch)
+        let visualMatches = filtered.filter { !$0.isTextMatch }
+        let visible = Array(visualMatches.prefix(viewModel.visibleCount))
+        let hasMore = visualMatches.count > visible.count
         return VStack(alignment: .leading, spacing: 0) {
-            if sortMode == .recent {
+            // The search matched, but the media filter excluded every result.
+            // Without this the screen is blank below the controls.
+            if filtered.isEmpty {
+                noMatchesForFilterState
+            }
+            if !textMatches.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Text matches · \(textMatches.count.formatted())")
+                        .font(Celestial.Typography.button)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                    ScrollView(.horizontal) {
+                        LazyHStack(alignment: .top, spacing: 8) {
+                            ForEach(textMatches) { result in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    resultTile(result: result, contentMode: .fit)
+                                        .frame(width: 144, height: 112)
+                                        .clipped()
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                        .accessibilityLabel("Photo containing matching text")
+                                    if let match = result.textMatch {
+                                        MatchedTextExcerpt(match: match, reservesSpace: true)
+                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                        Text("Partial text match")
+                                            .font(Celestial.Typography.caption)
+                                            .foregroundStyle(Celestial.Colors.outline)
+                                            .opacity(match.kind == .truncatedWord ? 1 : 0)
+                                            .accessibilityHidden(match.kind != .truncatedWord)
+                                    }
+                                }
+                                .frame(width: 144, alignment: .leading)
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+                }
+                .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                .padding(.vertical, 16)
+                if !visualMatches.isEmpty {
+                    Text("Visual matches")
+                        .font(Celestial.Typography.button)
+                        .foregroundStyle(Celestial.Colors.onSurface)
+                        .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
+                        .padding(.bottom, 8)
+                }
+            }
+            if viewModel.sortMode == .recent {
                 let groups = ResultGrouper.groupByMonth(results: visible)
                 ForEach(groups) { group in
                     HStack {
                         Text(group.label.uppercased())
-                            .font(.caption.weight(.medium))
+                            .font(Celestial.Typography.eyebrow)
                             .tracking(1.5)
                             .foregroundStyle(Celestial.Colors.amber)
                         Spacer()
-                        Text("\(group.results.count) \(group.results.count == 1 ? "result" : "results")")
-                            .font(.footnote)
+                        Text(CountPhrase.string(group.results.count, "result"))
+                            .font(Celestial.Typography.footnote)
                             .foregroundStyle(Celestial.Colors.outline)
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, Celestial.Spacing.surfaceHorizontalInset)
                     .padding(.top, 20)
                     .padding(.bottom, 10)
 
                     masonryGrid(results: group.results)
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 4)
                 }
             } else {
                 masonryGrid(results: visible)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 6)
             }
 
             if hasMore {
                 Button {
                     Haptics.light()
-                    visibleCount = filtered.count
+                    viewModel.showAllResults(count: visualMatches.count)
                 } label: {
-                    Text("Show all \(filtered.count) matching results")
-                        .font(.subheadline.weight(.semibold))
+                    Text("Show all \(visualMatches.count.formatted()) matching results")
+                        .font(Celestial.Typography.button)
                         .foregroundStyle(Celestial.Colors.primary)
                 }
                 .padding(.vertical, 24)
                 .frame(maxWidth: .infinity)
             }
 
-            if !visible.isEmpty {
+            if !filtered.isEmpty {
                 Text(AppCopy.aiDisclaimer)
-                    .font(.caption2)
+                    .font(Celestial.Typography.micro)
                     .foregroundStyle(Celestial.Colors.outline)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
@@ -951,56 +1872,100 @@ struct SearchView: View {
         }
     }
 
-    private func applySort(_ input: [SearchResult], mode: SortMode) -> [SearchResult] {
-        switch mode {
-        case .relevance:
-            return input
-        case .recent:
-            return input.sorted {
-                ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast)
+    private var noMatchesForFilterState: some View {
+        VStack(spacing: Celestial.Spacing.contentGap) {
+            CelestialGlassIcon(
+                systemName: "line.3.horizontal.decrease",
+                tint: Celestial.Colors.onSurfaceVariant,
+                size: 56
+            )
+            Text("No \(viewModel.mediaFilter.label.lowercased()) in these results")
+                .font(Celestial.Typography.interfaceTitle)
+                .foregroundStyle(Celestial.Colors.onSurface)
+                .multilineTextAlignment(.center)
+            Text("This search matched other media types.")
+                .font(Celestial.Typography.body)
+                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                .multilineTextAlignment(.center)
+            Button {
+                Haptics.selection()
+                viewModel.setMediaFilter(.all)
+            } label: {
+                Text("Show all results")
+                    .font(Celestial.Typography.button)
+                    .foregroundStyle(Celestial.Colors.primary)
             }
+            .frame(minHeight: 44)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 60)
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
     }
 
     private func masonryGrid(results: [SearchResult]) -> some View {
-        MasonryGrid(results) { result in
+        MasonryGrid(
+            results,
+            spacing: 4,
+            aspectRatio: { MediaTileAspectRatio.ratio(for: $0) }
+        ) { result in
             resultTile(result: result)
         }
     }
 
-    private func resultTile(result: SearchResult) -> some View {
-        PhotoThumbnailView(result: result)
-            .onTapGesture { handleResultTap(result) }
+    private func resultTile(result: SearchResult, contentMode: ContentMode = .fill) -> some View {
+        Button {
+            handleResultTap(result)
+        } label: {
+            PhotoThumbnailView(result: result, contentMode: contentMode)
+        }
+            .buttonStyle(.plain)
             .contextMenu {
-                if proManager.isPro {
-                    Button {
-                        let similar = searchEngine.findSimilar(photoId: result.id)
-                        self.results = similar
-                        searchText = "Similar to selected photo"
-                        lastSearchedQuery = "Similar to selected photo"
-                    } label: {
-                        Label("Find Similar", systemImage: "sparkle.magnifyingglass")
-                    }
-                } else {
-                    Button {
-                        showUpgrade = true
-                    } label: {
-                        Label("Find Similar (Pro)", systemImage: "sparkles")
+                if result.supportsFindSimilar {
+                    if proManager.isPro {
+                        Button {
+                            startFindSimilar(photoID: result.id)
+                        } label: {
+                            Label("Find Similar", systemImage: "sparkle.magnifyingglass")
+                        }
+                    } else {
+                        Button {
+                            showUpgrade = true
+                        } label: {
+                            Label("Find Similar (Pro)", systemImage: "sparkles")
+                        }
                     }
                 }
             }
             .accessibilityLabel(result.isVideo ? "Video result" : "Photo result")
-            .accessibilityAddTraits(.isButton)
     }
 
     // MARK: - Actions
 
+    private func startFindSimilar(photoID: String) {
+        guard proManager.isPro else {
+            showUpgrade = true
+            return
+        }
+        let engine = searchEngine
+        let featurePolicy = ProFeatureAccessPolicy(isPro: proManager.isPro)
+        viewModel.submitSimilaritySearch {
+            await SimilaritySearchOperation.run {
+                engine.findSimilar(photoId: photoID, featurePolicy: featurePolicy)
+            }
+        }
+    }
+
+    private func cancelFindSimilar() {
+        viewModel.cancelSimilaritySearch()
+    }
+
     private func handleResultTap(_ result: SearchResult) {
+        #if DEBUG
+        logger.info("[SearchView] result tapped isVideo=\(result.isVideo) score=\(String(format: "%.4f", result.score))")
+        #endif
         Haptics.selection()
         if result.isVideo {
-            if let asset = PhotoLibrary.getAsset(by: result.localIdentifier) {
-                presentVideoPlayer(for: asset)
-            }
+            presentVideoPlayer(localIdentifier: result.localIdentifier)
         } else {
             selectedPhoto = result
         }
@@ -1013,7 +1978,7 @@ struct SearchView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
                 if Task.isCancelled { break }
-                if searchText.isEmpty {
+                if viewModel.queryText.isEmpty {
                     withAnimation(.easeInOut(duration: 0.3)) {
                         placeholderIndex = (placeholderIndex + 1) % Self.placeholders.count
                     }
@@ -1022,91 +1987,283 @@ struct SearchView: View {
         }
     }
 
-    private func fallbackTitle(summary: FilterSummary) -> String {
-        let hasLocation = summary.locationDescription != nil
-        let hasDate = summary.dateDescription != nil
+    private static let memoryTitle = "Memories from this date"
 
-        // When filters are active, the fallback contains filter-matched photos
-        // (the visual query didn't find anything in that subset).
-        // Title should describe what's actually shown, not the failed visual query.
-        if hasLocation || hasDate {
-            let parts = [summary.locationDescription, summary.dateDescription].compactMap { $0 }
-            return "Photos from \(parts.joined(separator: ", "))"
+    private func memorySummary(_ memory: OnThisDaySummary) -> String {
+        let photos = CountPhrase.string(memory.photoCount, "photo")
+        guard memory.yearCount > 1 else { return photos }
+        return "\(photos) across \(CountPhrase.string(memory.yearCount, "year"))"
+    }
+
+    private func relativeSearchDate(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        if calendar.component(.year, from: date) == calendar.component(.year, from: Date()) {
+            return date.formatted(.dateTime.month(.abbreviated).day())
         }
+        return date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
 
-        // No filters: fallback is near-miss CLIP results for the visual query
-        return "Other \"\(summary.visualQuery)\" photos"
+    private func requestTodayMemoryRefresh() {
+        let canStart = todayMemoryLoadTask == nil
+            && isViewVisible
+            && indexingService.isReady
+            && viewModel.queryText.isEmpty
+            && viewModel.results.isEmpty
+            && viewModel.lastResults.isEmpty
+        guard todayMemoryRefreshState.request(canStart: canStart) else { return }
+
+        let database = database
+        todayMemoryLoadTask = Task { @MainActor in
+            var wasCancelled = false
+            do {
+                let summary = try await CancellableDetachedOperation.run {
+                    try database.onThisDaySummary()
+                }
+                wasCancelled = Task.isCancelled
+                if !wasCancelled {
+                    if let summary,
+                       FolderResultAccessPolicy.allows(
+                           sourceId: summary.heroPhoto.sourceId,
+                           isPro: proManager.isPro
+                       ) {
+                        todayMemory = summary
+                    } else {
+                        todayMemory = nil
+                    }
+                    isTodayMemoryResolved = true
+                }
+            } catch is CancellationError {
+                wasCancelled = true
+            } catch {
+                logger.error("Failed to refresh today's memories: \(error.safeDiagnosticCode)")
+                isTodayMemoryResolved = true
+            }
+            todayMemoryLoadTask = nil
+            if todayMemoryRefreshState.finish(wasCancelled: wasCancelled) {
+                requestTodayMemoryRefresh()
+            }
+        }
     }
 
     private func performSearch(saveToHistory: Bool = false) {
-        guard !searchText.isEmpty, indexingService.isReady else { return }
+        guard !viewModel.normalizedQuery.isEmpty else { return }
         Haptics.light()
-        // Cancel any previous search so stale results can't land on top of
-        // the new one (race condition when the user types quickly or when
-        // the index is rebuilt mid-query).
-        searchTask?.cancel()
-        isSearching = true
-        searchError = nil
-        visibleCount = initialVisibleCount
-        let query = searchText
-        let startTime = CFAbsoluteTimeGetCurrent()
-
-        searchTask = Task {
-            do {
-                let response = try await searchEngine.search(query: query)
-                if Task.isCancelled { return }
-                results = response.results
-                lastSearchedQuery = query
-                fallbackResults = response.fallbackResults
-                filterSummary = response.filtersApplied
-                mediaFilter = .all
-                searchTimeMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
-
-                // Detect screenshots in background for the media filter
-                let photoResults = response.results.filter { !$0.isVideo }
-                Task.detached {
-                    let detected = Set(
-                        photoResults.compactMap { r -> String? in
-                            guard let asset = PhotoLibrary.getAsset(by: r.localIdentifier),
-                                  asset.mediaSubtypes.contains(.photoScreenshot) else { return nil }
-                            return r.id
-                        }
-                    )
-                    await MainActor.run { screenshotIds = detected }
-                }
-
-                #if DEBUG
-                logger.info("[SearchView] '\(query)': \(response.results.count) results in \(searchTimeMs)ms")
-                #endif
-
-                if !response.results.isEmpty {
-                    if saveToHistory {
-                        SearchHistory.add(query: query)
-                        searchHistory = SearchHistory.load()
-                    }
-                    lastQuery = query
-                    lastResults = response.results
-
-                    // Track searches for free tier upgrade banner
-                    if !hasCompletedFirstSearch {
-                        hasCompletedFirstSearch = true
-                    }
-                    if upgradeBannerDismissed {
-                        searchesSinceDismiss += 1
-                        if searchesSinceDismiss >= 5 {
-                            upgradeBannerDismissed = false
-                            searchesSinceDismiss = 0
-                        }
-                    }
-                }
-            } catch {
-                logger.error("Search failed: \(error.localizedDescription)")
-                searchError = "Search failed: \(error.localizedDescription)"
-                results = []
-            }
-            isSearching = false
-        }
+        viewModel.submitSearch(saveToHistory: saveToHistory)
     }
 
 }
 
+private enum SearchHomeCardMetrics {
+    static let memoryPreviewHeight: CGFloat = 156
+    static let memoryPreviewTargetSize = CGSize(width: 1_024, height: 1_024)
+    static let captionHeight: CGFloat = 62
+    static let memoryCardHeight = memoryPreviewHeight + captionHeight
+    static let portraitCaptionWidth: CGFloat = 152
+    static let cornerRadius: CGFloat = 20
+    static let recentThumbnailWidth: CGFloat = 64
+    static let recentThumbnailHeight: CGFloat = 48
+
+    static var cardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+}
+
+enum MemoryCardLayout {
+    static let minimumAspectRatio = MediaTileAspectRatio.minimum
+    static let maximumAspectRatio = MediaTileAspectRatio.maximum
+    static let fallbackAspectRatio = MediaTileAspectRatio.fallback
+    static let targetWidth: CGFloat = 1_024
+
+    static func aspectRatio(for photo: IndexedPhotoReference) -> CGFloat {
+        MediaTileAspectRatio.ratio(for: photo)
+    }
+
+    static func targetSize(
+        for photo: IndexedPhotoReference,
+        width: CGFloat = targetWidth
+    ) -> CGSize {
+        CGSize(width: width, height: width / aspectRatio(for: photo))
+    }
+}
+
+private struct RecentSearchTimelineRail: View {
+    let isFirst: Bool
+    let isLast: Bool
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 0) {
+                Rectangle()
+                    .fill(isFirst ? Color.clear : Celestial.Colors.primaryDim.opacity(0.24))
+                Rectangle()
+                    .fill(isLast ? Color.clear : Celestial.Colors.primaryDim.opacity(0.24))
+            }
+            .frame(width: 1)
+            Circle()
+                .fill(Celestial.Colors.primaryDim)
+                .frame(width: 7, height: 7)
+                .overlay {
+                    Circle()
+                        .stroke(Celestial.Colors.background, lineWidth: 2)
+                }
+        }
+        .frame(width: 10, height: 68)
+        .accessibilityHidden(true)
+    }
+}
+
+struct SearchHomePhotoImage: View {
+    let result: SearchResult
+    let targetSize: CGSize
+    var fillsBackdrop = false
+    var bounds: CGSize? = nil
+    var contentMode: ContentMode = .fit
+    @State private var image: UIImage?
+    @State private var imageLoadGeneration: UInt = 0
+    @State private var imageLoadTask: Task<Void, Never>?
+
+    static func imageContent(image: UIImage?, fillsBackdrop: Bool, bounds: CGSize?, contentMode: ContentMode) -> some View {
+        RecentSearchPlaceholder().overlay {
+            ZStack {
+                if let image {
+                    if fillsBackdrop {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: bounds?.width, height: bounds?.height)
+                            .blur(radius: 20)
+                            .scaleEffect(1.08)
+                            .opacity(0.55)
+                            .accessibilityHidden(true)
+                    }
+
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: contentMode)
+                        .frame(width: bounds?.width, height: bounds?.height)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+    }
+
+    var body: some View {
+        Self.imageContent(image: image, fillsBackdrop: fillsBackdrop, bounds: bounds, contentMode: contentMode)
+        .task(id: result.id) {
+            imageLoadTask?.cancel()
+            let task = Task { @MainActor in
+                imageLoadGeneration &+= 1
+                let generation = imageLoadGeneration
+                image = nil
+                let loaded = await PhotoLibrary.loadPreviewImage(
+                    for: result,
+                    targetSize: targetSize
+                )
+                guard ImageLoadGenerationPolicy.acceptsCompletion(
+                    startedGeneration: generation,
+                    currentGeneration: imageLoadGeneration,
+                    isCancelled: Task.isCancelled
+                ) else { return }
+                image = loaded
+            }
+            imageLoadTask = task
+            await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIApplication.didReceiveMemoryWarningNotification
+            )
+        ) { _ in
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&image)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct RecentSearchPlaceholder: View {
+    var body: some View {
+        LinearGradient(
+            colors: [
+                Celestial.Colors.surfaceBright,
+                Celestial.Colors.secondaryContainer,
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .overlay {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 27, weight: .light))
+                .foregroundStyle(Celestial.Colors.primaryFixedDim.opacity(0.58))
+        }
+    }
+}
+
+enum SearchResultForegroundValidator {
+    static func validResultIDs(
+        candidates: [SearchResult],
+        validPhotoKitIdentifiers: Set<String>,
+        isFolderResultAccessible: (SearchResult) -> Bool
+    ) -> Set<String> {
+        Set(candidates.compactMap { result in
+            if result.sourceId == PhotoSourceType.photokit.rawValue {
+                return validPhotoKitIdentifiers.contains(result.localIdentifier) ? result.id : nil
+            }
+            return isFolderResultAccessible(result) ? result.id : nil
+        })
+    }
+}
+
+enum SearchResultsPresentation {
+    static func noResultsTitle(
+        summary: FilterSummary,
+        geocodingProgress: GeocodingProgressState?
+    ) -> String {
+        if summary.locationDescription != nil, geocodingProgress != nil {
+            return "Still resolving photo locations"
+        }
+        if summary.dateDescription == nil, summary.locationDescription == nil {
+            return "No confident matches"
+        }
+        return "Nothing matches all of that"
+    }
+
+    static func noResultsExplanation(
+        summary: FilterSummary,
+        geocodingProgress: GeocodingProgressState?
+    ) -> String {
+        if summary.dateDescription == nil, summary.locationDescription == nil {
+            return "Try a different description or fewer words."
+        }
+        var details = [summary.visualQuery.isEmpty ? "matching photos" : "\(summary.visualQuery) photos"]
+        if let location = summary.locationDescription { details.append("near \(location)") }
+        if let date = summary.dateDescription { details.append("from \(date)") }
+        let searchDescription = details.joined(separator: " ")
+
+        guard summary.locationDescription != nil, let progress = geocodingProgress else {
+            return "Looked for \(searchDescription). Try relaxing one detail."
+        }
+
+        let progressDescription: String
+        switch progress.phase {
+        case .queued:
+            progressDescription = "Location processing is queued"
+        case .running:
+            progressDescription = "Location processing is \(progress.completed) of \(progress.total) complete"
+        case .waitingToResume:
+            progressDescription = "Location processing will continue when Memorable is active"
+        case .paused:
+            progressDescription = "Location processing is paused and will retry the next time Memorable becomes active"
+        }
+        return "No verified matches for \(searchDescription) yet. \(progressDescription), so more results may appear as it finishes."
+    }
+}

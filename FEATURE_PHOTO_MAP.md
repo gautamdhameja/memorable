@@ -1,4 +1,4 @@
-# Feature: Photo Map View
+# Photo map view
 
 **Status:** Planned (not yet implemented)
 **Priority:** Future release
@@ -6,34 +6,33 @@
 
 ## Overview
 
-A map-based photo browser where users can see their photos plotted on Apple Maps by GPS location. Tapping a cluster/pin shows photos from that area. Zooming in reveals individual photos.
+Display indexed photos with GPS coordinates on Apple Maps. Tapping a cluster or pin shows photos from that area. Zooming changes the cluster detail.
 
-## User Experience
+## User experience
 
-1. User opens Memories tab → taps "Photo Map" button
-2. Full-screen Apple Maps view appears
-3. Photo clusters shown as pins with thumbnail + count
-4. Zooming in splits clusters into individual photos
-5. Tapping a pin opens a masonry grid of photos from that area
-6. Tapping an empty area searches for nearby photos
-7. Photos without GPS are not shown on the map
+1. Open **Memories**, then tap **Photo map**.
+2. View a full-screen Apple Maps interface.
+3. View bounded photo clusters as pins with a thumbnail and count.
+4. Zoom to change cluster granularity.
+5. Tap a pin to open a grid of photos from that area.
+6. Tap an empty area to search for nearby photos.
+7. Photos without GPS coordinates do not appear on the map.
 
 ## Architecture
 
-### Placement
+### Choose placement
 
 Button in Memories tab (same style as "Relive Your Memories" slideshow button). Keeps the tab bar at 4 tabs.
 
-### Data Flow
+### Follow the data flow
 
 ```
-1. Load all indexed photos with lat/lon from DB
-   (~20% of photos have GPS data)
+1. Load indexed photo coordinates from the database in bounded pages.
 
 2. Cluster nearby photos into map pins
-   - Group photos within ~500m radius
+   - Group photos using a documented distance and zoom-level policy
    - Pin shows count + thumbnail of best photo
-   - Zooming in reveals individual photos
+   - Zooming changes the cluster granularity
 
 3. User taps a pin → shows photo grid for that area
    - Same masonry layout as search results
@@ -43,7 +42,7 @@ Button in Memories tab (same style as "Relive Your Memories" slideshow button). 
    - Reuses GPS proximity logic from SearchEngine
 ```
 
-### SwiftUI / MapKit Implementation
+### Implement the view with SwiftUI and MapKit
 
 ```swift
 import MapKit
@@ -63,7 +62,7 @@ struct PhotoMapView: View {
 }
 ```
 
-### Data Model
+### Use the data model
 
 ```swift
 struct PhotoAnnotation: Identifiable {
@@ -75,7 +74,7 @@ struct PhotoAnnotation: Identifiable {
 }
 ```
 
-### Database Query
+### Query the database
 
 ```swift
 // New method in AppDatabase
@@ -91,12 +90,12 @@ func loadAllPhotoLocations() throws -> [(localIdentifier: String, latitude: Doub
 }
 ```
 
-### Clustering Approach
+### Cluster map annotations
 
-**Option 1: MapKit's built-in MKClusterAnnotation**
+**Option 1: MapKit's built-in `MKClusterAnnotation`**
 - Handles zoom-level clustering automatically
 - Apple manages the clustering algorithm
-- Best UX but requires UIKit bridge (MKMapView via UIViewRepresentable)
+- Requires a UIKit bridge (`MKMapView` through `UIViewRepresentable`)
 
 **Option 2: Grid-based clustering**
 - Divide visible map region into grid cells
@@ -104,34 +103,34 @@ func loadAllPhotoLocations() throws -> [(localIdentifier: String, latitude: Doub
 - Recompute on region change
 - Simpler, pure SwiftUI with Map view
 
-**Recommended:** Option 1 for production quality. Option 2 as MVP.
+Use option 1 for the initial production implementation. Use option 2 only if the UIKit bridge cannot meet the project constraints.
 
-### Performance Considerations
+### Bound performance costs
 
-- Load all lat/lon pairs once on view appear (lightweight — two Doubles per photo)
-- Annotations created lazily as the map region changes
-- Thumbnails loaded on demand when pins become visible
-- For 2,900 photos with ~500 having GPS: ~500 annotations max, well within MapKit limits
-- For large libraries (50K+ photos with GPS): need spatial indexing or server-side clustering
+- Load coordinate rows in bounded database pages.
+- Create annotations as the visible map region changes.
+- Apply a deterministic cap before retaining annotations in memory.
+- Load thumbnails only when pins become visible.
+- Add an on-device spatial index if profiling shows that page-based clustering does not meet the target on large libraries.
 
-### Photos Without GPS
+### Handle photos without GPS
 
 - Not shown on the map (map is a GPS-only feature)
-- Show info banner: "247 of 2,900 photos have location data"
+- Show a dynamic banner such as "247 of 2,900 indexed photos have location data."
 - Future: allow user to manually assign locations to photos
 
-### UI Components Needed
+### Add UI components
 
 1. **PhotoMapView** — Main map view with annotations
 2. **PhotoClusterPin** — Custom annotation view (circular thumbnail + count badge)
 3. **ClusterDetailView** — Grid of photos when a cluster is tapped (reuse masonry layout)
 4. **Map button in Memories tab** — Same style as slideshow button
 
-### Implementation Tasks
+### Implementation tasks
 
 | Task | Effort | Description |
 |------|--------|-------------|
-| 1 | Low | Add DB method to load all photos with GPS coordinates |
+| 1 | Low | Add a paged database method to load photos with GPS coordinates |
 | 2 | Medium | Create PhotoMapView with MapKit + annotations |
 | 3 | Medium | Implement clustering (grid-based MVP or MKClusterAnnotation) |
 | 4 | Low | Create cluster detail view (reuse masonry grid + full-screen viewer) |
@@ -140,20 +139,19 @@ func loadAllPhotoLocations() throws -> [(localIdentifier: String, latitude: Doub
 | 7 | Medium | Lazy thumbnail loading for visible annotations |
 | 8 | Low | Build, test, verify |
 
-**Estimated total effort:** 2-3 hours
-
 ### Dependencies
 
 - MapKit framework (already available, no additional imports needed)
 - CoreLocation (already imported for CLGeocoder in SearchEngine)
 - Existing GPS data in indexed_photos table (latitude, longitude columns)
 - Existing masonry grid layout (MemoryMasonryGrid)
-- Existing full-screen photo viewer (FullScreenPhotoViewer)
+- Existing local result viewer (`SearchResultsViewer`)
 
-### Future Enhancements
+MapKit can retrieve Apple map tiles and related map-service data. Do not attach photo contents, search query text, embeddings, or local identifiers to those requests. Document the Apple service boundary before shipping this feature.
+
+### Consider future enhancements
 
 - Heat map overlay showing photo density
 - Time slider to filter photos by date range on the map
 - "Photos near me" using current location
 - Route visualization for travel trips (connect photos chronologically)
-- Share a map view of a trip

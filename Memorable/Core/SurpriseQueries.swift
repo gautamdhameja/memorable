@@ -1,8 +1,135 @@
 import Foundation
 
+enum SurpriseQueryCache {
+    struct State: Codable, Equatable, Sendable {
+        var validatedQueries: [String]
+        var lastValidatedCount: Int
+        var contentRevision: SearchIndexContentRevision?
+
+        init(
+            validatedQueries: [String],
+            lastValidatedCount: Int,
+            contentRevision: SearchIndexContentRevision? = nil
+        ) {
+            self.validatedQueries = validatedQueries
+            self.lastValidatedCount = lastValidatedCount
+            self.contentRevision = contentRevision
+        }
+
+        func matches(_ revision: SearchIndexContentRevision) -> Bool {
+            contentRevision == revision
+        }
+
+        func couldMatch(photoCount: Int, videoCount: Int) -> Bool {
+            guard !validatedQueries.isEmpty, let contentRevision else { return false }
+            return contentRevision.photoCount == photoCount
+                && contentRevision.videoCount == videoCount
+        }
+    }
+
+    static func fileURL() throws -> URL {
+        guard let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let directory = appSupport
+            .appendingPathComponent("Memorable", isDirectory: true)
+            .appendingPathComponent("LocalState", isDirectory: true)
+        try LocalOnlyStorage.prepareDirectory(at: directory)
+        return directory.appendingPathComponent("surprise-query-cache.json")
+    }
+
+    static func load() -> State {
+        migrateLegacyDefaults()
+        do {
+            let url = try fileURL()
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return State(validatedQueries: [], lastValidatedCount: 0)
+            }
+            return try JSONDecoder().decode(State.self, from: Data(contentsOf: url))
+        } catch {
+            logger.error("[SurpriseQueryCache] Load failed: \(error.safeDiagnosticCode)")
+            return State(validatedQueries: [], lastValidatedCount: 0)
+        }
+    }
+
+    static func save(_ state: State) {
+        do {
+            let url = try fileURL()
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen])
+            try LocalOnlyStorage.excludeFromBackup(url)
+        } catch {
+            logger.error("[SurpriseQueryCache] Save failed: \(error.safeDiagnosticCode)")
+        }
+    }
+
+    static func migrateLegacyDefaults() {
+        let defaults = UserDefaults.standard
+        let queries = defaults.stringArray(forKey: AppKeys.surpriseValidatedQueries)
+        let count = defaults.object(forKey: AppKeys.surpriseLastValidatedCount) == nil
+            ? nil
+            : defaults.integer(forKey: AppKeys.surpriseLastValidatedCount)
+        guard queries != nil || count != nil else { return }
+
+        if let queries, let count {
+            save(State(validatedQueries: queries, lastValidatedCount: count))
+        } else if let queries {
+            save(State(validatedQueries: queries, lastValidatedCount: 0))
+        } else if let count {
+            save(State(validatedQueries: [], lastValidatedCount: count))
+        }
+        // This cache is derived and rebuildable. Remove backup-eligible legacy
+        // values even if local persistence is unavailable.
+        defaults.removeObject(forKey: AppKeys.surpriseValidatedQueries)
+        defaults.removeObject(forKey: AppKeys.surpriseLastValidatedCount)
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: AppKeys.surpriseValidatedQueries)
+        UserDefaults.standard.removeObject(forKey: AppKeys.surpriseLastValidatedCount)
+        guard let url = try? fileURL() else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
+enum SurpriseQueryValidationOperation {
+    static func run(
+        candidates: [String],
+        evaluate: (String) async throws -> Bool,
+        persist: ([String]) -> Void,
+        onError: (Error) -> Void
+    ) async throws -> [String] {
+        var valid: [String] = []
+        for query in candidates {
+            try Task.checkCancellation()
+            do {
+                if try await evaluate(query) {
+                    valid.append(query)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                onError(error)
+            }
+        }
+        try Task.checkCancellation()
+        persist(valid)
+        return valid
+    }
+}
+
 class SurpriseQueries {
-    private static let storageKey = AppKeys.surpriseValidatedQueries
-    private static let lastValidatedCountKey = AppKeys.surpriseLastValidatedCount
+    static let cachedRevalidationLimit = 3
+
+    struct ValidationPlan {
+        let candidates: [String]
+        let persistedCount: Int
+        let revalidatesCachedSubset: Bool
+        let reusesUnchangedCache: Bool
+    }
 
     static let candidates = [
         "golden hour",
@@ -47,56 +174,127 @@ class SurpriseQueries {
         "books and reading",
     ]
 
-    /// Validated queries that are known to match photos in this user's library.
-    static func loadValidated() -> [String] {
-        UserDefaults.standard.stringArray(forKey: storageKey) ?? []
+    /// Recheck a bounded cached shortlist on routine launches, but retain the
+    /// full-validation baseline so small index additions accumulate toward the
+    /// threshold that refreshes the complete candidate pool.
+    static func validationPlan(
+        cachedState: SurpriseQueryCache.State,
+        currentSize: Int,
+        currentRevision: SearchIndexContentRevision? = nil
+    ) -> ValidationPlan {
+        if let currentRevision, cachedState.matches(currentRevision) {
+            return ValidationPlan(
+                candidates: [],
+                persistedCount: cachedState.lastValidatedCount,
+                revalidatesCachedSubset: false,
+                reusesUnchangedCache: true
+            )
+        }
+        let lastSize = cachedState.lastValidatedCount
+        let growth = Double(currentSize - lastSize) / Double(max(lastSize, 1))
+        let canReuseShortlist = lastSize > 0
+            && currentSize >= lastSize
+            && growth < IndexingConfig.surpriseRevalidationGrowth
+            && currentSize > 0
+        if canReuseShortlist {
+            return ValidationPlan(
+                candidates: Array(
+                    cachedState.validatedQueries.shuffled().prefix(cachedRevalidationLimit)
+                ),
+                persistedCount: lastSize,
+                revalidatesCachedSubset: true,
+                reusesUnchangedCache: false
+            )
+        }
+        return ValidationPlan(
+            candidates: candidates,
+            persistedCount: currentSize,
+            revalidatesCachedSubset: false,
+            reusesUnchangedCache: false
+        )
     }
 
-    /// Pick a random query from validated set, or from candidates if none validated yet.
-    static func random() -> String {
-        let validated = loadValidated()
-        if !validated.isEmpty {
-            return validated.randomElement() ?? "a beautiful memory"
+    static func updatedCacheState(
+        validatedQueries: [String],
+        plan: ValidationPlan,
+        previous: SurpriseQueryCache.State,
+        currentRevision: SearchIndexContentRevision? = nil
+    ) -> SurpriseQueryCache.State {
+        let persistedQueries: [String]
+        if plan.revalidatesCachedSubset {
+            let revalidated = Set(plan.candidates)
+            persistedQueries = previous.validatedQueries.filter { !revalidated.contains($0) }
+                + validatedQueries
+        } else {
+            persistedQueries = validatedQueries
         }
-        return candidates.randomElement() ?? "a beautiful memory"
+        return SurpriseQueryCache.State(
+            validatedQueries: persistedQueries,
+            lastValidatedCount: plan.persistedCount,
+            contentRevision: currentRevision
+        )
+    }
+
+    static func cachedQueries(
+        from cachedState: SurpriseQueryCache.State,
+        matching contentRevision: SearchIndexContentRevision
+    ) -> [String] {
+        guard cachedState.matches(contentRevision) else { return [] }
+        return cachedState.validatedQueries
     }
 
     /// Run all candidate queries against the search engine and keep only those
     /// that return at least one result above the score threshold.
     /// Call this after indexing completes.
-    static func validateQueries(using searchEngine: SearchEngine) async {
-        // Throttle: only re-validate if index grew by >10%
-        let currentSize = searchEngine.indexSize
-        let lastSize = UserDefaults.standard.integer(forKey: lastValidatedCountKey)
-        if lastSize > 0 {
-            let growth = Double(currentSize - lastSize) / Double(max(lastSize, 1))
-            if growth < IndexingConfig.surpriseRevalidationGrowth && currentSize > 0 {
-                return // Skip validation, index hasn't changed enough
-            }
+    static func validateQueries(
+        using searchEngine: SearchEngine,
+        contentRevision: SearchIndexContentRevision
+    ) async -> [String] {
+        let currentSize = searchEngine.totalSize
+        let cachedState = SurpriseQueryCache.load()
+        let plan = validationPlan(
+            cachedState: cachedState,
+            currentSize: currentSize,
+            currentRevision: contentRevision
+        )
+        if plan.reusesUnchangedCache {
+            return cachedState.validatedQueries
         }
 
-        var valid: [String] = []
-
-        for query in candidates {
-            do {
-                let response = try await searchEngine.search(query: query)
-                if !response.results.isEmpty {
-                    valid.append(query)
+        do {
+            return try await SurpriseQueryValidationOperation.run(
+                candidates: plan.candidates,
+                evaluate: { query in
+                    let response = try await searchEngine.search(
+                        query: query,
+                        recordsUserTiming: false
+                    )
+                    return !response.results.isEmpty
+                },
+                persist: { valid in
+                    let state = updatedCacheState(
+                        validatedQueries: valid,
+                        plan: plan,
+                        previous: cachedState,
+                        currentRevision: contentRevision
+                    )
+                    guard state != cachedState else { return }
+                    SurpriseQueryCache.save(state)
+                },
+                onError: { error in
+                    logger.error("[SurpriseQueries] Validation failed: \(error.safeDiagnosticCode)")
                 }
-            } catch {
-                #if DEBUG
-                logger.error("[SurpriseQueries] Validation failed for '\(query)': \(error.localizedDescription)")
-                #endif
-            }
+            )
+        } catch is CancellationError {
+            return []
+        } catch {
+            logger.error("[SurpriseQueries] Validation stopped: \(error.safeDiagnosticCode)")
+            return []
         }
-
-        UserDefaults.standard.set(valid, forKey: storageKey)
-        UserDefaults.standard.set(currentSize, forKey: lastValidatedCountKey)
     }
 
     /// Clear cached validated queries (e.g. after re-indexing).
     static func clearValidated() {
-        UserDefaults.standard.removeObject(forKey: storageKey)
-        UserDefaults.standard.removeObject(forKey: lastValidatedCountKey)
+        SurpriseQueryCache.clear()
     }
 }

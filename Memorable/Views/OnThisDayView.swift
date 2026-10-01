@@ -1,215 +1,362 @@
 import SwiftUI
-import Photos
-import AVKit
 
 struct OnThisDayView: View {
-    let captionService: PhotoCaptionService
     @Environment(\.database) private var database
-    @State private var yearGroups: [(year: Int, ids: [String])] = []
+    @State private var yearGroups: [(year: Int, photos: [IndexedPhotoReference])] = []
     @State private var isLoading = true
     @State private var showSlideshow = false
     @State private var indexedCount = 0
+    @State private var loadFailed = false
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Celestial.Colors.background.ignoresSafeArea()
+        ZStack {
+            CelestialBackdrop()
 
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // Relive Memories button
-                        if indexedCount > 0 {
-                            Button(action: { showSlideshow = true }) {
-                                HStack(spacing: 14) {
-                                    Image(systemName: "play.circle.fill")
-                                        .font(.system(size: 36))
-                                        .foregroundStyle(Celestial.Colors.amber)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text("Relive Your Memories")
-                                            .font(.system(.body, design: .rounded, weight: .semibold))
-                                            .foregroundStyle(Celestial.Colors.onSurface)
-                                        Text("Watch a slideshow of your photos with captions")
-                                            .font(.footnote)
-                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.footnote)
-                                        .foregroundStyle(Celestial.Colors.outlineVariant)
-                                }
-                                .padding(16)
-                                .background(Celestial.Colors.surfaceVariant.opacity(0.4))
-                                .background(.ultraThinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
-                            .padding(.bottom, 8)
-                        }
-
-                        // On This Day section
-                        if isLoading {
-                            ProgressView()
-                                .tint(Celestial.Colors.primaryDim)
-                                .padding(.top, 60)
-                        } else if yearGroups.isEmpty {
-                            VStack(spacing: 16) {
-                                Image(systemName: indexedCount == 0 ? "photo.on.rectangle.angled" : "calendar")
-                                    .font(.system(size: 48, weight: .thin))
-                                    .foregroundStyle(Celestial.Colors.outlineVariant)
-                                if indexedCount == 0 {
-                                    Text("Index your photo library to unlock memories")
-                                        .font(.subheadline)
-                                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                        .multilineTextAlignment(.center)
-                                    Text("Go to Search and tap \"Build Search Index\"")
-                                        .font(.caption)
-                                        .foregroundStyle(Celestial.Colors.outlineVariant)
-                                } else {
-                                    Text("No memories from this day in previous years")
-                                        .font(.subheadline)
-                                        .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                                        .multilineTextAlignment(.center)
-                                }
-                            }
+            ScrollView {
+                VStack(spacing: 0) {
+                    if isLoading {
+                        ProgressView()
+                            .tint(Celestial.Colors.primaryDim)
                             .padding(.top, 60)
-                            .padding(.horizontal)
-                        } else {
-                            // Section header
-                            HStack {
-                                Text("ON THIS DAY")
-                                    .font(.caption.weight(.medium))
-                                    .tracking(1.5)
-                                    .foregroundStyle(Celestial.Colors.amber)
-                                Spacer()
+                    } else if loadFailed {
+                        // A failed read says nothing about the index. Without
+                        // this branch the screen told the user to build one.
+                        VStack(spacing: Celestial.Spacing.contentGap) {
+                            CelestialGlassIcon(
+                                systemName: "exclamationmark.triangle",
+                                tint: Celestial.Colors.error,
+                                size: 64
+                            )
+                            Text("Memories couldn't load")
+                                .font(Celestial.Typography.supporting)
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                            Text("Go back and open Memories again.")
+                                .font(Celestial.Typography.caption)
+                                .foregroundStyle(Celestial.Colors.outline)
+                        }
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 60)
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                    } else if yearGroups.isEmpty {
+                        VStack(spacing: Celestial.Spacing.contentGap) {
+                            CelestialGlassIcon(
+                                systemName: indexedCount == 0 ? "photo.on.rectangle.angled" : "calendar",
+                                tint: Celestial.Colors.onSurfaceVariant,
+                                size: 64
+                            )
+                            if indexedCount == 0 {
+                                Text("Index your photo library to unlock memories")
+                                    .font(Celestial.Typography.supporting)
+                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                    .multilineTextAlignment(.center)
+                                Text("Go to Search and tap \"Build Search Index\"")
+                                    .font(Celestial.Typography.caption)
+                                    .foregroundStyle(Celestial.Colors.outline)
+                            } else {
+                                Text("No memories from this day in previous years")
+                                    .font(Celestial.Typography.supporting)
+                                    .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                                    .multilineTextAlignment(.center)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 20)
-                            .padding(.bottom, 8)
+                        }
+                        .padding(.top, 60)
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                    } else {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("ON THIS DAY")
+                                .font(Celestial.Typography.eyebrow)
+                                .tracking(1.4)
+                                .foregroundStyle(Celestial.Colors.amber)
+                            Text(Date.now.formatted(.dateTime.month(.wide).day()))
+                                .font(Celestial.Typography.display)
+                                .foregroundStyle(Celestial.Colors.onSurface)
+                                .padding(.top, 10)
+                            Text(memorySummary)
+                                .font(Celestial.Typography.supporting)
+                                .foregroundStyle(Celestial.Colors.secondary)
+                                .padding(.top, 8)
 
-                            LazyVStack(spacing: 0) {
-                                ForEach(yearGroups, id: \.year) { group in
-                                    HStack {
+                            Button(action: { showSlideshow = true }) {
+                                Label("Relive your memories", systemImage: "play.fill")
+                            }
+                            .celestialPrimaryButtonStyle(
+                                tint: Celestial.Colors.onSurface,
+                                foreground: Celestial.Colors.surfaceDim
+                            )
+                            .padding(.top, 22)
+                        }
+                        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+                        .padding(.top, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        LazyVStack(spacing: Celestial.Spacing.sectionGap) {
+                            ForEach(yearGroups, id: \.year) { group in
+                                VStack(spacing: 12) {
+                                    HStack(alignment: .firstTextBaseline) {
                                         Text("\(String(group.year))")
-                                            .font(.system(.title3, design: .rounded, weight: .semibold))
+                                            .font(Celestial.Typography.title2)
                                             .foregroundStyle(Celestial.Colors.onSurface)
-                                        Text("\(group.ids.count) photos")
-                                            .font(.footnote)
-                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                         Spacer()
+                                        Text(CountPhrase.string(allPhotos(in: group.year).count, "photo"))
+                                            .font(Celestial.Typography.caption)
+                                            .foregroundStyle(Celestial.Colors.onSurfaceVariant)
                                     }
-                                    .padding(.horizontal, 16)
-                                    .padding(.top, 16)
-                                    .padding(.bottom, 10)
+                                    .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
 
-                                    MasonryGrid(group.ids.prefix(20).map { IdentifiedString(id: $0) }, spacing: 6) { item in
-                                        MemoryThumbnail(localIdentifier: item.id, groupIds: group.ids)
+                                    MasonryGrid(
+                                        Array(group.photos.prefix(20)),
+                                        spacing: 4,
+                                        aspectRatio: { MediaTileAspectRatio.ratio(for: $0) }
+                                    ) { photo in
+                                        MemoryThumbnail(
+                                            photo: photo,
+                                            groupPhotos: allPhotos(in: group.year)
+                                        )
                                     }
-                                    .padding(.horizontal, 6)
+                                    .padding(.horizontal, 4)
                                 }
                             }
                         }
-                    }
-                    .padding(.bottom, 40)
-                }
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 10) {
-                        Image("AppIconTransparent")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 36, height: 36)
-                        Text("Memories")
-                            .font(.system(.title3, design: .rounded, weight: .semibold))
-                            .foregroundStyle(Celestial.Colors.onSurface)
+                        .padding(.top, Celestial.Spacing.sectionGap)
                     }
                 }
-            }
-            .preferredColorScheme(.dark)
-            .fullScreenCover(isPresented: $showSlideshow) {
-                MemorySlideshowView(captionService: captionService)
+                .padding(.bottom, 40)
             }
         }
+        .celestialNavigationTitle("Memories")
+        .preferredColorScheme(.dark)
+        .fullScreenCover(isPresented: $showSlideshow) {
+            MemorySlideshowView()
+        }
         .task {
-            indexedCount = (try? database.indexedCount()) ?? 0
             do {
-                yearGroups = try database.onThisDayPhotos()
+                let database = database
+                let snapshot = try await CancellableDetachedOperation.run {
+                    (
+                        hasIndexedPhotos: try database.hasIndexedPhotos(),
+                        yearGroups: try database.onThisDayPhotos()
+                    )
+                }
+                indexedCount = snapshot.hasIndexedPhotos ? 1 : 0
+                yearGroups = snapshot.yearGroups
+            } catch is CancellationError {
+                return
             } catch {
-                logger.error("On This Day error: \(error.localizedDescription)")
+                logger.error("On This Day error: \(error.safeDiagnosticCode)")
+                loadFailed = true
             }
             isLoading = false
         }
+    }
+
+    private var memorySummary: String {
+        let photos = CountPhrase.string(yearGroups.reduce(0) { $0 + $1.photos.count }, "photo")
+        guard yearGroups.count > 1 else { return photos }
+        return "\(photos) across \(CountPhrase.string(yearGroups.count, "year"))"
+    }
+
+    private func allPhotos(in year: Int) -> [IndexedPhotoReference] {
+        yearGroups.first(where: { $0.year == year })?.photos ?? []
+    }
+}
+
+/// The foreground preserves the complete photo; the blurred layer fills its backdrop.
+struct MemoryPhotoImage: View {
+    let image: UIImage
+    let backgroundBlurRadius: CGFloat
+
+    var body: some View {
+        // Fill and fit layers can exceed their proposed size. An overlay keeps
+        // those drawing dimensions out of the scroll view's layout calculation.
+        Color.clear.overlay {
+            ZStack {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .blur(radius: backgroundBlurRadius)
+                    .scaleEffect(1.08)
+                    .opacity(0.5)
+                    .accessibilityHidden(true)
+
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            }
+        }
+        .clipped()
     }
 }
 
 // MARK: - Memory Thumbnail
 
+private enum MemoryThumbnailRecoveryCoordinator {
+    private static let permits = CancellablePermitPool(limit: 2)
+
+    static func load(
+        _ operation: @escaping @Sendable () async -> UIImage?
+    ) async -> UIImage? {
+        guard await permits.acquire() else { return nil }
+        if Task.isCancelled {
+            await permits.release()
+            return nil
+        }
+        let image = await operation()
+        await permits.release()
+        return Task.isCancelled ? nil : image
+    }
+}
+
 struct MemoryThumbnail: View {
-    let localIdentifier: String
-    var groupIds: [String] = []
+    let photo: IndexedPhotoReference
+    var groupPhotos: [IndexedPhotoReference] = []
+    var searchEngine: SearchEngine? = nil
+    var accessibilityTitle: String? = nil
+    /// The screen this thumbnail sits on, shown on the viewer's back button.
+    var viewerBackTitle: String = "Memories"
     @State private var thumbnail: UIImage?
+    @State private var isLoading = true
+    @State private var imageLoadGeneration: UInt = 0
+    @State private var imageLoadTask: Task<Void, Never>?
     @State private var selectedResult: SearchResult?
     @State private var creationDate: Date?
+    @State private var tileSize: CGSize = .zero
+    @State private var loadedMaxDimension: CGFloat?
+    @Environment(\.displayScale) private var displayScale
 
-    private var aspectRatio: CGFloat {
-        guard let thumb = thumbnail else { return 4.0/3.0 }
-        guard thumb.size.height > 0 else { return 4.0/3.0 }
-        let raw = thumb.size.width / thumb.size.height
-        return min(max(raw, 9.0/16.0), 16.0/9.0)
+    private var requestedMaxDimension: CGFloat? {
+        TileImagePixelSizePolicy.maxDimension(for: tileSize, displayScale: displayScale)
     }
 
-    var body: some View {
+    private var aspectRatio: CGFloat {
+        MemoryCardLayout.aspectRatio(for: photo)
+    }
+
+    static func imageContent(
+        thumbnail: UIImage?, isLoading: Bool, aspectRatio: CGFloat
+    ) -> some View {
         ZStack {
             if let thumb = thumbnail {
-                Image(uiImage: thumb)
-                    .resizable()
-                    .aspectRatio(aspectRatio, contentMode: .fit)
+                MemoryPhotoImage(image: thumb, backgroundBlurRadius: 12)
             } else {
                 Rectangle()
                     .fill(Celestial.Colors.surfaceContainer)
-                    .aspectRatio(4.0/3.0, contentMode: .fit)
                     .overlay {
-                        ProgressView()
-                            .tint(Celestial.Colors.outlineVariant)
-                            .controlSize(.small)
+                        if isLoading {
+                            ProgressView()
+                                .tint(Celestial.Colors.outlineVariant)
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "photo.badge.exclamationmark")
+                                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
+                        }
                     }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .aspectRatio(aspectRatio, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+
+    var body: some View {
+        Button(action: handleTap) {
+            Self.imageContent(thumbnail: thumbnail, isLoading: isLoading, aspectRatio: aspectRatio)
+        }
+        .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(creationDate.map { "Memory from \(DateFormatter.mediumDate.string(from: $0))" } ?? "Memory photo")
+        .accessibilityLabel(accessibilityTitle ?? creationDate.map { "Memory from \(DateFormatter.mediumDate.string(from: $0))" } ?? "Memory photo")
+        .accessibilityValue(!isLoading && thumbnail == nil ? "Preview unavailable" : "")
         .accessibilityAddTraits(.isImage)
-        .accessibilityAddTraits(.isButton)
-        .onTapGesture { handleTap() }
         .fullScreenCover(item: $selectedResult) { result in
             SearchResultsViewer(
                 initialResult: result,
-                allResults: groupIds.map { id in
-                    SearchResult(id: id, score: 1.0, localIdentifier: id, creationDate: nil, isVideo: false, bestFramePosition: nil)
-                }
+                allResults: groupPhotos.map(\.searchResult),
+                searchEngine: searchEngine,
+                backTitle: viewerBackTitle
             )
         }
-        .task {
-            if let asset = PhotoLibrary.getAsset(by: localIdentifier) {
-                thumbnail = await PhotoLibrary.loadThumbnail(for: asset)
-                creationDate = asset.creationDate
-            }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { tileSize = $0 }
+        .task(id: requestedMaxDimension) {
+            guard let maxDimension = requestedMaxDimension,
+                  thumbnail == nil || TileImagePixelSizePolicy.needsReload(
+                      loaded: loadedMaxDimension,
+                      requested: maxDimension
+                  ) else { return }
+            let task = startImageLoad(maxDimension: maxDimension)
+            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            handleMemoryPressure()
+        }
+        .onDisappear {
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
+            imageLoadGeneration &+= 1
         }
     }
 
     private func handleTap() {
-        guard let asset = PhotoLibrary.getAsset(by: localIdentifier) else { return }
+        selectedResult = photo.searchResult
+    }
 
-        if asset.mediaType == .video {
-            presentVideoPlayer(for: asset)
-        } else {
-            selectedResult = SearchResult(
-                id: localIdentifier, score: 1.0, localIdentifier: localIdentifier,
-                creationDate: creationDate, isVideo: false, bestFramePosition: nil
-            )
+    private func startImageLoad(
+        maxDimension: CGFloat,
+        delayNanoseconds: UInt64 = 0,
+        coordinatesRecovery: Bool = false
+    ) -> Task<Void, Never> {
+        imageLoadTask?.cancel()
+        isLoading = true
+        let task = Task { @MainActor in
+            if delayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            imageLoadGeneration &+= 1
+            let generation = imageLoadGeneration
+            let result = photo.searchResult
+            let load: @Sendable () async -> UIImage? = {
+                await PhotoLibrary.loadPreviewImage(
+                    for: result,
+                    targetSize: CGSize(width: maxDimension, height: maxDimension)
+                )
+            }
+            let loaded = if coordinatesRecovery {
+                await MemoryThumbnailRecoveryCoordinator.load(load)
+            } else {
+                await load()
+            }
+            guard ImageLoadGenerationPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: imageLoadGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            // Keep a sharper image already on screen if the larger request
+            // fails, rather than blanking the tile.
+            if let loaded {
+                thumbnail = loaded
+                loadedMaxDimension = maxDimension
+            } else if thumbnail == nil {
+                loadedMaxDimension = nil
+            }
+            isLoading = false
+            creationDate = photo.creationDate
         }
+        imageLoadTask = task
+        return task
+    }
+
+    private func handleMemoryPressure() {
+        imageLoadTask?.cancel()
+        imageLoadTask = nil
+        imageLoadGeneration &+= 1
+        MemoryPressureReleasePolicy.release(&thumbnail)
+        loadedMaxDimension = nil
+        _ = startImageLoad(
+            maxDimension: requestedMaxDimension ?? TileImagePixelSizePolicy.minimum,
+            delayNanoseconds: MemoryPressureImageRecoveryPolicy.retryDelayNanoseconds,
+            coordinatesRecovery: true
+        )
     }
 }

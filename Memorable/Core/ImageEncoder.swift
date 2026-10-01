@@ -1,26 +1,38 @@
 import CoreML
 import UIKit
 import Accelerate
+import os
 
-class ImageEncoder {
-    private var model: MLModel
+final class ImageEncoder: Sendable {
+    private let model: OSAllocatedUnfairLock<any CoreMLModelPredicting>
 
-    init() throws {
-        // Load the compiled Core ML model from the app bundle
-        let config = MLModelConfiguration()
-        #if targetEnvironment(simulator)
-        config.computeUnits = .cpuOnly  // Simulator lacks Neural Engine / GPU
-        #else
-        config.computeUnits = .all  // Use Neural Engine + GPU + CPU
+    init(resourceManager: ModelResourceManaging = ModelResourceManager.shared) async throws {
+        try Task.checkCancellation()
+        let modelURL = try resourceManager.url(for: .imageEncoder)
+        #if DEBUG || STARTUP_METRICS
+        let startedAt = CFAbsoluteTimeGetCurrent()
         #endif
-        guard let modelURL = Bundle.main.url(forResource: "SigLIP2_ImageEncoder", withExtension: "mlmodelc") else {
-            throw ImageEncoderError.modelNotFound
-        }
-        self.model = try MLModel(contentsOf: modelURL, configuration: config)
+        let loadedModel = try await MLModel.load(
+            contentsOf: modelURL,
+            configuration: Self.modelConfiguration()
+        )
+        #if DEBUG || STARTUP_METRICS
+        PerformanceMetrics.shared.record(
+            PerformancePhase.imageModelLoad,
+            durationSeconds: CFAbsoluteTimeGetCurrent() - startedAt
+        )
+        #endif
+        try Task.checkCancellation()
+        self.model = OSAllocatedUnfairLock(initialState: loadedModel)
+    }
+
+    init(model: any CoreMLModelPredicting) {
+        self.model = OSAllocatedUnfairLock(initialState: model)
     }
 
     // Encode a UIImage into a 768-dimensional normalized embedding vector
     func encode(image: UIImage) throws -> [Float] {
+        try Task.checkCancellation()
         guard let pixelBuffer = image.toPixelBuffer(width: 224, height: 224) else {
             throw ImageEncoderError.preprocessingFailed
         }
@@ -29,41 +41,78 @@ class ImageEncoder {
         let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
             "pixel_values": MLFeatureValue(multiArray: inputArray)
         ])
+        try Task.checkCancellation()
 
-        let output: MLFeatureProvider
-        do {
-            output = try model.prediction(from: inputFeatures)
-        } catch let originalError {
-            logger.warning("[ImageEncoder] Prediction failed, reloading model: \(originalError.localizedDescription)")
-            do {
-                try reloadModel()
-                output = try model.prediction(from: inputFeatures)
-            } catch {
-                logger.error("[ImageEncoder] Prediction failed after model reload: \(error.localizedDescription)")
-                throw originalError
-            }
-        }
+        let output = try currentModel().prediction(from: inputFeatures)
 
         guard let embeddingArray = output.featureValue(for: "image_embedding")?.multiArrayValue else {
             throw ImageEncoderError.outputExtractionFailed
         }
 
         var embedding = embeddingArray.toFloatArray()
-        embedding.l2Normalize()
+        try Task.checkCancellation()
+        guard embedding.count == EmbeddingConfig.dimensions else {
+            throw ImageEncoderError.invalidEmbedding
+        }
+        guard embedding.l2Normalize() else { throw ImageEncoderError.invalidEmbedding }
         return embedding
     }
 
-    private func reloadModel() throws {
+    /// Uses Core ML's async prediction API so cancellation can stop an active
+    /// production inference instead of only discarding its eventual result.
+    func encodeCancellable(image: UIImage) async throws -> [Float] {
+        try Task.checkCancellation()
+        guard let pixelBuffer = image.toPixelBuffer(width: 224, height: 224) else {
+            throw ImageEncoderError.preprocessingFailed
+        }
+        let inputArray = try pixelBufferToMLMultiArray(
+            pixelBuffer: pixelBuffer,
+            width: 224,
+            height: 224
+        )
+        let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
+            "pixel_values": MLFeatureValue(multiArray: inputArray),
+        ])
+        try Task.checkCancellation()
+        let output = try await currentModel().cancellablePrediction(from: inputFeatures)
+        try Task.checkCancellation()
+        guard let embeddingArray = output.featureValue(
+            for: "image_embedding"
+        )?.multiArrayValue else {
+            throw ImageEncoderError.outputExtractionFailed
+        }
+        var embedding = embeddingArray.toFloatArray()
+        guard embedding.count == EmbeddingConfig.dimensions,
+              embedding.l2Normalize() else {
+            throw ImageEncoderError.invalidEmbedding
+        }
+        return embedding
+    }
+
+    /// Keep inference single-flight and release each image's feature buffers
+    /// before starting the next item. This bounds cancellation-time memory.
+    func encodeBatchCancellable(images: [UIImage]) async throws -> [[Float]] {
+        var embeddings: [[Float]] = []
+        embeddings.reserveCapacity(images.count)
+        for image in images {
+            try Task.checkCancellation()
+            embeddings.append(try await encodeCancellable(image: image))
+        }
+        return embeddings
+    }
+
+    private func currentModel() -> any CoreMLModelPredicting {
+        model.withLock { $0 }
+    }
+
+    private static func modelConfiguration() -> MLModelConfiguration {
         let config = MLModelConfiguration()
         #if targetEnvironment(simulator)
         config.computeUnits = .cpuOnly
         #else
         config.computeUnits = .all
         #endif
-        guard let modelURL = Bundle.main.url(forResource: "SigLIP2_ImageEncoder", withExtension: "mlmodelc") else {
-            throw ImageEncoderError.modelNotFound
-        }
-        self.model = try MLModel(contentsOf: modelURL, configuration: config)
+        return config
     }
 
     private func pixelBufferToMLMultiArray(pixelBuffer: CVPixelBuffer, width: Int, height: Int) throws -> MLMultiArray {
@@ -88,6 +137,7 @@ class ImageEncoder {
         let ptr = array.dataPointer.bindMemory(to: Float16.self, capacity: 3 * pixelCount)
 
         for y in 0..<height {
+            if y.isMultiple(of: 16) { try Task.checkCancellation() }
             for x in 0..<width {
                 let offset = y * bytesPerRow + x * 4
                 let r = (Float(pixels[offset + 2]) / 255.0 - mean[0]) / std[0]
@@ -104,66 +154,11 @@ class ImageEncoder {
         return array
     }
 
-    /// Batch-encode multiple images in a single Core ML prediction call.
-    /// The Neural Engine is much more efficient with batched inputs.
-    /// Returns array of L2-normalized embedding vectors (same order as input).
-    func encodeBatch(images: [UIImage]) throws -> [[Float]] {
-        guard !images.isEmpty else { return [] }
-
-        #if DEBUG
-        let batchStart = CFAbsoluteTimeGetCurrent()
-        #endif
-
-        // Preprocess all images into MLFeatureProviders
-        var featureProviders: [MLFeatureProvider] = []
-        for image in images {
-            guard let pixelBuffer = image.toPixelBuffer(width: 224, height: 224) else {
-                throw ImageEncoderError.preprocessingFailed
-            }
-            let inputArray = try pixelBufferToMLMultiArray(pixelBuffer: pixelBuffer, width: 224, height: 224)
-            let features = try MLDictionaryFeatureProvider(dictionary: [
-                "pixel_values": MLFeatureValue(multiArray: inputArray)
-            ])
-            featureProviders.append(features)
-        }
-
-        // Run batch prediction
-        let batchProvider = MLArrayBatchProvider(array: featureProviders)
-        let batchResults: MLBatchProvider
-        do {
-            batchResults = try model.predictions(from: batchProvider, options: MLPredictionOptions())
-        } catch {
-            #if DEBUG
-            logger.warning("[ImageEncoder] Batch prediction failed, reloading model: \(error.localizedDescription)")
-            #endif
-            try reloadModel()
-            batchResults = try model.predictions(from: batchProvider, options: MLPredictionOptions())
-        }
-
-        // Extract embeddings
-        var embeddings: [[Float]] = []
-        for i in 0..<batchResults.count {
-            let output = batchResults.features(at: i)
-            guard let embeddingArray = output.featureValue(for: "image_embedding")?.multiArrayValue else {
-                throw ImageEncoderError.outputExtractionFailed
-            }
-
-            var embedding = embeddingArray.toFloatArray()
-            embedding.l2Normalize()
-            embeddings.append(embedding)
-        }
-
-        #if DEBUG
-        logger.info("[ImageEncoder] Batch of \(images.count) images encoded in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - batchStart))s")
-        #endif
-
-        return embeddings
-    }
-
-    enum ImageEncoderError: LocalizedError {
+    enum ImageEncoderError: LocalizedError, Equatable {
         case modelNotFound
         case preprocessingFailed
         case outputExtractionFailed
+        case invalidEmbedding
 
         var errorDescription: String? {
             switch self {
@@ -173,6 +168,8 @@ class ImageEncoder {
                 return "Failed to process the image. The file may be corrupted."
             case .outputExtractionFailed:
                 return "The image analysis model returned an unexpected result."
+            case .invalidEmbedding:
+                return "The image analysis model returned an invalid embedding."
             }
         }
     }
@@ -181,6 +178,8 @@ class ImageEncoder {
 // UIImage extension to create a pixel buffer
 extension UIImage {
     func toPixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
+        guard cgImage != nil || ciImage != nil else { return nil }
+
         let attrs = [
             kCVPixelBufferCGImageCompatibilityKey: true as CFBoolean,
             kCVPixelBufferCGBitmapContextCompatibilityKey: true as CFBoolean
@@ -202,12 +201,20 @@ extension UIImage {
             bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         )
 
-        guard let ctx = context, let cgImage = self.cgImage else {
+        guard let ctx = context else {
             CVPixelBufferUnlockBaseAddress(buffer, [])
             return nil
         }
 
-        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        // UIKit drawing assumes a top-left origin, while a raw bitmap context
+        // uses a bottom-left origin. Align the context before drawing so row 0
+        // contains the visually top row while UIImage still applies its EXIF
+        // orientation.
+        ctx.translateBy(x: 0, y: CGFloat(height))
+        ctx.scaleBy(x: 1, y: -1)
+        UIGraphicsPushContext(ctx)
+        self.draw(in: CGRect(x: 0, y: 0, width: width, height: height))
+        UIGraphicsPopContext()
         CVPixelBufferUnlockBaseAddress(buffer, [])
 
         return buffer

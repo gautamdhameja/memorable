@@ -19,6 +19,15 @@ final class AppConstantsTests: XCTestCase {
     func testOnboardingKeyStable() {
         // Key must never change — existing users depend on it
         XCTAssertEqual(AppKeys.onboardingComplete, "onboarding_complete")
+        XCTAssertEqual(AppKeys.startIndexAfterOnboarding, "start_index_after_onboarding")
+        XCTAssertEqual(
+            AppKeys.initialIndexingExperiencePending,
+            "indexing.initialExperiencePending"
+        )
+        XCTAssertEqual(
+            AppKeys.initialIndexingExperienceCompleted,
+            "indexing.initialExperienceCompleted"
+        )
     }
 
     // MARK: - IndexingConfig
@@ -52,6 +61,6 @@ final class AppConstantsTests: XCTestCase {
     // MARK: - FreeTier
 
     func testFreeTierLimit() {
-        XCTAssertGreaterThan(FreeTier.maxPhotos, 0)
+        XCTAssertGreaterThan(FreeTier.maxIndexedMedia, 0)
     }
 }

@@ -1,0 +1,131 @@
+[
+  {
+    "text": "dog",
+    "relevantIDs": [
+      "000000482917",
+      "000000170893"
+    ],
+    "requiredTextIDs": [],
+    "expectsNoMainResults": false,
+    "allowsFallback": true
+  },
+  {
+    "text": "black cat",
+    "relevantIDs": [
+      "000000107087"
+    ],
+    "requiredTextIDs": [],
+    "expectsNoMainResults": false,
+    "allowsFallback": true
+  },
+  {
+    "text": "bicycle",
+    "relevantIDs": [
+      "000000492937",
+      "000000224051",
+      "000000070774"
+    ],
+    "requiredTextIDs": [],
+    "expectsNoMainResults": false,
+    "allowsFallback": false
+  },
+  {
+    "text": "airplane",
+    "relevantIDs": [
+      "000000338325",
+      "000000096549",
+      "000000099054",
+      "000000098520",
+      "000000520324",
+      "000000408112",
+      "000000208901"
+    ],
+    "requiredTextIDs": [],
+    "expectsNoMainResults": false,
+    "allowsFallback": false
+  },
+  {
+    "text": "computers on a desk",
+    "relevantIDs": [
+      "000000190236",
+      "000000063740",
+      "000000127987",
+      "000000570782"
+    ],
+    "requiredTextIDs": [],
+    "expectsNoMainResults": false,
+    "allowsFallback": false
+  },
+  {
+    "text": "mountains and rivers",
+    "relevantIDs": [
+      "alpine-river",
+      "landscape-worksheet"
+    ],
+    "requiredTextIDs": [
+      "landscape-worksheet"
+    ],
+    "expectsNoMainResults": false,
+    "allowsFallback": false
+  },
+  {
+    "text": "pulse heart centre",
+    "relevantIDs": [
+      "clinic-sign",
+      "appointment-card"
+    ],
+    "requiredTextIDs": [
+      "clinic-sign",
+      "appointment-card"
+    ],
+    "expectsNoMainResults": false,
+    "allowsFallback": false
+  },
+  {
+    "text": "appointment confirmation",
+    "relevantIDs": [
+      "appointment-card"
+    ],
+    "requiredTextIDs": [
+      "appointment-card"
+    ],
+    "expectsNoMainResults": false,
+    "allowsFallback": false
+  },
+  {
+    "text": "reservation 482913",
+    "relevantIDs": [
+      "booking-screenshot"
+    ],
+    "requiredTextIDs": [
+      "booking-screenshot"
+    ],
+    "expectsNoMainResults": false,
+    "allowsFallback": false
+  },
+  {
+    "text": "aster hotel",
+    "relevantIDs": [
+      "booking-screenshot"
+    ],
+    "requiredTextIDs": [
+      "booking-screenshot"
+    ],
+    "expectsNoMainResults": false,
+    "allowsFallback": false
+  },
+  {
+    "text": "quantum marmalade observatory",
+    "relevantIDs": [],
+    "requiredTextIDs": [],
+    "expectsNoMainResults": true,
+    "allowsFallback": false
+  },
+  {
+    "text": "purple unicorn submarine",
+    "relevantIDs": [],
+    "requiredTextIDs": [],
+    "expectsNoMainResults": true,
+    "allowsFallback": false
+  }
+]

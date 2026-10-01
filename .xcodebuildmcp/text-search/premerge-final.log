@@ -1,0 +1,72 @@
+
+=== /opt/homebrew/opt/python@3.14/bin/python3.14 scripts/signing_hygiene.py ===
+Signing hygiene gate passed; no credentials or local signing overrides are tracked.
+
+=== /opt/homebrew/opt/python@3.14/bin/python3.14 scripts/verify_models.py ===
+Bundled model verification passed.
+
+=== /opt/homebrew/opt/python@3.14/bin/python3.14 scripts/migration_guard.py ===
+Migration safety gate passed; no new protected-table migration deletes.
+
+=== /opt/homebrew/opt/python@3.14/bin/python3.14 scripts/relevance.py run ===
+⚙️  Generating plists...
+⚙️  Generating project...
+⚙️  Writing project...
+Created project at /Users/gautam/code/memorable/Memorable.xcodeproj
+Verified 50 pinned fixture rows and image SHA-256 hashes in /Users/gautam/code/memorable/.relevance-cache/coco-caption-2017/images
+Running isolated simulator relevance tests...
+RELEVANCE mode=baseline queries=50
+RELEVANCE query=000000190236.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=0.500000
+RELEVANCE query=000000012667.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000482917.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000289393.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000338325.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000051598.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=0.500000
+RELEVANCE query=000000063740.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=0.500000
+RELEVANCE query=000000492937.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000232538.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000096549.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=0.250000
+RELEVANCE query=000000298396.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000552883.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000127987.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000040471.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000551304.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000103548.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000543047.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000099054.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000489091.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=0.333333
+RELEVANCE query=000000423971.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000026204.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000085576.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000224051.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000147518.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000243204.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000214192.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000360564.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000098520.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000205514.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=0.500000
+RELEVANCE query=000000382734.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000170893.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000107087.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000255917.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000021839.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000156071.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000194875.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000243495.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=0.333333
+RELEVANCE query=000000146667.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000458768.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000045229.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000570782.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000520324.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000408112.jpg recall@10=0.000000 recall@50=0.000000 reciprocal_rank=0.000000
+RELEVANCE query=000000297578.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000286907.jpg recall@10=0.000000 recall@50=0.000000 reciprocal_rank=0.000000
+RELEVANCE query=000000070774.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000015272.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE query=000000462614.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=0.250000
+RELEVANCE query=000000208901.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=0.500000
+RELEVANCE query=000000074209.jpg recall@10=1.000000 recall@50=1.000000 reciprocal_rank=1.000000
+RELEVANCE aggregate recall@10=0.960000 recall@50=0.960000 MRR=0.853333 fallback_rate=0.260000
+Relevance gate passed.
+
+All pre-merge gates passed.

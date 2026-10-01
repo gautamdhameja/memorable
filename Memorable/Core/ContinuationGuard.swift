@@ -3,7 +3,7 @@ import os
 /// Thread-safe wrapper to ensure a CheckedContinuation is resumed exactly once.
 /// Protects against PHImageManager's multi-callback pattern where the handler
 /// may fire on different threads.
-final class ContinuationGuard<T: Sendable>: @unchecked Sendable {
+final class ContinuationGuard<T: Sendable>: Sendable {
     private let state: OSAllocatedUnfairLock<CheckedContinuation<T, Never>?>
 
     init(_ continuation: CheckedContinuation<T, Never>) {

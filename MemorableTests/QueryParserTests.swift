@@ -5,6 +5,17 @@ final class QueryParserTests: XCTestCase {
 
     private let cal = Calendar.current
 
+    func testTimeIntentRequiresWholeWordsAndPrefersSpecificPhrases() {
+        XCTAssertEqual(TimeOfDayConfig.detect(in: "afternoon")?.start, 14)
+        XCTAssertEqual(TimeOfDayConfig.detect(in: "afternoon")?.end, 18)
+        XCTAssertEqual(TimeOfDayConfig.detect(in: "afternoon tea")?.start, 11)
+        XCTAssertEqual(TimeOfDayConfig.detect(in: "evening walk")?.start, 14)
+        XCTAssertNil(TimeOfDayConfig.detect(in: "knight"))
+        XCTAssertNil(TimeOfDayConfig.detect(in: "nightingale"))
+        XCTAssertNil(QueryParserFallback.parse(query: "dog -night").timeOfDayHours)
+        XCTAssertEqual(TimeOfDayConfig.detect(in: "(night)")?.start, 20)
+    }
+
     // MARK: - Pure Visual Queries (no location, no date)
 
     func testSunset() {
@@ -74,6 +85,17 @@ final class QueryParserTests: XCTestCase {
         XCTAssertTrue(hints.hasVisualQuery)
         XCTAssertNil(hints.dateRange)
         XCTAssertTrue(hints.negativeTerms.isEmpty)
+    }
+
+    func testFallbackBoundsNegativeTermsBeforeSearchEncoding() {
+        let terms = (0..<100).map { "-x\($0)" }.joined(separator: " ")
+
+        let hints = QueryParserFallback.parse(query: "beach \(terms)")
+
+        XCTAssertEqual(hints.negativeTerms.count, QueryInputPolicy.maximumNegativeTerms)
+        XCTAssertTrue(hints.negativeTerms.allSatisfy {
+            $0.unicodeScalars.count <= QueryInputPolicy.maximumNegativeTermScalars
+        })
     }
 
     func testFoodInSanDiego() {
@@ -332,6 +354,32 @@ final class QueryParserTests: XCTestCase {
         XCTAssertTrue(hints.textQuery.contains("market"))
     }
 
+    func testFlowersInBloomRemainsVisualWithoutAProPlaceRestriction() {
+        for query in ["flowers in bloom", "Flowers in Bloom"] {
+            let hints = QueryParserFallback.parse(query: query)
+            XCTAssertNil(hints.locationHint)
+            XCTAssertEqual(hints.textQuery, "flowers in bloom")
+            XCTAssertNil(SearchFeaturePolicy.basic.restrictionSummary(for: hints))
+        }
+    }
+
+    func testBuiltInVisualSuggestionsDoNotRequestPlaceFilters() {
+        for query in SurpriseQueries.candidates {
+            let hints = QueryParserFallback.parse(query: query)
+            XCTAssertNil(hints.locationHint, "Visual suggestion produced a place filter: \(query)")
+        }
+    }
+
+    func testBloomScenePreservesExplicitPlacesAndSimilarlyNamedTowns() {
+        let nearby = QueryParserFallback.parse(query: "flowers in bloom near Berlin")
+        XCTAssertEqual(nearby.locationHint?.lowercased(), "berlin")
+        XCTAssertEqual(nearby.textQuery, "flowers in bloom")
+
+        let town = QueryParserFallback.parse(query: "flowers in Bloomington")
+        XCTAssertEqual(town.locationHint?.lowercased(), "bloomington")
+        XCTAssertEqual(town.textQuery, "flowers")
+    }
+
     func testCatAtHomeNoLocation() {
         let hints = QueryParserFallback.parse(query: "cat at home")
         XCTAssertNil(hints.locationHint, "home is not a location")
@@ -393,6 +441,13 @@ final class QueryParserTests: XCTestCase {
         XCTAssertTrue(hints.hasVisualQuery)
     }
 
+    func testParisHiltonIsPersonNotLocation() {
+        let hints = QueryParserFallback.parse(query: "Paris Hilton")
+
+        XCTAssertNil(hints.locationHint, "A multi-word proper name must not become an unverified hard location")
+        XCTAssertEqual(hints.textQuery, "paris hilton")
+    }
+
     func testChristmasIsDateNotLocation() {
         let hints = QueryParserFallback.parse(query: "Christmas")
         XCTAssertNil(hints.locationHint, "Christmas should trigger dateRange, not locationHint")
@@ -415,6 +470,41 @@ final class QueryParserTests: XCTestCase {
         let hints = QueryParserFallback.parse(query: "California")
         XCTAssertNotNil(hints.locationHint, "California is a US state and should be a location")
         XCTAssertEqual(hints.locationHint?.lowercased(), "california")
+    }
+
+    func testUppercaseAdministrativeCodeIsLocation() {
+        let hints = QueryParserFallback.parse(query: "CA")
+
+        XCTAssertEqual(hints.locationHint, "CA")
+        XCTAssertEqual(hints.textQuery, "ca")
+        XCTAssertEqual(hints.locationAdminArea, "CA")
+        XCTAssertEqual(hints.locationCountryName, "united states")
+    }
+
+    func testUppercaseAdministrativeCodeKeepsScopeInsideVisualQuery() {
+        let hints = QueryParserFallback.parse(query: "photos in CA")
+
+        XCTAssertEqual(hints.locationHint?.lowercased(), "ca")
+        XCTAssertEqual(hints.locationAdminArea, "CA")
+        XCTAssertEqual(hints.locationCountryName, "united states")
+        XCTAssertEqual(hints.textQuery, "photos")
+    }
+
+    func testUppercaseAdministrativeCodeKeepsScopeWithYear() {
+        let hints = QueryParserFallback.parse(query: "CA 2022")
+
+        XCTAssertEqual(hints.locationHint?.lowercased(), "ca")
+        XCTAssertEqual(hints.locationAdminArea, "CA")
+        XCTAssertEqual(hints.locationCountryName, "united states")
+        XCTAssertEqual(hints.textQuery, "ca")
+        XCTAssertNotNil(hints.dateRange)
+    }
+
+    func testLowercaseAdministrativeCodeRemainsVisualQuery() {
+        let hints = QueryParserFallback.parse(query: "ca")
+
+        XCTAssertNil(hints.locationHint)
+        XCTAssertEqual(hints.textQuery, "ca")
     }
 
     func testTexasIsLocation() {

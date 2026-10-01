@@ -1,10 +1,50 @@
 import Foundation
 import FoundationModels
+import os
+
+enum SmartQueryOutputPolicy {
+    static let maximumVisualCharacters = QueryInputPolicy.maximumCharacterCount
+    static let maximumLocationCharacters = 200
+    static let maximumDateCharacters = 64
+    private static let genericMediaNouns: Set<String> = [
+        "image", "images", "photo", "photos", "photograph", "photographs",
+        "picture", "pictures",
+    ]
+
+    static func bounded(_ value: String, maximumCharacters: Int) -> String {
+        QueryInputPolicy.bounded(
+            value,
+            maximumUnicodeScalars: maximumCharacters,
+            maximumUTF8Bytes: maximumCharacters * 4
+        )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func boundedOptional(_ value: String?, maximumCharacters: Int) -> String? {
+        guard let value else { return nil }
+        let boundedValue = bounded(value, maximumCharacters: maximumCharacters)
+        guard !boundedValue.isEmpty, boundedValue.lowercased() != "null" else { return nil }
+        return boundedValue
+    }
+
+    static func removingGenericMediaNouns(from value: String) -> String {
+        value.split(whereSeparator: \Character.isWhitespace)
+            .filter { token in
+                let normalized = token.trimmingCharacters(in: .punctuationCharacters).lowercased()
+                return !genericMediaNouns.contains(normalized)
+            }
+            .joined(separator: " ")
+    }
+}
+
+enum SmartQueryPerformancePolicy {
+    static let responseTimeoutSeconds: TimeInterval = 1.5
+}
 
 // Structured output from the on-device language model
 @available(iOS 26.0, *)
 @Generable
-struct ParsedQuery {
+struct ParsedQuery: Sendable {
     @Guide(description: "The visual content to search for — what the photo looks like. Remove time/location words, keep only visual descriptors. Examples: 'drink', 'sunset at beach', 'dog playing', 'birthday cake'.")
     var visualDescription: String
 
@@ -22,19 +62,205 @@ struct ParsedQuery {
 }
 
 @available(iOS 26.0, *)
-class SmartQueryParser {
-    private var session: LanguageModelSession?
+protocol SmartQueryResponding: Sendable {
+    func respond(to prompt: String) async throws -> ParsedQuery
+}
 
-    init() {
-        if SystemLanguageModel.default.isAvailable {
-            session = LanguageModelSession()
+@available(iOS 26.0, *)
+private struct LanguageModelSmartQueryResponder: SmartQueryResponding {
+    private let session = LanguageModelSession()
+
+    func respond(to prompt: String) async throws -> ParsedQuery {
+        try await session.respond(to: prompt, generating: ParsedQuery.self).content
+    }
+}
+
+@available(iOS 26.0, *)
+private final class SmartQueryCircuitBreaker: Sendable {
+    private struct State: Sendable {
+        var isOpen = false
+        var cancelledRequestCount = 0
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    var permitsRequest: Bool {
+        state.withLock { !$0.isOpen && $0.cancelledRequestCount == 0 }
+    }
+
+    func open() {
+        state.withLock { $0.isOpen = true }
+    }
+
+    func beginCancelledRequest() {
+        state.withLock { $0.cancelledRequestCount += 1 }
+    }
+
+    func finishCancelledRequest(timedOut: Bool) {
+        state.withLock { state in
+            state.cancelledRequestCount = max(0, state.cancelledRequestCount - 1)
+            if timedOut {
+                state.isOpen = true
+            }
+        }
+    }
+}
+
+@available(iOS 26.0, *)
+/// Private control-flow error consumed by `parse`. It is converted to a local
+/// fallback or a diagnostic code and never crosses a user-presentation boundary.
+private enum SmartQueryResponseError: Error, Sendable {
+    case cancelled
+    case responder(String)
+    case timedOut
+}
+
+@available(iOS 26.0, *)
+private final class SmartQueryResponseController: Sendable {
+    typealias Response = Result<ParsedQuery, SmartQueryResponseError>
+
+    private struct State: Sendable {
+        var continuation: ContinuationGuard<Response>?
+        var responseTask: Task<Void, Never>?
+        var timeoutTask: Task<Void, Never>?
+        var isCallerCancelled = false
+        var isCancellationSuspended = false
+        var isFinished = false
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let circuitBreaker: SmartQueryCircuitBreaker
+
+    init(circuitBreaker: SmartQueryCircuitBreaker) {
+        self.circuitBreaker = circuitBreaker
+    }
+
+    @discardableResult
+    func installContinuation(_ continuation: ContinuationGuard<Response>) -> Bool {
+        let didInstall = state.withLock { state in
+            guard !state.isFinished, !state.isCallerCancelled else { return false }
+            state.continuation = continuation
+            return true
+        }
+        if !didInstall {
+            continuation.resume(returning: .failure(.cancelled))
+        }
+        return didInstall
+    }
+
+    @discardableResult
+    func startResponse(
+        _ operation: @escaping @Sendable () async -> Response
+    ) -> Bool {
+        state.withLock { state in
+            guard !state.isFinished, !state.isCallerCancelled else { return false }
+            let task = Task { [self] in
+                finish(await operation())
+            }
+            state.responseTask = task
+            return true
         }
     }
 
-    var isAvailable: Bool { session != nil }
+    func registerTimeoutTask(_ task: Task<Void, Never>) {
+        let shouldCancel = state.withLock { state in
+            guard !state.isFinished else { return true }
+            state.timeoutTask = task
+            return false
+        }
+        if shouldCancel {
+            task.cancel()
+        }
+    }
+
+    func finish(_ response: Response) {
+        guard let completion = takeCompletion() else { return }
+        completion.timeoutTask?.cancel()
+        if completion.wasCancellationSuspended {
+            circuitBreaker.finishCancelledRequest(timedOut: false)
+        }
+        completion.continuation?.resume(returning: response)
+    }
+
+    func timeOut() {
+        guard let completion = takeCompletion() else { return }
+        completion.responseTask?.cancel()
+        if completion.wasCancellationSuspended {
+            circuitBreaker.finishCancelledRequest(timedOut: true)
+        } else {
+            circuitBreaker.open()
+        }
+        completion.continuation?.resume(returning: .failure(.timedOut))
+    }
+
+    func cancel() {
+        let cancellation = state.withLock { state -> (
+            continuation: ContinuationGuard<Response>?,
+            responseTask: Task<Void, Never>?
+        )? in
+            guard !state.isFinished, !state.isCallerCancelled else { return nil }
+            state.isCallerCancelled = true
+            if state.responseTask != nil {
+                state.isCancellationSuspended = true
+                circuitBreaker.beginCancelledRequest()
+            }
+            defer { state.continuation = nil }
+            return (state.continuation, state.responseTask)
+        }
+        guard let cancellation else { return }
+        cancellation.responseTask?.cancel()
+        cancellation.continuation?.resume(returning: .failure(.cancelled))
+    }
+
+    private func takeCompletion() -> (
+        continuation: ContinuationGuard<Response>?,
+        responseTask: Task<Void, Never>?,
+        timeoutTask: Task<Void, Never>?,
+        wasCancellationSuspended: Bool
+    )? {
+        state.withLock { state in
+            guard !state.isFinished else { return nil }
+            state.isFinished = true
+            defer {
+                state.continuation = nil
+                state.responseTask = nil
+                state.timeoutTask = nil
+            }
+            return (
+                state.continuation,
+                state.responseTask,
+                state.timeoutTask,
+                state.isCancellationSuspended
+            )
+        }
+    }
+}
+
+@available(iOS 26.0, *)
+struct SmartQueryParser: Sendable {
+    private let responderFactory: @Sendable () -> any SmartQueryResponding
+    private let responseTimeoutSeconds: TimeInterval
+    private let circuitBreaker = SmartQueryCircuitBreaker()
+    let isAvailable: Bool
+
+    init(
+        isAvailable: Bool = SystemLanguageModel.default.isAvailable,
+        responseTimeoutSeconds: TimeInterval = SmartQueryPerformancePolicy.responseTimeoutSeconds,
+        responderFactory: @escaping @Sendable () -> any SmartQueryResponding = {
+            LanguageModelSmartQueryResponder()
+        }
+    ) {
+        self.isAvailable = isAvailable
+        self.responseTimeoutSeconds = max(0, responseTimeoutSeconds)
+        self.responderFactory = responderFactory
+    }
 
     func parse(query: String) async -> QueryHints {
-        guard let session else {
+        let query = QueryInputPolicy.bounded(query)
+        guard isAvailable else {
+            return QueryParserFallback.parse(query: query)
+        }
+        guard circuitBreaker.permitsRequest else {
             return QueryParserFallback.parse(query: query)
         }
 
@@ -57,27 +283,26 @@ class SmartQueryParser {
         """
 
         do {
-            let response = try await session.respond(to: prompt, generating: ParsedQuery.self)
-            let parsed = response.content
+            let parsed = try await boundedResponse(to: prompt)
+            let fallbackHints = QueryParserFallback.parse(query: query)
 
-            var dateRange: DateRange?
-            let isoFormatter = ISO8601DateFormatter()
-            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let fallbackFormatter = ISO8601DateFormatter()
-
-            if let startStr = parsed.startDate, let endStr = parsed.endDate {
-                let start = isoFormatter.date(from: startStr) ?? fallbackFormatter.date(from: startStr)
-                let end = isoFormatter.date(from: endStr) ?? fallbackFormatter.date(from: endStr)
-                if let start, let end {
-                    dateRange = DateRange(start: start, end: end)
-                }
-            }
+            // Date filters are hard constraints, so use the deterministic local
+            // parser instead of trusting model-generated dates that may invent a
+            // date or collapse a requested year into a single day.
+            let dateRange = fallbackHints.dateRange
 
             // Sanity check: if the original query is short and FM split it
             // across visual + location, it likely misunderstood a compound
             // proper noun (e.g. "Hoover Dam" -> visual="dam", location="Hoover")
-            var visualDesc = parsed.visualDescription
-            var locName = parsed.locationName
+            var visualDesc = SmartQueryOutputPolicy.bounded(
+                parsed.visualDescription,
+                maximumCharacters: SmartQueryOutputPolicy.maximumVisualCharacters
+            )
+            visualDesc = SmartQueryOutputPolicy.removingGenericMediaNouns(from: visualDesc)
+            var locName = SmartQueryOutputPolicy.boundedOptional(
+                parsed.locationName,
+                maximumCharacters: SmartQueryOutputPolicy.maximumLocationCharacters
+            )
             var landmarkRecombined = false
             let originalWordCount = query.trimmingCharacters(in: .whitespaces)
                 .split(separator: " ").count
@@ -105,6 +330,18 @@ class SmartQueryParser {
                 }
             }
 
+            let fallbackHasStructuredIntent = fallbackHints.dateRange != nil
+                || fallbackHints.locationHint != nil
+            if fallbackHasStructuredIntent {
+                visualDesc = fallbackHints.hasVisualQuery
+                    ? SmartQueryOutputPolicy.removingGenericMediaNouns(from: fallbackHints.textQuery)
+                    : ""
+            } else if visualDesc.isEmpty, fallbackHints.hasVisualQuery {
+                // A valid model response can still omit the subject. Preserve
+                // the user's local visual query instead of disabling search.
+                visualDesc = fallbackHints.textQuery
+            }
+
             var visual = visualDesc.isEmpty ? "" : visualDesc.lowercased()
 
             // If FM returned empty visual but detected a location, use location as visual query too
@@ -116,55 +353,113 @@ class SmartQueryParser {
             let hasVisual = !visual.trimmingCharacters(in: .whitespaces).isEmpty
 
             // Time-of-day detection (Foundation Models doesn't extract this)
-            let timeOfDayHours = TimeOfDayConfig.detect(in: query.lowercased())
+            let timeOfDayHours = fallbackHints.timeOfDayHours
 
-            // Use Foundation Models result, fill gaps with fallback only if needed
-            var locationHint = locName
-            if !landmarkRecombined && (locationHint == nil || locationHint?.isEmpty == true) {
-                let fallbackHints = QueryParserFallback.parse(query: query)
-                locationHint = fallbackHints.locationHint
-            }
+            // Locations are hard constraints, so only the deterministic local
+            // parser may create one. Model-only locations can be hallucinated
+            // from visual concepts or names (for example, "party" or
+            // "Paris Hilton") and must remain ordinary visual search text.
+            var locationHint = landmarkRecombined ? nil : fallbackHints.locationHint
+            locationHint = SmartQueryOutputPolicy.boundedOptional(
+                locationHint,
+                maximumCharacters: SmartQueryOutputPolicy.maximumLocationCharacters
+            )
 
             #if DEBUG
-            logger.info("[SmartParser] FM visual='\(hasVisual ? visual : "a photo")', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), hasVisual=\(hasVisual)")
+            logger.info("[SmartParser] Parsed query; visual=\(hasVisual), location=\(locationHint != nil), date=\(dateRange != nil)")
             #endif
+
+            // Exclusions change result eligibility. Only explicit user terms
+            // may penalize results; the model can invent or omit exclusions.
+            let negativeTerms = fallbackHints.negativeTerms
 
             return QueryHints(
                 textQuery: hasVisual ? visual : "a photo",
                 dateRange: dateRange,
                 locationHint: locationHint,
-                negativeTerms: parsed.negativeTerms,
+                locationLocality: locationHint == nil ? nil : fallbackHints.locationLocality,
+                locationSubAdmin: locationHint == nil ? nil : fallbackHints.locationSubAdmin,
+                locationAdminArea: locationHint == nil ? nil : fallbackHints.locationAdminArea,
+                locationCountryName: locationHint == nil ? nil : fallbackHints.locationCountryName,
+                negativeTerms: negativeTerms,
                 timeOfDayHours: timeOfDayHours,
-                hasVisualQuery: hasVisual
+                hasVisualQuery: hasVisual,
+                textMatchQuery: fallbackHints.hasVisualQuery ? fallbackHints.textQuery : ""
             )
         } catch {
-            logger.error("Foundation model parse failed: \(error.localizedDescription), falling back to regex")
+            switch error {
+            case .cancelled:
+                break
+            case .timedOut:
+                logger.error("Foundation model parse timed out after \(responseTimeoutSeconds)s; disabling smart parsing for this launch")
+            case .responder(let diagnosticCode):
+                logger.error("Foundation model parse failed: \(diagnosticCode), falling back to regex")
+            }
             return QueryParserFallback.parse(query: query)
         }
+    }
+
+    private func boundedResponse(to prompt: String) async throws(SmartQueryResponseError) -> ParsedQuery {
+        let responder = responderFactory()
+        let controller = SmartQueryResponseController(circuitBreaker: circuitBreaker)
+
+        let result = await withTaskCancellationHandler {
+            await withCheckedContinuation {
+                (continuation: CheckedContinuation<Result<ParsedQuery, SmartQueryResponseError>, Never>) in
+                guard controller.installContinuation(ContinuationGuard(continuation)) else {
+                    return
+                }
+
+                guard controller.startResponse({
+                    let response: Result<ParsedQuery, SmartQueryResponseError>
+                    do {
+                        response = .success(try await responder.respond(to: prompt))
+                    } catch {
+                        response = .failure(.responder(error.safeDiagnosticCode))
+                    }
+                    return response
+                }) else {
+                    return
+                }
+
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(for: .seconds(responseTimeoutSeconds))
+                    } catch {
+                        return
+                    }
+                    controller.timeOut()
+                }
+                controller.registerTimeoutTask(timeoutTask)
+            }
+        } onCancel: {
+            controller.cancel()
+        }
+
+        return try result.get()
     }
 }
 
 // MARK: - Unified entry point
 
 enum QueryParser {
-    private static var smartParser: Any? = {
-        if #available(iOS 26.0, *) {
-            return SmartQueryParser()
-        }
-        return nil
-    }()
+    @available(iOS 26.0, *)
+    private static let smartParser = SmartQueryParser()
 
-    static func parse(query: String) async -> QueryHints {
+    static func parse(
+        query: String,
+        featurePolicy: SearchFeaturePolicy = .basic
+    ) async -> QueryHints {
+        let query = QueryInputPolicy.bounded(query)
+        guard featurePolicy.allowsAdvancedQueryFeatures else {
+            let text = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return QueryHints(textQuery: text.isEmpty ? "a photo" : text, hasVisualQuery: !text.isEmpty)
+        }
         if #available(iOS 26.0, *),
-           let smart = smartParser as? SmartQueryParser,
-           smart.isAvailable {
-            return await smart.parse(query: query)
+           smartParser.isAvailable {
+            return await smartParser.parse(query: query)
         }
         return QueryParserFallback.parse(query: query)
     }
 
-    // Synchronous fallback for callers that can't await
-    static func parseSync(query: String) -> QueryHints {
-        QueryParserFallback.parse(query: query)
-    }
 }

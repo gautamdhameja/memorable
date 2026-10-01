@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "deletes": [
+    {
+      "migration_id": "v2-siglip2-model-swap",
+      "table": "indexed_video_frames",
+      "statement": "delete from indexed_video_frames"
+    },
+    {
+      "migration_id": "v2-siglip2-model-swap",
+      "table": "indexed_videos",
+      "statement": "delete from indexed_videos"
+    },
+    {
+      "migration_id": "v2-siglip2-model-swap",
+      "table": "indexed_photos",
+      "statement": "delete from indexed_photos"
+    },
+    {
+      "migration_id": "v3-orientation-normalized-embeddings",
+      "table": "indexed_video_frames",
+      "statement": "delete from indexed_video_frames"
+    },
+    {
+      "migration_id": "v3-orientation-normalized-embeddings",
+      "table": "indexed_videos",
+      "statement": "delete from indexed_videos"
+    },
+    {
+      "migration_id": "v3-orientation-normalized-embeddings",
+      "table": "indexed_photos",
+      "statement": "delete from indexed_photos"
+    },
+    {
+      "migration_id": "v5-rebuild-fastformat-photo-embeddings",
+      "table": "indexed_photos",
+      "statement": "delete from indexed_photos"
+    },
+    {
+      "migration_id": "v8-remove-incomplete-videos",
+      "table": "indexed_videos",
+      "statement": "delete from indexed_videos where not exists ( select 1 from indexed_video_frames where indexed_video_frames.videoid = indexed_videos.id )"
+    }
+  ]
+}

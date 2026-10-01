@@ -1,0 +1,25 @@
+schemaVersion: 1
+enabledWorkflows:
+  - simulator
+  - ui-automation
+  - debugging
+sessionDefaultsProfiles:
+  Memorable:
+    projectPath: /Users/gautam/code/memorable/Memorable.xcodeproj
+    scheme: Memorable
+    configuration: Debug
+    simulatorName: iPhone 17 Pro
+    simulatorId: 22A925A6-2D1C-4C4B-9EB7-C3F2E7A112AA
+    simulatorPlatform: iOS Simulator
+    useLatestOS: true
+    bundleId: com.blockdeep.memorable
+  MemorableRelease2K:
+    projectPath: /Users/gautam/code/memorable/Memorable.xcodeproj
+    scheme: Memorable
+    configuration: Release
+    simulatorName: Memorable Release 2K
+    simulatorId: 14E94DD6-98CD-4763-B3AD-93F93F81948A
+    simulatorPlatform: iOS Simulator
+    useLatestOS: true
+    bundleId: com.blockdeep.memorable
+activeSessionDefaultsProfile: Memorable

@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "models_root": "Memorable/Models",
+  "model_identity": {
+    "name": "SigLIP2 base patch16 224",
+    "source": "google/siglip2-base-patch16-224",
+    "source_revision": "75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2",
+    "license": "Apache-2.0",
+    "packaging": "Compiled Core ML bundles stored outside Git and copied into the app at build time",
+    "artifact_origin_repository_commit": "a9c74adf3145381cd69bcc1e4343fbfbb8650d33",
+    "source_revision_evidence": "The bundled tokenizer SHA-256 is 61a7b147390c64585d6c3543dd6fc636906c9af3865a5548f27f31aee1d4c8e2, matching the tokenizer in the pinned upstream snapshot.",
+    "conversion": {
+      "date": "2026-04-13",
+      "coremltools_version": "9.0",
+      "torch_version": "2.11.0+cu130",
+      "source_dialect": "TorchScript",
+      "minimum_deployment_target": "iOS 17.0",
+      "storage_precision": "Float16",
+      "compute_precision": "Mixed Float16 and Int32",
+      "image_input": "Float16 [1,3,224,224] named pixel_values",
+      "image_output": "Float16 [1,768] named image_embedding",
+      "text_input": "Int32 [1,64] named input_ids",
+      "text_output": "Float16 [1,768] named text_embedding"
+    }
+  },
+  "files": [
+    {
+      "path": "Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/analytics/coremldata.bin",
+      "size": 243,
+      "sha256": "060279d085c6f3b4f466c8f084fa6bb2f38fec946a8b9c2b4a6f07c1a4e553c0"
+    },
+    {
+      "path": "Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/coremldata.bin",
+      "size": 396,
+      "sha256": "4d46ae4c5ede50fc6d72203f928df25f31e704ec15933e66e4b6eb90b1c2ede1"
+    },
+    {
+      "path": "Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/metadata.json",
+      "size": 2016,
+      "sha256": "819a3cdbb189b8dfb31486cb8aa59eb9c97ac042ce251c3fbc3879afe8d5bad3"
+    },
+    {
+      "path": "Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/model.mil",
+      "size": 172435,
+      "sha256": "9de2c18865a6764763aadca2d782cb52d071b7b6c6b584387cd24ee29c050819"
+    },
+    {
+      "path": "Memorable/Models/SigLIP2_ImageEncoder.mlmodelc/weights/weight.bin",
+      "size": 184600640,
+      "sha256": "3bec6f05f9ee51d1285ed0b97aa0fde6e912bdf4eb308f17ba3bb00f1824a0ac"
+    },
+    {
+      "path": "Memorable/Models/SigLIP2_TextEncoder.mlmodelc/analytics/coremldata.bin",
+      "size": 243,
+      "sha256": "98cc5945469a169445924f7d5a7c2c04d46d8e149f6cf6e30dcad2e281701283"
+    },
+    {
+      "path": "Memorable/Models/SigLIP2_TextEncoder.mlmodelc/coremldata.bin",
+      "size": 388,
+      "sha256": "606c94b46bf0bae27b345aaeed5907b744ffc01799134bce6cde047fd9afb6af"
+    },
+    {
+      "path": "Memorable/Models/SigLIP2_TextEncoder.mlmodelc/metadata.json",
+      "size": 1982,
+      "sha256": "452fcc99a1cc088b480b9ad3340eb83518b295c919032ee2b0ae172c7cc62965"
+    },
+    {
+      "path": "Memorable/Models/SigLIP2_TextEncoder.mlmodelc/model.mil",
+      "size": 161384,
+      "sha256": "ec73d65711cc5250a29af929bcc3a05cc4d23d961555914393960fdf33870350"
+    },
+    {
+      "path": "Memorable/Models/SigLIP2_TextEncoder.mlmodelc/weights/weight.bin",
+      "size": 564620224,
+      "sha256": "5de78e1774aebc080a0877afd3db7c6737c51ad9a4a3c8e581f4c9ff53f4f7c8"
+    }
+  ]
+}

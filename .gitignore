@@ -12,12 +12,19 @@ DerivedData/
 ## DS_Store
 .DS_Store
 
-## Core ML models (downloaded at runtime via ODR)
+## Python caches
+__pycache__/
+*.py[cod]
+
+## Compiled Core ML models (local build inputs verified by scripts/model_manifest.json)
 Memorable/Models/*.mlmodelc/
 Memorable/Models/*.mlmodelc/**
 
 ## Claude Code
 .claude/
+
+## Compound Engineering local preferences
+.compound-engineering/*.local.yaml
 
 ## SourceKit-LSP (xcode-build-server config, machine-specific absolute paths)
 buildServer.json
@@ -29,6 +36,17 @@ buildServer.json
 *.ipa
 *.dSYM.zip
 *.dSYM
+
+## Signing credentials and machine-local overrides
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+AuthKey_*.p8
+*.p8
+ExportOptions.plist
+.env
+Config/Local.xcconfig
 
 ## Playgrounds
 timeline.xctimeline
@@ -77,3 +95,7 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# Downloaded COCO relevance fixtures and derived real-model embeddings.
+.relevance-cache/
+.context/

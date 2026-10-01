@@ -6,17 +6,60 @@ import UIKit
 import SwiftUI
 import Photos
 
+extension Error {
+    /// Returns a diagnostic category without user-controlled description text.
+    var safeDiagnosticCode: String {
+        let error = self as NSError
+        return "\(error.domain)#\(error.code)"
+    }
+}
+
+enum UserFacingErrorMessage {
+    /// Only errors that deliberately conform to `LocalizedError` may supply UI
+    /// copy. This prevents Swift's synthesized enum/debug text from leaking into
+    /// alerts while preserving specific guidance from audited app errors.
+    static func message(for error: Error, fallback: String) -> String {
+        guard let description = (error as? any LocalizedError)?.errorDescription?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !description.isEmpty else {
+            return fallback
+        }
+        return description
+    }
+}
+
+enum CancellableDetachedOperation {
+    static func run<Value: Sendable>(
+        priority: TaskPriority = .utility,
+        _ operation: @escaping @Sendable () throws -> Value
+    ) async throws -> Value {
+        let task = Task.detached(priority: priority) {
+            try Task.checkCancellation()
+            return try operation()
+        }
+        let value = try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        try Task.checkCancellation()
+        return value
+    }
+}
+
 // MARK: - L2 Normalization
 
 extension Array where Element == Float {
     /// L2-normalize the vector in place. After normalization, ||self|| = 1.
-    mutating func l2Normalize() {
+    @discardableResult
+    mutating func l2Normalize() -> Bool {
+        guard !isEmpty, allSatisfy(\.isFinite) else { return false }
         var norm: Float = 0
         vDSP_svesq(self, 1, &norm, vDSP_Length(count))
         norm = sqrt(norm)
-        if norm > 0 {
-            vDSP_vsdiv(self, 1, &norm, &self, 1, vDSP_Length(count))
-        }
+        guard norm.isFinite, norm > 0 else { return false }
+        vDSP_vsdiv(self, 1, &norm, &self, 1, vDSP_Length(count))
+        return allSatisfy(\.isFinite)
     }
 }
 
@@ -40,25 +83,6 @@ extension MLMultiArray {
     }
 }
 
-// MARK: - Video Playback
-
-// MARK: - Timeout Wrapper
-
-/// Wraps an async operation with a timeout. Returns nil if the timeout expires.
-func withTimeout<T: Sendable>(seconds: Double, operation: @escaping (@escaping (T?) -> Void) -> Void) async -> T? {
-    await withCheckedContinuation { continuation in
-        let guard_ = ContinuationGuard(continuation)
-        let timeoutTask = Task {
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard_.resume(returning: nil)
-        }
-        operation { value in
-            timeoutTask.cancel()
-            guard_.resume(returning: value)
-        }
-    }
-}
-
 // MARK: - DateFormatter Cache
 
 extension DateFormatter {
@@ -69,35 +93,437 @@ extension DateFormatter {
     }()
 }
 
-/// Present a native AVPlayerViewController from anywhere in the app.
-func presentVideoPlayer(for phAsset: PHAsset) {
-    Task {
-        guard let avAsset = await VideoFrameExtractor.loadAVAsset(from: phAsset) else { return }
+enum MemoryPressureReleasePolicy {
+    static func release(_ image: inout UIImage?) {
+        image = nil
+    }
 
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        try? AVAudioSession.sharedInstance().setActive(true)
+    static func release<Resource>(_ resource: inout Resource?) {
+        resource = nil
+    }
+}
 
-        await MainActor.run {
-            let player = AVPlayer(playerItem: AVPlayerItem(asset: avAsset))
-            let controller = AVPlayerViewController()
-            controller.player = player
+enum MemoryPressureImageRecoveryPolicy {
+    enum Decision: Equatable {
+        case preserve
+        case release
+        case releaseAndRetry
+    }
 
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-               let rootVC = windowScene.windows.first?.rootViewController {
-                var topVC = rootVC
-                while let presented = topVC.presentedViewController {
-                    topVC = presented
+    static let retryDelayNanoseconds: UInt64 = 1_000_000_000
+
+    static func decision(
+        hasImage: Bool,
+        isActive: Bool,
+        preserveVisibleImage: Bool
+    ) -> Decision {
+        guard isActive else { return .release }
+        if hasImage && preserveVisibleImage { return .preserve }
+        return .releaseAndRetry
+    }
+}
+
+/// Widths for one row of tiles that share a single height. Each tile keeps its
+/// own aspect ratio and the row fills the proposed width exactly, so a row of
+/// mixed portrait and landscape photos has no gap under the shorter tile.
+enum JustifiedRowLayout {
+    /// The height every tile in the row shares. Returns zero when the row
+    /// cannot be laid out, and callers then fall back to equal widths.
+    static func rowHeight(
+        availableWidth: CGFloat,
+        aspectRatios: [CGFloat],
+        spacing: CGFloat
+    ) -> CGFloat {
+        guard !aspectRatios.isEmpty,
+              availableWidth.isFinite,
+              availableWidth > 0,
+              spacing.isFinite,
+              spacing >= 0 else { return 0 }
+        let totalSpacing = spacing * CGFloat(aspectRatios.count - 1)
+        let contentWidth = availableWidth - totalSpacing
+        guard contentWidth > 0 else { return 0 }
+        let ratioSum = aspectRatios.reduce(0) { $0 + max(0, $1) }
+        guard ratioSum.isFinite, ratioSum > 0 else { return 0 }
+        return contentWidth / ratioSum
+    }
+
+    /// Tile widths in row order. A tile's width is its aspect ratio times the
+    /// shared height, so every tile renders at its true proportions.
+    static func widths(
+        availableWidth: CGFloat,
+        aspectRatios: [CGFloat],
+        spacing: CGFloat
+    ) -> [CGFloat] {
+        let height = rowHeight(
+            availableWidth: availableWidth,
+            aspectRatios: aspectRatios,
+            spacing: spacing
+        )
+        guard height > 0 else {
+            guard !aspectRatios.isEmpty else { return [] }
+            let totalSpacing = spacing * CGFloat(aspectRatios.count - 1)
+            let equal = max(0, (availableWidth - totalSpacing)) / CGFloat(aspectRatios.count)
+            return [CGFloat](repeating: equal, count: aspectRatios.count)
+        }
+        return aspectRatios.map { max(0, $0) * height }
+    }
+}
+
+/// Shared proportions for photo and video tiles in the result and memory
+/// grids. The ratio comes from indexed pixel dimensions rather than the decoded
+/// image, so a tile reserves its real shape before the image arrives and never
+/// resizes while the user scrolls. Extremes are clamped so a panorama or a very
+/// tall photo cannot dominate a row.
+enum MediaTileAspectRatio {
+    static let minimum: CGFloat = 3.0 / 4.0
+    static let maximum: CGFloat = 16.0 / 9.0
+    static let fallback: CGFloat = 4.0 / 3.0
+
+    static func ratio(pixelWidth: Int, pixelHeight: Int) -> CGFloat {
+        guard pixelWidth > 0, pixelHeight > 0 else { return fallback }
+        let ratio = CGFloat(pixelWidth) / CGFloat(pixelHeight)
+        guard ratio.isFinite, ratio > 0 else { return fallback }
+        return min(max(ratio, minimum), maximum)
+    }
+
+    static func ratio(for result: SearchResult) -> CGFloat {
+        ratio(pixelWidth: result.pixelWidth, pixelHeight: result.pixelHeight)
+    }
+
+    static func ratio(for photo: IndexedPhotoReference) -> CGFloat {
+        ratio(pixelWidth: photo.pixelWidth, pixelHeight: photo.pixelHeight)
+    }
+}
+
+/// Grid tiles request an image sized to the space they are drawn in. A fixed
+/// small request left full-width tiles upscaled about three times and blurry.
+/// Sizes move in steps so small layout adjustments do not trigger a reload,
+/// and the ceiling keeps a decoded tile well below a full-resolution photo.
+enum TileImagePixelSizePolicy {
+    static let minimum: CGFloat = 400
+    static let step: CGFloat = 200
+    static let maximum: CGFloat = 1_400
+
+    /// The longest image side in pixels for a tile drawn at `size` points.
+    static func maxDimension(for size: CGSize, displayScale: CGFloat) -> CGFloat? {
+        let longest = max(size.width, size.height) * displayScale
+        guard longest.isFinite, longest > 0 else { return nil }
+        let stepped = (longest / step).rounded(.up) * step
+        return min(max(stepped, minimum), maximum)
+    }
+
+    /// A loaded image is kept when it is already at least as large as the
+    /// tile now needs, so a tile that shrinks never reloads a smaller copy.
+    static func needsReload(loaded: CGFloat?, requested: CGFloat) -> Bool {
+        guard let loaded else { return true }
+        return requested > loaded
+    }
+}
+
+/// A count with its noun, such as "1 photo" or "1,204 photos".
+enum CountPhrase {
+    static func string(_ count: Int, _ singular: String, plural: String? = nil) -> String {
+        let noun = count == 1 ? singular : (plural ?? singular + "s")
+        return "\(count.formatted()) \(noun)"
+    }
+}
+
+/// The full-screen viewer pages through results with a `TabView`. Only the
+/// pages inside this window keep a decoded image, so swiping to a neighbour
+/// shows the photo immediately while viewer memory stays bounded regardless of
+/// how many results the search returned.
+enum PhotoViewerPreloadPolicy {
+    /// Pages on either side of the visible one that keep their decoded image.
+    static let retainedNeighbourCount = 1
+
+    static func shouldLoad(
+        index: Int,
+        currentIndex: Int,
+        neighbourCount: Int = retainedNeighbourCount
+    ) -> Bool {
+        guard neighbourCount >= 0 else { return index == currentIndex }
+        return abs(index - currentIndex) <= neighbourCount
+    }
+}
+
+enum ImageLoadGenerationPolicy {
+    static func acceptsCompletion(
+        startedGeneration: UInt,
+        currentGeneration: UInt,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && startedGeneration == currentGeneration
+    }
+}
+
+struct SlideshowSelection<Item: Sendable>: Sendable {
+    let item: Item
+    let recentIDs: Set<String>
+}
+
+@MainActor
+enum SlideshowSelectionPolicy {
+    static func next<Item: Sendable>(
+        recentIDs: Set<String>,
+        historyLimit: Int,
+        maxAttempts: Int = 5,
+        fetch: () async -> Item?,
+        identifier: (Item) -> String,
+        accepts: (Item) -> Bool = { _ in true }
+    ) async -> SlideshowSelection<Item>? {
+        let boundedAttempts = max(1, maxAttempts)
+        var fallback: Item?
+
+        for _ in 0..<boundedAttempts {
+            guard !Task.isCancelled else { return nil }
+            guard let candidate = await fetch() else { break }
+            guard accepts(candidate) else { continue }
+            fallback = candidate
+            if !recentIDs.contains(identifier(candidate)) {
+                return selection(
+                    candidate,
+                    recentIDs: recentIDs,
+                    historyLimit: historyLimit,
+                    identifier: identifier
+                )
+            }
+        }
+
+        guard let fallback else { return nil }
+        return selection(
+            fallback,
+            recentIDs: [],
+            historyLimit: historyLimit,
+            identifier: identifier
+        )
+    }
+
+    private static func selection<Item: Sendable>(
+        _ item: Item,
+        recentIDs: Set<String>,
+        historyLimit: Int,
+        identifier: (Item) -> String
+    ) -> SlideshowSelection<Item> {
+        var updated = recentIDs
+        if updated.count >= max(1, historyLimit) {
+            updated.removeAll(keepingCapacity: true)
+        }
+        updated.insert(identifier(item))
+        return SlideshowSelection(item: item, recentIDs: updated)
+    }
+}
+
+enum MemoryPresentationValidator {
+    static func isEligible(image: UIImage, requiresValidation: Bool) async -> Bool {
+        guard requiresValidation else { return true }
+        async let ocrText = OCRService.extractTextFast(from: image)
+        async let sceneLabels = SceneClassifier.classify(image: image)
+        return !MemoryContentPolicy.isDocumentImage(
+            ocrText: await ocrText,
+            sceneLabels: SceneClassifier.labelsToString(await sceneLabels)
+        )
+    }
+}
+
+enum VideoPlaybackRequestPolicy {
+    static func acceptsCompletion(
+        startedGeneration: UInt,
+        currentGeneration: UInt,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && startedGeneration == currentGeneration
+    }
+}
+
+// MARK: - Video Playback
+
+@MainActor
+enum PrivateVideoPlaybackConfiguration {
+    static func apply(to player: AVPlayer, controller: AVPlayerViewController) {
+        player.allowsExternalPlayback = true
+        player.usesExternalPlaybackWhileExternalScreenIsActive = false
+        controller.allowsPictureInPicturePlayback = true
+    }
+
+    static func tearDown(
+        player: AVPlayer,
+        deactivateAudio: () throws -> Void
+    ) rethrows {
+        player.pause()
+        try deactivateAudio()
+    }
+}
+
+@MainActor
+private final class PrivatePlayerViewController: AVPlayerViewController {
+    var onPlaybackEnded: (() -> Void)?
+    private var didEndPlayback = false
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        guard !didEndPlayback else { return }
+        didEndPlayback = true
+        onPlaybackEnded?()
+        onPlaybackEnded = nil
+    }
+}
+
+@MainActor
+final class VideoPlaybackCoordinator {
+    static let shared = VideoPlaybackCoordinator()
+
+    private var loadTask: Task<Void, Never>?
+    private var requestGeneration: UInt = 0
+    private var activeController: PrivatePlayerViewController?
+
+    func present(localIdentifier: String) {
+        requestGeneration &+= 1
+        let generation = requestGeneration
+        loadTask?.cancel()
+        loadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.dismissActivePlayback()
+            guard VideoPlaybackRequestPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: self.requestGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            guard let asset = await PhotoLibrary.resolveAsset(by: localIdentifier),
+                  !Task.isCancelled,
+                  let playbackAsset = await PhotoLibrary.loadVideoPlaybackAsset(for: asset) else {
+                return
+            }
+            guard VideoPlaybackRequestPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: self.requestGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            self.present(playbackAsset, generation: generation)
+        }
+    }
+
+    func cancelPendingPresentation() {
+        requestGeneration &+= 1
+        loadTask?.cancel()
+        loadTask = nil
+    }
+
+    func cancelForMemoryPressure() {
+        cancelPendingPresentation()
+        Task { @MainActor [weak self] in
+            await self?.dismissActivePlayback()
+        }
+    }
+
+    private func present(_ playbackAsset: PhotoLibrary.VideoPlaybackAsset, generation: UInt) {
+        guard VideoPlaybackRequestPolicy.acceptsCompletion(
+            startedGeneration: generation,
+            currentGeneration: requestGeneration,
+            isCancelled: Task.isCancelled
+        ), let presenter = Self.presentationController(),
+           presenter.viewIfLoaded?.window != nil,
+           let player = playbackAsset.makePlayer() else {
+            return
+        }
+
+        let controller = PrivatePlayerViewController()
+        PrivateVideoPlaybackConfiguration.apply(to: player, controller: controller)
+        controller.player = player
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            logger.error("Failed to configure audio playback: \(error.safeDiagnosticCode)")
+            try? AVAudioSession.sharedInstance().setActive(
+                false,
+                options: .notifyOthersOnDeactivation
+            )
+            return
+        }
+
+        activeController = controller
+        controller.onPlaybackEnded = { [weak self, weak controller] in
+            guard let self, let controller else { return }
+            self.finishPlayback(controller)
+        }
+        presenter.present(controller, animated: true) { [weak self, weak controller] in
+            guard let self, let controller,
+                  self.activeController === controller,
+                  VideoPlaybackRequestPolicy.acceptsCompletion(
+                    startedGeneration: generation,
+                    currentGeneration: self.requestGeneration,
+                    isCancelled: false
+                  ) else {
+                if let controller {
+                    self?.finishPlayback(controller)
                 }
-                topVC.present(controller, animated: true) {
-                    player.play()
-                }
+                return
+            }
+            player.play()
+        }
+        loadTask = nil
+    }
+
+    private func dismissActivePlayback() async {
+        guard let controller = activeController else { return }
+        finishPlayback(controller)
+        guard controller.presentingViewController != nil else { return }
+        await withCheckedContinuation { continuation in
+            controller.dismiss(animated: true) {
+                continuation.resume()
             }
         }
     }
+
+    private func finishPlayback(_ controller: PrivatePlayerViewController) {
+        guard activeController === controller else { return }
+        controller.onPlaybackEnded = nil
+        if let player = controller.player {
+            do {
+                try PrivateVideoPlaybackConfiguration.tearDown(player: player) {
+                    try AVAudioSession.sharedInstance().setActive(
+                        false,
+                        options: .notifyOthersOnDeactivation
+                    )
+                }
+            } catch {
+                logger.error("Failed to release audio playback: \(error.safeDiagnosticCode)")
+            }
+        }
+        controller.player = nil
+        activeController = nil
+    }
+
+    private static func presentationController() -> UIViewController? {
+        guard let windowScene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }),
+              let root = windowScene.windows.first(where: \.isKeyWindow)?.rootViewController else {
+            return nil
+        }
+        var presenter = root
+        while let presented = presenter.presentedViewController,
+              !presented.isBeingDismissed {
+            presenter = presented
+        }
+        return presenter
+    }
+}
+
+/// Presents one private, local-only video player at a time.
+@MainActor
+func presentVideoPlayer(localIdentifier: String) {
+    VideoPlaybackCoordinator.shared.present(localIdentifier: localIdentifier)
+}
+
+@MainActor
+func cancelPendingVideoPlayerPresentation() {
+    VideoPlaybackCoordinator.shared.cancelPendingPresentation()
 }
 
 // MARK: - Haptics
 
+@MainActor
 enum Haptics {
     static func light() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -120,5 +546,25 @@ extension Array {
         stride(from: 0, to: count, by: size).map {
             Array(self[$0..<Swift.min($0 + size, count)])
         }
+    }
+}
+enum LocalOnlyStorage {
+    static func prepareDirectory(at url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true
+        )
+        try excludeFromBackup(url)
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUnlessOpen],
+            ofItemAtPath: url.path
+        )
+    }
+
+    static func excludeFromBackup(_ url: URL) throws {
+        var protectedURL = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try protectedURL.setResourceValues(values)
     }
 }

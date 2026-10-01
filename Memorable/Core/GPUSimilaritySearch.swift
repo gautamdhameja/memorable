@@ -1,25 +1,33 @@
 import Foundation
 import Metal
 import MetalPerformanceShadersGraph
-import Accelerate
+import os
+
+protocol SimilaritySearching: AnyObject, Sendable {
+    func buildIndex(embeddings: [Float16], count: Int)
+    func search(queryEmbedding: [Float]) -> [Float]?
+}
 
 /// GPU-accelerated similarity search using MPSGraph matrix multiplication.
 /// Replaces per-embedding CPU dot products with a single [N, 768] × [768, 1] GPU matmul.
-class GPUSimilaritySearch {
+final class GPUSimilaritySearch: SimilaritySearching {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let embeddingDim: Int
 
-    private var matrixBuffer: MTLBuffer?
-    private var cachedGraph: CachedGraph?
-    private var count: Int = 0
+    private let indexState = OSAllocatedUnfairLock(uncheckedState: IndexState())
+
+    private struct IndexState {
+        var matrixBuffer: MTLBuffer?
+        var cachedGraph: CachedGraph?
+        var count = 0
+    }
 
     private struct CachedGraph {
         let graph: MPSGraph
         let matrixPlaceholder: MPSGraphTensor
         let queryPlaceholder: MPSGraphTensor
         let resultTensor: MPSGraphTensor
-        let n: Int
     }
 
     init?(embeddingDim: Int = EmbeddingConfig.dimensions) {
@@ -38,15 +46,13 @@ class GPUSimilaritySearch {
         let buildStart = CFAbsoluteTimeGetCurrent()
         #endif
 
-        self.count = count
         guard count > 0, embeddings.count >= count * embeddingDim else {
-            matrixBuffer = nil
-            cachedGraph = nil
+            indexState.withLockUnchecked { $0 = IndexState(count: count) }
             return
         }
 
         let byteCount = count * embeddingDim * MemoryLayout<Float16>.size
-        matrixBuffer = embeddings.withUnsafeBufferPointer { ptr -> MTLBuffer? in
+        let matrixBuffer = embeddings.withUnsafeBufferPointer { ptr -> MTLBuffer? in
             guard let baseAddress = ptr.baseAddress else { return nil }
             return device.makeBuffer(bytes: baseAddress, length: byteCount, options: .storageModeShared)
         }
@@ -64,13 +70,15 @@ class GPUSimilaritySearch {
             name: "similarity"
         )
 
-        cachedGraph = CachedGraph(
+        let cachedGraph = CachedGraph(
             graph: graph,
             matrixPlaceholder: matrixPlaceholder,
             queryPlaceholder: queryPlaceholder,
-            resultTensor: resultTensor,
-            n: count
+            resultTensor: resultTensor
         )
+        indexState.withLockUnchecked {
+            $0 = IndexState(matrixBuffer: matrixBuffer, cachedGraph: cachedGraph, count: count)
+        }
 
         #if DEBUG
         logger.info("[GPUSimilaritySearch] Index built: \(count) embeddings in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - buildStart))s")
@@ -81,12 +89,13 @@ class GPUSimilaritySearch {
     /// Query should be L2-normalized Float array of embeddingDim length.
     /// Returns Float array of length N with similarity scores, or nil if GPU unavailable.
     func search(queryEmbedding: [Float]) -> [Float]? {
-        guard count > 0,
-              let cached = cachedGraph,
-              let matBuf = matrixBuffer,
-              cached.n == count else {
+        let index = indexState.withLockUnchecked { $0 }
+        guard index.count > 0,
+              let cached = index.cachedGraph,
+              let matBuf = index.matrixBuffer else {
             return nil
         }
+        let count = index.count
 
         #if DEBUG
         let searchStart = CFAbsoluteTimeGetCurrent()
@@ -134,7 +143,7 @@ class GPUSimilaritySearch {
         }
 
         #if DEBUG
-        let n = self.count
+        let n = count
         logger.info("[GPUSimilaritySearch] Search over \(n) embeddings in \(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - searchStart))s")
         #endif
 
@@ -144,16 +153,29 @@ class GPUSimilaritySearch {
     /// Compute pairwise similarity for a batch of query rows against all stored embeddings.
     /// Returns an array of (rowIndex, colIndex, score) triples above the threshold.
     /// Only the upper triangle (colIndex > rowIndex) is returned to avoid duplicates.
-    func findDuplicates(embeddings: [Float16], count: Int, threshold: Float, batchSize: Int = 500) -> [(Int, Int, Float)] {
-        guard count > 0, let matBuf = matrixBuffer, let cached = cachedGraph, cached.n == count else {
+    func findDuplicates(
+        embeddings: [Float16],
+        count: Int,
+        threshold: Float,
+        batchSize: Int = 500,
+        maximumResults: Int = DuplicateFinder.maximumRetainedPairs,
+        maximumComparisons: Int = DuplicateFinder.maximumComparisons
+    ) -> [DuplicateCandidate] {
+        let index = indexState.withLockUnchecked { $0 }
+        guard count > 0,
+              let matBuf = index.matrixBuffer,
+              index.cachedGraph != nil,
+              index.count == count else {
             return []
         }
 
-        var results: [(Int, Int, Float)] = []
+        var candidates = DuplicateCandidateHeap(capacity: maximumResults)
         let maxPhotos = min(count, 10_000)
+        var comparisons = 0
 
         // Process in batches: [batchSize, D] × [D, N] = [batchSize, N]
         for batchStart in stride(from: 0, to: maxPhotos, by: batchSize) {
+            guard !Task.isCancelled, comparisons < maximumComparisons else { break }
             let batchEnd = min(batchStart + batchSize, maxPhotos)
             let batchCount = batchEnd - batchStart
 
@@ -210,18 +232,26 @@ class GPUSimilaritySearch {
             let thresholdF16 = Float16(threshold)
             let resultCount = resultFloat16.count
             for col in 0..<batchCount {
+                guard !Task.isCancelled, comparisons < maximumComparisons else { break }
                 let globalCol = batchStart + col
                 for row in (globalCol + 1)..<maxPhotos {
+                    guard comparisons < maximumComparisons else { break }
+                    comparisons += 1
+                    if comparisons.isMultiple(of: 1_024), Task.isCancelled { break }
                     let index = row * batchCount + col
                     guard index < resultCount else { continue }
                     let score = resultFloat16[index]
                     if score >= thresholdF16 {
-                        results.append((globalCol, row, Float(score)))
+                        candidates.insert(DuplicateCandidate(
+                            firstIndex: globalCol,
+                            secondIndex: row,
+                            score: Float(score)
+                        ))
                     }
                 }
             }
         }
 
-        return results
+        return candidates.sortedBestFirst()
     }
 }

@@ -1,15 +1,141 @@
 import Foundation
 import NaturalLanguage
 
+enum QueryInputPolicy {
+    static let maximumCharacterCount = 500
+    static let maximumUTF8ByteCount = 2_000
+    static let maximumNegativeTerms = 8
+    static let maximumNegativeTermScalars = 100
+
+    static func bounded(_ query: String) -> String {
+        bounded(
+            query,
+            maximumUnicodeScalars: maximumCharacterCount,
+            maximumUTF8Bytes: maximumUTF8ByteCount
+        )
+    }
+
+    static func bounded(
+        _ value: String,
+        maximumUnicodeScalars: Int,
+        maximumUTF8Bytes: Int
+    ) -> String {
+        let scalarLimit = max(0, maximumUnicodeScalars)
+        let byteLimit = max(0, maximumUTF8Bytes)
+        guard scalarLimit > 0, byteLimit > 0 else { return "" }
+
+        var output = String.UnicodeScalarView()
+        output.reserveCapacity(min(scalarLimit, byteLimit))
+        var scalarCount = 0
+        var byteCount = 0
+        for scalar in value.unicodeScalars {
+            let width: Int
+            switch scalar.value {
+            case 0...0x7f: width = 1
+            case 0x80...0x7ff: width = 2
+            case 0x800...0xffff: width = 3
+            default: width = 4
+            }
+            guard scalarCount < scalarLimit, byteCount + width <= byteLimit else { break }
+            output.append(scalar)
+            scalarCount += 1
+            byteCount += width
+        }
+        return String(output)
+    }
+}
+
+/// Enforces entitlement-sensitive search behavior at the parser and ranking
+/// boundaries. Callers that do not provide a policy receive basic search.
+struct SearchFeaturePolicy: Equatable, Sendable {
+    let allowsAdvancedQueryFeatures: Bool
+    let allowsFolderResults: Bool
+
+    static let basic = SearchFeaturePolicy(
+        allowsAdvancedQueryFeatures: false,
+        allowsFolderResults: false
+    )
+    static let pro = SearchFeaturePolicy(
+        allowsAdvancedQueryFeatures: true,
+        allowsFolderResults: true
+    )
+
+    init(isPro: Bool) {
+        allowsAdvancedQueryFeatures = isPro
+        allowsFolderResults = isPro
+    }
+
+    private init(
+        allowsAdvancedQueryFeatures: Bool,
+        allowsFolderResults: Bool
+    ) {
+        self.allowsAdvancedQueryFeatures = allowsAdvancedQueryFeatures
+        self.allowsFolderResults = allowsFolderResults
+    }
+
+    func enforcing(_ hints: QueryHints) -> QueryHints {
+        guard allowsAdvancedQueryFeatures else {
+            return QueryHints(
+                textQuery: hints.textQuery,
+                dateRange: nil,
+                locationHint: nil,
+                locationLocality: nil,
+                locationSubAdmin: nil,
+                locationAdminArea: nil,
+                locationCountryName: nil,
+                seasonHint: nil,
+                negativeTerms: [],
+                timeOfDayHours: nil,
+                hasVisualQuery: true
+            )
+        }
+        var bounded = hints
+        bounded.textQuery = QueryInputPolicy.bounded(hints.textQuery)
+        bounded.textMatchQuery = hints.textMatchQuery.map { QueryInputPolicy.bounded($0) }
+        bounded.negativeTerms = Array(hints.negativeTerms
+            .prefix(QueryInputPolicy.maximumNegativeTerms)
+            .map {
+                QueryInputPolicy.bounded(
+                    $0,
+                    maximumUnicodeScalars: QueryInputPolicy.maximumNegativeTermScalars,
+                    maximumUTF8Bytes: QueryInputPolicy.maximumNegativeTermScalars * 4
+                )
+            }
+            .filter { !$0.isEmpty })
+        return bounded
+    }
+
+    func restrictionSummary(for hints: QueryHints) -> SearchRestrictionSummary? {
+        guard !allowsAdvancedQueryFeatures else { return nil }
+        var features = Set<RestrictedSearchFeature>()
+        if hints.locationHint != nil { features.insert(.location) }
+        if hints.dateRange != nil || hints.seasonHint != nil { features.insert(.date) }
+        if !hints.negativeTerms.isEmpty { features.insert(.exclusions) }
+        if hints.timeOfDayHours != nil { features.insert(.timeOfDay) }
+        guard !features.isEmpty else { return nil }
+        return SearchRestrictionSummary(features: features)
+    }
+
+    func enforcing(_ response: SearchResponse) -> SearchResponse {
+        guard !allowsFolderResults else { return response }
+        let isPhotoLibraryResult: (SearchResult) -> Bool = {
+            $0.sourceId == PhotoSourceType.photokit.rawValue
+        }
+        return SearchResponse(
+            results: response.results.filter(isPhotoLibraryResult),
+            fallbackResults: response.fallbackResults.filter(isPhotoLibraryResult),
+            filtersApplied: response.filtersApplied,
+            restrictionSummary: response.restrictionSummary
+        )
+    }
+}
+
 struct QueryHints {
     var textQuery: String
     var dateRange: DateRange?
     var locationHint: String?
-    var locationCoordinate: (lat: Double, lon: Double)?
-    var locationRadiusKm: Double?
-    // Canonical placemark fields from forward-geocoding `locationHint`.
-    // Populated by SearchEngine after parsing, nil until then. Used by
-    // LocationMatcher to canonicalise matches (e.g. "california" → "CA").
+    // Optional canonical location fields. Search does not forward-geocode
+    // query text; these remain nil unless a local parser can supply them.
     var locationLocality: String?
     var locationSubAdmin: String?
     var locationAdminArea: String?
@@ -18,11 +144,21 @@ struct QueryHints {
     var negativeTerms: [String] = []
     var timeOfDayHours: (start: Int, end: Int)?
     var hasVisualQuery: Bool = true
+    // Preserve literal search words when the smart parser rewrites visual text.
+    // nil uses textQuery; an empty string disables literal matching.
+    var textMatchQuery: String? = nil
 }
 
 struct DateRange {
     var start: Date
     var end: Date
+    // Direct callers retain closed-range semantics; calendar parsing uses the
+    // start of the next period as an exclusive upper boundary.
+    var endIsExclusive = false
+
+    func contains(_ date: Date) -> Bool {
+        date >= start && (endIsExclusive ? date < end : date <= end)
+    }
 }
 
 enum Season: String {
@@ -33,8 +169,12 @@ enum Season: String {
 
 enum QueryParserFallback {
 
-    static func parse(query: String) -> QueryHints {
-        let trimmed = query.count > 500 ? String(query.prefix(500)) : query
+    static func parse(
+        query: String,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> QueryHints {
+        let trimmed = QueryInputPolicy.bounded(query)
         var text = trimmed.lowercased()
         var locationHint: String?
         var negTerms: [String] = []
@@ -44,7 +184,14 @@ enum QueryParserFallback {
         var positiveWords: [String] = []
         for word in words {
             if word.hasPrefix("-") && word.count > 1 {
-                negTerms.append(String(word.dropFirst()))
+                if negTerms.count < QueryInputPolicy.maximumNegativeTerms {
+                    let term = QueryInputPolicy.bounded(
+                        String(word.dropFirst()),
+                        maximumUnicodeScalars: QueryInputPolicy.maximumNegativeTermScalars,
+                        maximumUTF8Bytes: QueryInputPolicy.maximumNegativeTermScalars * 4
+                    )
+                    if !term.isEmpty { negTerms.append(term) }
+                }
             } else {
                 positiveWords.append(word)
             }
@@ -55,12 +202,35 @@ enum QueryParserFallback {
         let timeOfDayHours = TimeOfDayConfig.detect(in: text)
 
         // 3. Extract temporal phrases (dates, seasons, holidays, relative periods)
-        let temporal = TemporalParser.extract(from: text)
+        let temporal = TemporalParser.extract(from: text, now: now, cal: calendar)
         let dateRange = temporal.dateRange
         text = temporal.cleanedText
 
         // 4. Location extraction via NLTagger
         extractLocation(from: trimmed, text: &text, locationHint: &locationHint)
+        var locationAdminArea: String?
+        var locationCountryName: String?
+        let originalLocationCode: String? = locationHint.flatMap { hint -> String? in
+            guard hint.split(whereSeparator: \Character.isWhitespace).count == 1 else {
+                return nil
+            }
+            return trimmed
+                .split(whereSeparator: \Character.isWhitespace)
+                .map { String($0).trimmingCharacters(in: .punctuationCharacters) }
+                .first(where: {
+                    $0.caseInsensitiveCompare(hint) == .orderedSame
+                        && AdministrativeRegionAliases.isKnownUppercaseCode($0)
+                })
+        }
+        if let locationHint,
+           locationHint.split(whereSeparator: \Character.isWhitespace).count == 1,
+           let originalCode = originalLocationCode,
+           let alias = AdministrativeRegionAliases.alias(
+               forCode: originalCode.lowercased()
+           ) {
+                locationAdminArea = originalCode
+                locationCountryName = alias.canonicalCountry
+        }
 
         // 5. Clean up — loop to strip chained prepositions (e.g., "car service in" → "car service")
         text = text.replacingOccurrences(of: "  ", with: " ").trimmingCharacters(in: .whitespaces)
@@ -83,10 +253,10 @@ enum QueryParserFallback {
 
         var cleanedText = text.trimmingCharacters(in: .whitespaces)
 
-        // If location extraction consumed the entire query, the place name itself
-        // is a visual concept (e.g. "Hoover Dam", "Eiffel Tower", "Berlin").
-        // Use it as both location filter AND visual query so CLIP can match by
-        // appearance, not just GPS coordinates.
+        // Preserve a bare place name in textQuery as an explicit marker for
+        // SearchEngine's pure-filter classification. The engine recognizes
+        // textQuery == locationHint and returns every verified location match
+        // by date without applying a meaningless place-name embedding rank.
         if cleanedText.isEmpty && locationHint != nil {
             cleanedText = locationHint!.lowercased()
         }
@@ -94,13 +264,15 @@ enum QueryParserFallback {
         let hasVisual = !cleanedText.isEmpty
 
         #if DEBUG
-        logger.info("[QueryParser] input='\(trimmed)' → textQuery='\(hasVisual ? cleanedText : "a photo")', location=\(locationHint ?? "nil"), dateRange=\(dateRange.map { "\($0.start)–\($0.end)" } ?? "nil"), timeOfDay=\(timeOfDayHours.map { "\($0.start)-\($0.end)" } ?? "nil"), hasVisual=\(hasVisual)")
+        logger.info("[QueryParser] Parsed query; visual=\(hasVisual), location=\(locationHint != nil), date=\(dateRange != nil), time=\(timeOfDayHours != nil), exclusions=\(negTerms.count)")
         #endif
 
         return QueryHints(
             textQuery: hasVisual ? cleanedText : "a photo",
             dateRange: dateRange,
             locationHint: locationHint,
+            locationAdminArea: locationAdminArea,
+            locationCountryName: locationCountryName,
             negativeTerms: negTerms,
             timeOfDayHours: timeOfDayHours,
             hasVisualQuery: hasVisual
@@ -110,7 +282,7 @@ enum QueryParserFallback {
     private static let visualWords: Set<String> = [
         // Photographic subjects and scenes
         "sunset", "sunrise", "beach", "mountain", "food", "dog", "cat",
-        "car", "tree", "flower", "snow", "rain", "night", "morning",
+        "car", "tree", "flower", "bloom", "snow", "rain", "night", "morning",
         "selfie", "people", "baby", "wedding", "birthday", "christmas",
         "halloween", "lake", "river", "ocean", "forest", "park", "garden",
         "pool", "sky", "clouds", "street", "market", "lunch", "dinner",
@@ -140,6 +312,20 @@ enum QueryParserFallback {
     private static func extractLocation(from original: String, text: inout String, locationHint: inout String?) {
         var landmarkGuardTriggered = false
         let textBeforeExtraction = text
+
+        // Exact uppercase administrative codes carry useful intent while their
+        // lowercase forms are often ordinary words (IN, OR, ME). Preserve that
+        // casing signal before the rest of the parser operates on lowercase text.
+        let remainingWords = text.split(separator: " ")
+        if remainingWords.count == 1,
+           let originalCode = original.split(separator: " ")
+            .map(String.init)
+            .first(where: { $0.lowercased() == remainingWords[0].lowercased() }),
+           AdministrativeRegionAliases.isKnownUppercaseCode(originalCode) {
+            locationHint = originalCode
+            text = ""
+            return
+        }
 
         // Strategy 1: NLTagger on original text (works when user types proper case)
         if let place = extractPlaceViaTagger(original),
@@ -224,11 +410,11 @@ enum QueryParserFallback {
         // If Strategy 1 already found a location, use it.
         if locationHint != nil { return }
 
-        // Strategy 3: Bare multi-word proper noun fallback
-        // If the entire remaining text is 1-4 capitalized words with no obvious
-        // visual content words, treat it as a potential location.
-        // The geocoder in SearchEngine will validate. If it fails to geocode,
-        // the search proceeds as normal CLIP search.
+        // Strategy 3: Bare location fallback. Every candidate must be present
+        // in a bundled gazetteer; capitalization alone cannot distinguish a
+        // place from a person's name.
+        // Local metadata matching validates the hint. If nothing matches, the
+        // search proceeds as normal visual search.
         // Skip if Strategy 1's landmark guard triggered — the query is a landmark
         // name (e.g. "Hoover Dam"), not a city.
         if !landmarkGuardTriggered {
@@ -268,21 +454,8 @@ enum QueryParserFallback {
                             text = ""
                         }
                     } else {
-                        let isLikelyVisual = candidates.allSatisfy {
-                            visualWords.contains($0.lowercased())
-                        }
-
-                        let landmarkWords: Set<String> = ["dam", "tower", "bridge", "falls",
-                            "monument", "palace", "castle", "gate", "wall", "square",
-                            "plaza", "temple", "cathedral", "pyramid", "statue",
-                            "lighthouse", "canyon", "reef", "volcano", "glacier",
-                            "arch", "museum", "fountain", "church", "dome",
-                            "fort", "ruins", "peak", "bay", "harbor"]
-                        let hasLandmarkWord = candidates.contains {
-                            landmarkWords.contains($0.lowercased())
-                        }
-
-                        if !isLikelyVisual && !hasLandmarkWord {
+                        let phrase = candidates.joined(separator: " ").lowercased()
+                        if KnownMultiwordLocations.names.contains(phrase) {
                             locationHint = candidates.joined(separator: " ")
                             text = ""
                         }
@@ -352,18 +525,26 @@ private enum TemporalParser {
         let cleanedText: String
     }
 
-    static func extract(from text: String) -> Result {
+    static func extract(from text: String, now: Date, cal: Calendar) -> Result {
         var cleaned = text.replacingOccurrences(of: "'s", with: "")
-        let now = Date()
-        let cal = Calendar.current
+
+        // A complete explicit date must win over its month or year fragment.
+        // Invalid explicit dates remain visual text rather than becoming a
+        // silently different month/year filter through the fallback stages.
+        if let explicit = extractExplicitDate(from: cleaned, cal: cal) {
+            return explicit
+        }
 
         // Phase 1: Pattern table (longest first)
-        let patterns = buildPatterns(now: now, cal: cal)
+        let explicitYears = Set(cleaned.matches(of: /\b([0-9]{4})\b/)
+            .compactMap { Int($0.1) }.filter { $0 > 0 })
+        let patterns = buildPatterns(now: now, cal: cal, explicitYears: explicitYears)
         let sorted = patterns.sorted { $0.phrase.count > $1.phrase.count }
 
         for pattern in sorted {
             if let range = matchPhrase(pattern.phrase, in: cleaned) {
-                if let dateRange = pattern.resolve() {
+                if var dateRange = pattern.resolve() {
+                    dateRange.endIsExclusive = true
                     cleaned.replaceSubrange(range, with: "")
                     cleaned = cleaned.replacingOccurrences(of: "  ", with: " ").trimmingCharacters(in: .whitespaces)
                     return Result(dateRange: dateRange, cleanedText: cleaned)
@@ -384,11 +565,11 @@ private enum TemporalParser {
             if let match = matches.first, let date = match.date {
                 let dateRange: DateRange
                 if match.duration > 0 {
-                    dateRange = DateRange(start: date, end: date.addingTimeInterval(match.duration))
+                    dateRange = DateRange(start: date, end: date.addingTimeInterval(match.duration), endIsExclusive: true)
                 } else {
                     let dayStart = cal.startOfDay(for: date)
                     let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-                    dateRange = DateRange(start: dayStart, end: dayEnd)
+                    dateRange = DateRange(start: dayStart, end: dayEnd, endIsExclusive: true)
                 }
                 if let range = Range(match.range, in: cleaned) {
                     cleaned.replaceSubrange(range, with: "")
@@ -402,6 +583,46 @@ private enum TemporalParser {
     }
 
     // MARK: - Word boundary matching
+
+    private static let monthNames: [(full: String, abbr: String, num: Int)] = [
+        ("january", "jan", 1), ("february", "feb", 2), ("march", "mar", 3),
+        ("april", "apr", 4), ("may", "may", 5), ("june", "jun", 6),
+        ("july", "jul", 7), ("august", "aug", 8), ("september", "sep", 9),
+        ("october", "oct", 10), ("november", "nov", 11), ("december", "dec", 12),
+    ]
+
+    private static func extractExplicitDate(from text: String, cal: Calendar) -> Result? {
+        func resolve(year: Int, month: Int, day: Int, range: Range<String.Index>) -> Result {
+            let components = DateComponents(year: year, month: month, day: day)
+            guard year > 0, let start = cal.date(from: components),
+                  cal.component(.year, from: start) == year,
+                  cal.component(.month, from: start) == month,
+                  cal.component(.day, from: start) == day,
+                  let end = cal.date(byAdding: .day, value: 1, to: start) else {
+                return Result(dateRange: nil, cleanedText: text)
+            }
+            var cleaned = text
+            cleaned.replaceSubrange(range, with: "")
+            cleaned = cleaned.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            return Result(dateRange: DateRange(start: start, end: end, endIsExclusive: true), cleanedText: cleaned)
+        }
+        if let match = text.firstMatch(of: /\b([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})\b/),
+           let year = Int(match.1), let month = Int(match.2), let day = Int(match.3) {
+            return resolve(year: year, month: month, day: day, range: match.range)
+        }
+        if let match = text.firstMatch(of: /\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\.?\s+([0-9]{1,2})(?:st|nd|rd|th)?(?:,)?\s+([0-9]{4})\b/),
+           let month = monthNames.first(where: { $0.full == match.1 || $0.abbr == match.1 })?.num,
+           let day = Int(match.2), let year = Int(match.3) {
+            return resolve(year: year, month: month, day: day, range: match.range)
+        }
+        if let match = text.firstMatch(of: /\b([0-9]{1,2})(?:st|nd|rd|th)?\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\.?(?:,)?\s+([0-9]{4})\b/),
+           let day = Int(match.1),
+           let month = monthNames.first(where: { $0.full == match.2 || $0.abbr == match.2 })?.num,
+           let year = Int(match.3) {
+            return resolve(year: year, month: month, day: day, range: match.range)
+        }
+        return nil
+    }
 
     private static func matchPhrase(_ phrase: String, in text: String) -> Range<String.Index>? {
         var searchStart = text.startIndex
@@ -417,13 +638,13 @@ private enum TemporalParser {
     // MARK: - Bare year extraction
 
     private static func extractBareYear(from text: String, cal: Calendar) -> (DateRange, Range<String.Index>)? {
-        let pattern = /\b(20\d{2})\b/
+        let pattern = /\b([0-9]{4})\b/
         guard let match = text.firstMatch(of: pattern),
-              let year = Int(match.1) else { return nil }
+              let year = Int(match.1), year > 0 else { return nil }
         guard let start = cal.date(from: DateComponents(year: year, month: 1, day: 1)),
-              let end = cal.date(from: DateComponents(year: year, month: 12, day: 31, hour: 23, minute: 59, second: 59))
+              let end = cal.date(byAdding: .year, value: 1, to: start)
         else { return nil }
-        return (DateRange(start: start, end: end), match.range)
+        return (DateRange(start: start, end: end, endIsExclusive: true), match.range)
     }
 
     // MARK: - Pattern table
@@ -433,7 +654,7 @@ private enum TemporalParser {
         let resolve: () -> DateRange?
     }
 
-    private static func buildPatterns(now: Date, cal: Calendar) -> [TemporalPattern] {
+    private static func buildPatterns(now: Date, cal: Calendar, explicitYears: Set<Int>) -> [TemporalPattern] {
         let today = cal.startOfDay(for: now)
         let currentYear = cal.component(.year, from: now)
         let currentMonth = cal.component(.month, from: now)
@@ -452,7 +673,7 @@ private enum TemporalParser {
         }
         func fullYear(_ y: Int) -> DateRange {
             let start = makeDate(y, 1, 1)
-            let end = cal.date(from: DateComponents(year: y, month: 12, day: 31, hour: 23, minute: 59, second: 59)) ?? start
+            let end = cal.date(byAdding: .year, value: 1, to: start) ?? start
             return DateRange(start: start, end: end)
         }
         func seasonRange(year: Int, startMonth: Int, endMonth: Int) -> DateRange {
@@ -464,18 +685,15 @@ private enum TemporalParser {
             let endDate = cal.date(from: DateComponents(year: year, month: endMonth + 1, day: 0)) ?? start
             return DateRange(start: start, end: dayEnd(endDate))
         }
-        func mostRecentPast(month: Int, dayStart: Int, dayEnd de: Int) -> DateRange {
-            let thisYear = makeDate(currentYear, month, de)
-            let year = thisYear <= now ? currentYear : currentYear - 1
-            return DateRange(
-                start: makeDate(year, month, dayStart),
-                end: TemporalParser.dayEndHelper(makeDate(year, month, de), cal: cal)
-            )
+        func startOfWeek(weeksBack: Int) -> Date {
+            let components = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today)
+            let weekStart = cal.date(from: components) ?? today
+            return cal.date(byAdding: .day, value: -(weeksBack * 7), to: weekStart) ?? today
         }
         func weekdayOfWeek(_ weekday: Int, weeksBack: Int) -> Date {
-            let components = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today)
-            let monday = cal.date(from: components) ?? today
-            return cal.date(byAdding: .day, value: -(weeksBack * 7) + (weekday - 2), to: monday) ?? today
+            let weekStart = startOfWeek(weeksBack: weeksBack)
+            let weekdayOffset = (weekday - cal.component(.weekday, from: weekStart) + 7) % 7
+            return cal.date(byAdding: .day, value: weekdayOffset, to: weekStart) ?? today
         }
 
         var patterns: [TemporalPattern] = []
@@ -498,7 +716,7 @@ private enum TemporalParser {
             return DateRange(start: dayStart(thisSat), end: dayEnd(thisSun))
         })
         patterns.append(TemporalPattern(phrase: "two weeks ago") {
-            let start = weekdayOfWeek(2, weeksBack: 2)
+            let start = startOfWeek(weeksBack: 2)
             let end = cal.date(byAdding: .day, value: 6, to: start) ?? start
             return DateRange(start: dayStart(start), end: dayEnd(end))
         })
@@ -506,13 +724,12 @@ private enum TemporalParser {
         patterns.append(TemporalPattern(phrase: "few days ago") { DateRange(start: daysAgo(5), end: now) })
         patterns.append(TemporalPattern(phrase: "couple days ago") { DateRange(start: daysAgo(3), end: daysAgo(1)) })
         patterns.append(TemporalPattern(phrase: "last week") {
-            let start = weekdayOfWeek(2, weeksBack: 1)
+            let start = startOfWeek(weeksBack: 1)
             let end = cal.date(byAdding: .day, value: 6, to: start) ?? start
             return DateRange(start: dayStart(start), end: dayEnd(end))
         })
         patterns.append(TemporalPattern(phrase: "this week") {
-            let monday = weekdayOfWeek(2, weeksBack: 0)
-            return DateRange(start: dayStart(monday), end: now)
+            return DateRange(start: startOfWeek(weeksBack: 0), end: now)
         })
         patterns.append(TemporalPattern(phrase: "recently") { DateRange(start: daysAgo(14), end: now) })
         patterns.append(TemporalPattern(phrase: "last night") { DateRange(start: daysAgo(1), end: dayEnd(daysAgo(1))) })
@@ -545,8 +762,7 @@ private enum TemporalParser {
         })
         patterns.append(TemporalPattern(phrase: "earlier this year") {
             let s = makeDate(currentYear, 1, 1)
-            let e = cal.date(byAdding: .month, value: -3, to: today) ?? today
-            return DateRange(start: s, end: e)
+            return DateRange(start: s, end: now)
         })
         patterns.append(TemporalPattern(phrase: "last month") {
             let prevMonth = cal.date(byAdding: .month, value: -1, to: today) ?? today
@@ -584,7 +800,7 @@ private enum TemporalParser {
         })
 
         // --- Seasons with year ---
-        for year in (currentYear - 5)...currentYear {
+        for year in explicitYears.sorted() {
             let ys = String(year)
             patterns.append(TemporalPattern(phrase: "summer \(ys)") { seasonRange(year: year, startMonth: 6, endMonth: 8) })
             patterns.append(TemporalPattern(phrase: "winter \(ys)") { seasonRange(year: year, startMonth: 12, endMonth: 2) })
@@ -623,13 +839,38 @@ private enum TemporalParser {
             return DateRange(start: makeDate(year, 12, 25), end: dayEnd(makeDate(year, 12, 25)))
         })
 
-        for year in (currentYear - 5)...currentYear {
-            patterns.append(TemporalPattern(phrase: "christmas \(year)") {
-                DateRange(start: makeDate(year, 12, 23), end: dayEnd(makeDate(year, 12, 27)))
-            })
-            patterns.append(TemporalPattern(phrase: "new year \(year)") {
-                DateRange(start: makeDate(year - 1, 12, 30), end: dayEnd(makeDate(year, 1, 2)))
-            })
+        for year in explicitYears.sorted() {
+            // Consume the year with every recognized holiday, so the bare
+            // holiday cannot silently replace an explicit historical date.
+            let holidays: [(names: [String], month: Int, start: Int, endMonth: Int, end: Int)] = [
+                (["christmas", "xmas"], 12, 23, 12, 27),
+                (["christmas eve"], 12, 23, 12, 25),
+                (["christmas day"], 12, 25, 12, 25),
+                (["halloween"], 10, 29, 11, 1),
+                (["thanksgiving"], 11, 20, 11, 30),
+                (["valentines", "valentines day", "valentine day"], 2, 13, 2, 15),
+                (["easter"], 3, 15, 4, 30),
+            ]
+            for holiday in holidays {
+                for name in holiday.names {
+                    patterns.append(TemporalPattern(phrase: "\(name) \(year)") {
+                        DateRange(
+                            start: makeDate(year, holiday.month, holiday.start),
+                            end: dayEnd(makeDate(year, holiday.endMonth, holiday.end))
+                        )
+                    })
+                }
+            }
+            for name in ["new year", "new years"] {
+                patterns.append(TemporalPattern(phrase: "\(name) \(year)") {
+                    DateRange(start: makeDate(year - 1, 12, 30), end: dayEnd(makeDate(year, 1, 2)))
+                })
+            }
+            for name in ["new years eve", "new year eve"] {
+                patterns.append(TemporalPattern(phrase: "\(name) \(year)") {
+                    DateRange(start: makeDate(year, 12, 31), end: dayEnd(makeDate(year + 1, 1, 1)))
+                })
+            }
         }
 
         patterns.append(TemporalPattern(phrase: "last christmas") {
@@ -643,16 +884,18 @@ private enum TemporalParser {
             })
         }
 
-        patterns.append(TemporalPattern(phrase: "new years eve") {
-            let year = currentMonth >= 1 && cal.component(.day, from: now) >= 2 ? currentYear : currentYear - 1
-            return DateRange(start: makeDate(year - 1, 12, 31), end: dayEnd(makeDate(year, 1, 1)))
-        })
+        for alias in ["new years eve", "new year eve"] {
+            patterns.append(TemporalPattern(phrase: alias) {
+                let year = currentMonth > 1 || cal.component(.day, from: now) >= 2 ? currentYear : currentYear - 1
+                return DateRange(start: makeDate(year - 1, 12, 31), end: dayEnd(makeDate(year, 1, 1)))
+            })
+        }
         patterns.append(TemporalPattern(phrase: "last new year") {
             return DateRange(start: makeDate(currentYear - 1, 12, 30), end: dayEnd(makeDate(currentYear, 1, 2)))
         })
         for alias in ["new year", "new years"] {
             patterns.append(TemporalPattern(phrase: alias) {
-                let year = currentMonth >= 1 && cal.component(.day, from: now) >= 3 ? currentYear : currentYear - 1
+                let year = currentMonth > 1 || cal.component(.day, from: now) >= 3 ? currentYear : currentYear - 1
                 return DateRange(start: makeDate(year - 1, 12, 30), end: dayEnd(makeDate(year, 1, 2)))
             })
         }
@@ -680,16 +923,9 @@ private enum TemporalParser {
         })
 
         // --- Named months (with year variants) ---
-        let monthNames: [(full: String, abbr: String, num: Int)] = [
-            ("january", "jan", 1), ("february", "feb", 2), ("march", "mar", 3),
-            ("april", "apr", 4), ("may", "may", 5), ("june", "jun", 6),
-            ("july", "jul", 7), ("august", "aug", 8), ("september", "sep", 9),
-            ("october", "oct", 10), ("november", "nov", 11), ("december", "dec", 12),
-        ]
-
         for (full, abbr, month) in monthNames {
             // "january 2023", "jan 2023"
-            for year in (currentYear - 5)...currentYear {
+            for year in explicitYears.sorted() {
                 for name in [full, abbr] {
                     patterns.append(TemporalPattern(phrase: "\(name) \(year)") {
                         monthRange(year: year, month: month)

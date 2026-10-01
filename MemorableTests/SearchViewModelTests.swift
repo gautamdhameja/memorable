@@ -1,0 +1,1152 @@
+import XCTest
+@testable import Memorable
+
+final class SearchViewModelTests: XCTestCase {
+    @MainActor
+    func testSmartAlbumQueryRequiresCompletedResultsForCurrentText() async {
+        let model = makeModel(search: { query in
+            if query == "failure" { throw ExpectedError.failure }
+            return Self.response(ids: query == "empty" ? [] : ["photo"])
+        })
+        XCTAssertNil(model.smartAlbumQuery)
+        model.setQueryText("  mountains  ")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(model.smartAlbumQuery, "mountains")
+
+        model.setQueryText("rivers")
+        XCTAssertNil(model.smartAlbumQuery, "An edited draft must not be saved against old results")
+        model.setQueryText("mountains")
+        XCTAssertEqual(model.smartAlbumQuery, "mountains")
+        model.setQueryText("")
+        XCTAssertNil(model.smartAlbumQuery)
+
+        for query in ["empty", "failure"] {
+            model.setQueryText(query)
+            model.submitSearch()
+            await model.waitForCurrentSearch()
+            XCTAssertNil(model.smartAlbumQuery, query)
+        }
+    }
+
+    @MainActor
+    func testSmartAlbumQueryRejectsSimilarityAndPendingTextSearch() async {
+        let searcher = ControlledSearcher()
+        let model = makeModel(search: { query in
+            try await searcher.search(query: query)
+        })
+        model.submitSimilaritySearch { [Self.result(id: "similar")] }
+        await model.waitForCurrentSearch()
+        XCTAssertNil(model.smartAlbumQuery, "Similarity display text cannot reproduce these results")
+
+        model.setQueryText("mountains")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "mountains")
+        XCTAssertNil(model.smartAlbumQuery)
+        await searcher.complete(query: "mountains", with: Self.response(ids: ["mountain"]))
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(model.smartAlbumQuery, "mountains")
+
+        model.submitSimilaritySearch { [Self.result(id: "another-similar")] }
+        XCTAssertNil(model.smartAlbumQuery)
+        await model.waitForCurrentSearch()
+        XCTAssertNil(model.smartAlbumQuery)
+    }
+
+    @MainActor
+    func testHistoryWriteLeavesResultsUsableAndResetDrainsIt() async {
+        let writer = ControlledSearcher()
+        var stored: [String] = []
+        let model = makeModel(
+            search: { _ in Self.response(ids: ["photo"]) },
+            addHistory: { query, _, _ in
+                _ = try? await writer.search(query: "write")
+                stored.append(query)
+            },
+            loadHistory: { stored }
+        )
+        model.setQueryText("mountains")
+        model.submitSearch(saveToHistory: true)
+        await writer.waitUntilCalled(with: "write")
+        XCTAssertEqual(model.results.map(\.id), ["photo"])
+        XCTAssertFalse(model.isSearching, "Completed results must replace the spinner before history persistence finishes")
+        // The main actor can still accept input while persistence is pending.
+        model.setQueryText("rivers")
+        XCTAssertEqual(model.queryText, "rivers")
+        model.beginIndexReset()
+        var drained = false
+        let reset = Task { @MainActor in
+            await model.waitForHistoryUpdates()
+            stored.removeAll()
+            model.finishIndexReset(didReset: true)
+            drained = true
+        }
+        await Task.yield()
+        XCTAssertFalse(drained)
+        await writer.complete(query: "write", with: Self.response(ids: []))
+        await reset.value
+        XCTAssertTrue(stored.isEmpty)
+        XCTAssertTrue(model.searchHistory.isEmpty)
+        model.applyInitialSearchHistory(["stale"], previews: [])
+        XCTAssertTrue(model.searchHistory.isEmpty)
+    }
+
+    @MainActor
+    func testResetSkipsHistoryWritesQueuedBehindAnActiveWrite() async {
+        let writer = ControlledSearcher()
+        var savedQueries: [String] = []
+        let model = makeModel(
+            search: { _ in Self.response(ids: ["photo"]) },
+            addHistory: { query, _, _ in
+                if query == "first" { _ = try? await writer.search(query: "write") }
+                savedQueries.append(query)
+            }
+        )
+        model.setQueryText("first")
+        model.submitSearch(saveToHistory: true)
+        await writer.waitUntilCalled(with: "write")
+        model.setQueryText("second")
+        model.submitSearch(saveToHistory: true)
+        // Let the second search enqueue its save behind the first.
+        for _ in 0..<1_000 where model.lastSearchedQuery != "second" { await Task.yield() }
+        XCTAssertEqual(model.lastSearchedQuery, "second")
+        model.beginIndexReset()
+        await writer.complete(query: "write", with: Self.response(ids: []))
+        await model.waitForHistoryUpdates()
+        XCTAssertEqual(savedQueries, ["first"])
+        model.finishIndexReset(didReset: true)
+        XCTAssertTrue(model.searchHistory.isEmpty)
+    }
+
+    private enum ExpectedError: LocalizedError {
+        case failure
+
+        var errorDescription: String? { "expected failure" }
+    }
+
+    private enum UnknownError: Error {
+        case failure
+    }
+
+    func testSearchHomeLayoutPlacesRecentSearchesFirstWhenMemoryIsAbsent() {
+        XCTAssertEqual(
+            SearchHomeLayoutPolicy.primarySections(
+                isTodayMemoryResolved: true,
+                hasTodayMemory: false,
+                hasRecentSearches: true
+            ),
+            [.recentSearches]
+        )
+        XCTAssertEqual(
+            SearchHomeLayoutPolicy.primarySections(
+                isTodayMemoryResolved: true,
+                hasTodayMemory: true,
+                hasRecentSearches: true
+            ),
+            [.todayMemory, .recentSearches]
+        )
+        XCTAssertEqual(
+            SearchHomeLayoutPolicy.primarySections(
+                isTodayMemoryResolved: false,
+                hasTodayMemory: false,
+                hasRecentSearches: true
+            ),
+            [.todayMemoryLoading, .recentSearches]
+        )
+    }
+
+    func testTodayMemoryRefreshStateCoalescesRequestsAndDefersBlockedWork() {
+        var state = TodayMemoryRefreshState()
+
+        XCTAssertFalse(state.request(canStart: false))
+        XCTAssertTrue(state.needsRefresh)
+        XCTAssertTrue(state.request(canStart: true))
+        XCTAssertTrue(state.isLoading)
+        XCTAssertFalse(state.request(canStart: true))
+        XCTAssertTrue(state.needsRefresh)
+        XCTAssertTrue(state.finish(wasCancelled: false))
+        XCTAssertFalse(state.isLoading)
+        XCTAssertTrue(state.request(canStart: true))
+    }
+
+    func testTodayMemoryRefreshStateCancellationKeepsRefreshPending() {
+        var state = TodayMemoryRefreshState()
+
+        XCTAssertTrue(state.request(canStart: true))
+        XCTAssertTrue(state.finish(wasCancelled: true))
+        XCTAssertTrue(state.needsRefresh)
+        XCTAssertFalse(state.isLoading)
+
+        XCTAssertTrue(state.request(canStart: true))
+        state.cancel()
+        XCTAssertTrue(state.needsRefresh)
+        XCTAssertFalse(state.isLoading)
+    }
+
+    @MainActor
+    func testIndexResetPreventsLateSearchAndInitialLoadFromRestoringHistory() async {
+        let searcher = ControlledSearcher()
+        var saves = 0
+        let returned = expectation(description: "old search returned")
+        let model = makeModel(search: { query in
+            defer { returned.fulfill() }
+            return try await searcher.search(query: query)
+        }, addHistory: { _, _, _ in saves += 1 })
+        let preview = RecentSearchPreview(query: "old query", result: Self.result(id: "old"), resultCount: 1)
+        model.setSearchHistory(["old query"], previews: [preview])
+        model.setQueryText("dogs")
+        model.submitSearch(saveToHistory: true)
+        await searcher.waitUntilCalled(with: "dogs")
+
+        model.beginIndexReset()
+        XCTAssertEqual(model.searchHistory, ["old query"], "Preserve history until the reset commits")
+        model.setQueryText("blocked")
+        model.submitSearch(saveToHistory: true)
+        XCTAssertFalse(model.isSearching)
+        model.finishIndexReset(didReset: true)
+        model.applyInitialSearchHistory(["old query"], previews: [preview])
+        await searcher.complete(query: "dogs", with: response(id: "old-result"))
+        await fulfillment(of: [returned], timeout: 1)
+        XCTAssertEqual(saves, 0)
+        XCTAssertTrue(model.searchHistory.isEmpty)
+        XCTAssertTrue(model.recentSearchPreviews.isEmpty)
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertTrue(model.lastResults.isEmpty)
+    }
+
+    @MainActor
+    func testFailedIndexResetKeepsHistoryAndAllowsSearchingAgain() async {
+        let model = makeModel(search: { _ in Self.response(ids: ["new-result"]) })
+        model.setSearchHistory(["saved query"], previews: [])
+        model.beginIndexReset()
+        model.finishIndexReset(didReset: false)
+        XCTAssertEqual(model.searchHistory, ["saved query"])
+        model.setQueryText("new query")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(model.results.map(\.id), ["new-result"])
+    }
+
+    @MainActor
+    func testEditingTextDoesNotCancelSubmittedSearch() async throws {
+        let searcher = ControlledSearcher()
+        let model = makeModel(search: searcher.search)
+
+        model.setQueryText("cats")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "cats")
+
+        model.setQueryText("dogs")
+        await searcher.complete(query: "cats", with: response(id: "cat-result"))
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.queryText, "dogs")
+        XCTAssertEqual(model.results.map(\.id), ["cat-result"])
+        XCTAssertEqual(model.lastSearchedQuery, "cats")
+        XCTAssertFalse(model.isSearching)
+    }
+
+    @MainActor
+    func testSlowSimilarityCannotOverwriteNewerTextSearch() async {
+        let searcher = ControlledSearcher()
+        let similarityReturned = expectation(description: "obsolete similarity returned")
+        let model = makeModel(search: { _ in Self.response(ids: ["text-result"]) })
+        model.setQueryText("initial")
+        model.submitSimilaritySearch {
+            defer { similarityReturned.fulfill() }
+            return (try? await searcher.search(query: "similar"))?.results ?? []
+        }
+        await searcher.waitUntilCalled(with: "similar")
+
+        model.setQueryText("new text")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        await searcher.complete(query: "similar", with: response(id: "obsolete-similar"))
+        await fulfillment(of: [similarityReturned], timeout: 1)
+
+        XCTAssertEqual(model.queryText, "new text")
+        XCTAssertEqual(model.results.map(\.id), ["text-result"])
+        XCTAssertEqual(model.lastSearchedQuery, "new text")
+    }
+
+    @MainActor
+    func testSlowTextSearchCannotOverwriteNewerSimilarity() async {
+        let searcher = ControlledSearcher()
+        let textReturned = expectation(description: "obsolete text returned")
+        let model = makeModel(search: { query in
+            defer { textReturned.fulfill() }
+            return try await searcher.search(query: query)
+        })
+        model.setQueryText("old text")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "old text")
+
+        model.submitSimilaritySearch { [Self.result(id: "similar-result")] }
+        await model.waitForCurrentSearch()
+        await searcher.complete(query: "old text", with: response(id: "obsolete-text"))
+        await fulfillment(of: [textReturned], timeout: 1)
+
+        XCTAssertEqual(model.queryText, "Similar to selected photo")
+        XCTAssertEqual(model.results.map(\.id), ["similar-result"])
+        XCTAssertEqual(model.lastSearchedQuery, "Similar to selected photo")
+        XCTAssertFalse(model.isSearching)
+    }
+
+    @MainActor
+    func testClearRevocationAndMemoryPressureRejectPendingSimilarity() async {
+        let invalidations: [(String, (SearchViewModel) -> Void)] = [
+            ("clear", { $0.setQueryText("") }),
+            ("revocation", { $0.handleProEntitlementRevoked() }),
+            ("memory pressure", { $0.handleMemoryPressure() }),
+        ]
+        for (reason, invalidate) in invalidations {
+            let searcher = ControlledSearcher()
+            let returned = expectation(description: "similarity returned after \(reason)")
+            let model = makeModel(search: { _ in Self.response(ids: []) })
+            model.setQueryText("initial")
+            model.submitSimilaritySearch {
+                defer { returned.fulfill() }
+                return (try? await searcher.search(query: "similar"))?.results ?? []
+            }
+            await searcher.waitUntilCalled(with: "similar")
+            invalidate(model)
+            await searcher.complete(query: "similar", with: response(id: "obsolete"))
+            await fulfillment(of: [returned], timeout: 1)
+
+            XCTAssertTrue(model.results.isEmpty, reason)
+            XCTAssertTrue(model.lastResults.isEmpty, reason)
+            XCTAssertNil(model.activeSearchID, reason)
+            XCTAssertFalse(model.isSearching, reason)
+            if reason == "clear" { XCTAssertTrue(model.queryText.isEmpty) }
+        }
+    }
+
+    @MainActor
+    func testSimilarityPublishesFreshFilterAndScreenshotState() async {
+        let model = makeModel(
+            search: { _ in
+                SearchResponse(
+                    results: [Self.result(id: "old-screen")],
+                    fallbackResults: [Self.result(id: "old-fallback")],
+                    filtersApplied: FilterSummary(dateDescription: "2022", locationDescription: "Berlin", visualQuery: "dog"),
+                    restrictionSummary: SearchRestrictionSummary(features: [.date])
+                )
+            },
+            detectScreenshots: { results in
+                Set(results.filter { $0.id.hasSuffix("screen") }.map(\.id))
+            }
+        )
+        model.setQueryText("old query")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        await model.waitForScreenshotDetection()
+        model.setMediaFilter(.screenshots)
+        model.showAllResults(count: 300)
+
+        model.submitSimilaritySearch {
+            [Self.result(id: "new-screen"), Self.result(id: "new-photo")]
+        }
+        await model.waitForCurrentSearch()
+        await model.waitForScreenshotDetection()
+
+        XCTAssertNil(model.filterSummary)
+        XCTAssertNil(model.restrictionSummary)
+        XCTAssertNil(model.searchError)
+        XCTAssertTrue(model.fallbackResults.isEmpty)
+        XCTAssertEqual(model.mediaFilter, .all)
+        XCTAssertEqual(model.screenshotIDs, ["new-screen"])
+        XCTAssertEqual(model.visibleCount, SearchViewModel.initialVisibleCount)
+        XCTAssertEqual(model.lastResults.map(\.id), ["new-screen", "new-photo"])
+        model.setMediaFilter(.screenshots)
+        XCTAssertEqual(model.filteredResults(model.results).map(\.id), ["new-screen"])
+
+        model.submitSimilaritySearch { [] }
+        await model.waitForCurrentSearch()
+        await model.waitForScreenshotDetection()
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertTrue(model.lastResults.isEmpty)
+        XCTAssertTrue(model.screenshotIDs.isEmpty)
+    }
+
+    @MainActor
+    func testPastedQueryIsBoundedBeforeItCanBeStoredOrSearched() {
+        let model = makeModel(search: { _ in Self.response(ids: []) })
+        let oversized = String(repeating: "x", count: QueryInputPolicy.maximumCharacterCount + 1_000)
+
+        model.setQueryText(oversized)
+
+        XCTAssertEqual(model.queryText.count, QueryInputPolicy.maximumCharacterCount)
+        XCTAssertEqual(model.normalizedQuery.count, QueryInputPolicy.maximumCharacterCount)
+    }
+
+    @MainActor
+    func testClearingQueryReturnsToHistoryWithoutDeletingIt() async {
+        let model = makeModel(search: { _ in Self.response(ids: ["surprise-result"]) })
+        model.setSearchHistory(["previous search"])
+        model.setQueryText("hiking trail")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        model.setQueryText("")
+
+        XCTAssertTrue(model.queryText.isEmpty)
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertTrue(model.lastResults.isEmpty)
+        XCTAssertNil(model.lastSearchedQuery)
+        XCTAssertEqual(model.searchHistory, ["previous search"])
+    }
+
+    @MainActor
+    func testSuccessfulSearchPersistsTopResultAsRecentSearchPreview() async {
+        var storedHistory: [String] = []
+        var storedPreviews: [RecentSearchPreview] = []
+        let video = Self.result(id: "video", isVideo: true, bestFramePosition: 0.4)
+        let photo = Self.result(id: "photo")
+        let model = makeModel(
+            search: { _ in
+                SearchResponse(
+                    results: [video, photo],
+                    fallbackResults: [],
+                    filtersApplied: nil
+                )
+            },
+            addHistory: { query, previewResult, resultCount in
+                storedHistory = [query]
+                storedPreviews = [RecentSearchPreview(
+                    query: query,
+                    result: previewResult,
+                    resultCount: resultCount
+                )]
+            },
+            loadHistory: { storedHistory },
+            loadHistoryPreviews: { storedPreviews }
+        )
+
+        model.setQueryText("California 2022")
+        model.submitSearch(saveToHistory: true)
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.searchHistory, ["California 2022"])
+        XCTAssertEqual(model.recentSearchPreviews.map(\.result.id), ["video"])
+        XCTAssertEqual(model.recentSearchPreviews.map(\.result.bestFramePosition), [0.4])
+        XCTAssertEqual(model.recentSearchPreviews.map(\.resultCount), [2])
+    }
+
+    @MainActor
+    func testInitialHistorySnapshotCannotOverwriteNewerPublishedHistory() {
+        let model = makeModel(search: { _ in Self.response(ids: []) })
+        let stalePreview = RecentSearchPreview(
+            query: "stale",
+            result: Self.result(id: "stale"),
+            resultCount: 1
+        )
+        let currentPreview = RecentSearchPreview(
+            query: "current",
+            result: Self.result(id: "current"),
+            resultCount: 2
+        )
+
+        model.setSearchHistory(["current"], previews: [currentPreview])
+        model.applyInitialSearchHistory(["stale"], previews: [stalePreview])
+
+        XCTAssertEqual(model.searchHistory, ["current"])
+        XCTAssertEqual(model.recentSearchPreviews, [currentPreview])
+    }
+
+    func testRecentSearchHomePolicyShowsCompleteHistoryAndPreservesMissingPreviewFallbacks() {
+        let secondPreview = RecentSearchPreview(
+            query: "Dogs at the beach",
+            result: Self.result(id: "dogs"),
+            resultCount: 27
+        )
+
+        let items = RecentSearchHomePolicy.items(
+            history: ["California 2022", "dogs at the beach", "family cooking", "fourth"],
+            previews: [secondPreview]
+        )
+
+        XCTAssertEqual(
+            items.map(\.query),
+            ["California 2022", "dogs at the beach", "family cooking", "fourth"]
+        )
+        XCTAssertEqual(items.map(\.historyIndex), [0, 1, 2, 3])
+        XCTAssertNil(items[0].preview)
+        XCTAssertEqual(items[1].preview?.result.id, "dogs")
+        XCTAssertNil(items[2].preview)
+        XCTAssertNil(items[3].preview)
+    }
+
+    @MainActor
+    func testBackfillsVisibleLegacySearchPreviewsWithoutPublishingSearchResults() async {
+        var storedPreviews: [RecentSearchPreview] = []
+        var backfilledQueries: [String] = []
+        let model = makeModel(
+            search: { query in
+                Self.response(ids: ["preview-\(query)"])
+            },
+            loadHistory: { ["newest", "middle", "oldest", "hidden"] },
+            loadHistoryPreviews: { storedPreviews },
+            backfillHistoryPreviews: { previews in
+                backfilledQueries.append(contentsOf: previews.map(\.query))
+                storedPreviews.append(contentsOf: previews)
+                return true
+            }
+        )
+        model.setSearchHistory(["newest", "middle", "oldest", "hidden"])
+
+        model.startRecentSearchPreviewBackfill()
+        await model.waitForRecentSearchPreviewBackfill()
+
+        XCTAssertEqual(backfilledQueries, ["newest", "middle", "oldest"])
+        XCTAssertEqual(model.recentSearchPreviews.map(\.query), ["newest", "middle", "oldest"])
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertTrue(model.queryText.isEmpty)
+    }
+
+    @MainActor
+    func testTypingCancelsLegacyPreviewBackfillBeforeItCanPublish() async {
+        let searcher = ControlledSearcher()
+        var backfilledQueries: [String] = []
+        let model = makeModel(
+            search: { query in try await searcher.search(query: query) },
+            loadHistory: { ["legacy"] },
+            backfillHistoryPreviews: { previews in
+                backfilledQueries.append(contentsOf: previews.map(\.query))
+                return true
+            }
+        )
+        model.setSearchHistory(["legacy"])
+        model.startRecentSearchPreviewBackfill()
+        await searcher.waitUntilCalled(with: "legacy")
+
+        model.setQueryText("new search")
+        await searcher.complete(query: "legacy", with: Self.response(ids: ["late-preview"]))
+        await model.waitForRecentSearchPreviewBackfill()
+
+        XCTAssertTrue(backfilledQueries.isEmpty)
+        XCTAssertEqual(model.queryText, "new search")
+    }
+
+    @MainActor
+    func testPersistenceFailureLeavesLegacyPreviewEligibleForRetry() async {
+        var searchCount = 0
+        var persistenceCount = 0
+        var storedPreviews: [RecentSearchPreview] = []
+        let model = makeModel(
+            search: { _ in
+                XCTFail("Legacy preview repair must not use the user-search path")
+                return Self.response(ids: [])
+            },
+            searchForHistoryPreview: { _ in
+                searchCount += 1
+                return Self.response(ids: ["preview"])
+            },
+            loadHistory: { ["legacy"] },
+            loadHistoryPreviews: { storedPreviews },
+            backfillHistoryPreviews: { previews in
+                persistenceCount += 1
+                guard persistenceCount > 1 else { return false }
+                storedPreviews = previews
+                return true
+            }
+        )
+        model.setSearchHistory(["legacy"])
+
+        model.startRecentSearchPreviewBackfill()
+        await model.waitForRecentSearchPreviewBackfill()
+        model.startRecentSearchPreviewBackfill()
+        await model.waitForRecentSearchPreviewBackfill()
+
+        XCTAssertEqual(searchCount, 2)
+        XCTAssertEqual(persistenceCount, 2)
+        XCTAssertEqual(model.recentSearchPreviews.map(\.result.id), ["preview"])
+    }
+
+    @MainActor
+    func testSearchPublishesAndClearingQueryRemovesRestrictionDisclosure() async {
+        let restriction = SearchRestrictionSummary(features: [.location, .date])
+        let model = makeModel(search: { _ in
+            SearchResponse(
+                results: [Self.result(id: "visual-result")],
+                fallbackResults: [],
+                filtersApplied: nil,
+                restrictionSummary: restriction
+            )
+        })
+
+        model.setQueryText("California 2022")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.restrictionSummary, restriction)
+
+        model.setQueryText("")
+        XCTAssertNil(model.restrictionSummary)
+    }
+
+    func testLocationEmptyStateExplainsIncompleteGeocoding() {
+        let summary = FilterSummary(
+            dateDescription: "2022",
+            locationDescription: "California",
+            visualQuery: ""
+        )
+        let progress = GeocodingProgressState(
+            completed: 250,
+            total: 1_000,
+            phase: .running
+        )
+
+        XCTAssertEqual(
+            SearchResultsPresentation.noResultsTitle(
+                summary: summary,
+                geocodingProgress: progress
+            ),
+            "Still resolving photo locations"
+        )
+        XCTAssertTrue(SearchResultsPresentation.noResultsExplanation(
+            summary: summary,
+            geocodingProgress: progress
+        ).contains("250 of 1000 complete"))
+    }
+
+    @MainActor
+    func testOnlyNewerSubmittedSearchSupersedesOlderSearch() async throws {
+        let searcher = ControlledSearcher()
+        let model = makeModel(search: searcher.search)
+
+        model.setQueryText("first")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "first")
+
+        model.setQueryText("second")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "second")
+
+        await searcher.complete(query: "second", with: response(id: "second-result"))
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(model.results.map(\.id), ["second-result"])
+
+        // The controlled search intentionally ignores task cancellation. Identity
+        // checks must still prevent the older result from replacing the newer one.
+        await searcher.complete(query: "first", with: response(id: "first-result"))
+        await Task.yield()
+
+        XCTAssertEqual(model.results.map(\.id), ["second-result"])
+        XCTAssertEqual(model.lastSearchedQuery, "second")
+    }
+
+    @MainActor
+    func testMemoryPressureCancelsSearchAndRejectsLateResults() async throws {
+        let searcher = ControlledSearcher()
+        let model = makeModel(search: searcher.search)
+        model.setQueryText("large search")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "large search")
+
+        model.handleMemoryPressure()
+        await searcher.complete(query: "large search", with: response(id: "late-result"))
+        await Task.yield()
+
+        XCTAssertFalse(model.isSearching)
+        XCTAssertNil(model.activeSearchID)
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertTrue(model.lastResults.isEmpty)
+    }
+
+    @MainActor
+    func testEntitlementRevocationRejectsLateSearchResults() async throws {
+        let searcher = ControlledSearcher()
+        let model = makeModel(search: searcher.search)
+        model.setQueryText("last winter in Berlin")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "last winter in Berlin")
+
+        model.handleProEntitlementRevoked()
+        await searcher.complete(
+            query: "last winter in Berlin",
+            with: response(id: "late-pro-result")
+        )
+        await Task.yield()
+
+        XCTAssertFalse(model.isSearching)
+        XCTAssertNil(model.activeSearchID)
+        XCTAssertTrue(model.results.isEmpty)
+    }
+
+    @MainActor
+    func testIndexVersionChangeKeepsResultsVisibleUntilValidationCompletes() async throws {
+        let validator = ControlledValidator()
+        let model = makeModel(
+            search: { _ in Self.response(ids: ["kept", "removed"]) },
+            validate: validator.validate
+        )
+        model.setQueryText("mountains")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        model.validateVisibleResults(reason: "indexVersion changed")
+        await validator.waitUntilCalled()
+
+        XCTAssertEqual(model.results.map(\.id), ["kept", "removed"])
+
+        await validator.complete(validIDs: ["kept"])
+        await model.waitForVisibleResultValidation()
+
+        XCTAssertEqual(model.results.map(\.id), ["kept"])
+    }
+
+    @MainActor
+    func testStaleIndexValidationCannotOverwriteNewerSearchResults() async throws {
+        let validator = ControlledValidator()
+        let model = makeModel(
+            search: { query in Self.response(ids: ["\(query)-result"]) },
+            validate: validator.validate
+        )
+
+        model.setQueryText("first")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        model.validateVisibleResults(reason: "indexVersion changed")
+        await validator.waitUntilCalled()
+
+        model.setQueryText("second")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        await validator.complete(validIDs: ["first-result"])
+        await model.waitForVisibleResultValidation()
+
+        XCTAssertEqual(model.results.map(\.id), ["second-result"])
+    }
+
+    @MainActor
+    func testFallbackOnlyResultsAreValidatedAfterLibraryChanges() async {
+        var validatedIDs: Set<String> = []
+        let model = makeModel(search: { _ in
+            SearchResponse(results: [], fallbackResults: [Self.result(id: "kept"), Self.result(id: "removed")], filtersApplied: nil)
+        }, validate: { candidates in
+            validatedIDs = Set(candidates.map(\.id))
+            return ["kept"]
+        })
+        model.setQueryText("trip")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        model.validateVisibleResults(reason: "foreground return")
+        await model.waitForVisibleResultValidation()
+        XCTAssertEqual(validatedIDs, ["kept", "removed"])
+        XCTAssertEqual(model.fallbackResults.map(\.id), ["kept"])
+    }
+
+    @MainActor
+    func testStaleValidationCannotOverwriteNewFallbackResults() async {
+        let validator = ControlledValidator()
+        let model = makeModel(search: { query in
+            SearchResponse(results: [], fallbackResults: [Self.result(id: query)], filtersApplied: nil)
+        }, validate: validator.validate)
+        model.setQueryText("first")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        model.validateVisibleResults(reason: "foreground return")
+        await validator.waitUntilCalled()
+        model.setQueryText("second")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        await validator.complete(validIDs: [])
+        await model.waitForVisibleResultValidation()
+        XCTAssertEqual(model.fallbackResults.map(\.id), ["second"])
+    }
+
+    @MainActor
+    func testPhotoViewerUsesCurrentMediaFilterAndSortOrder() async {
+        let model = makeModel(search: { _ in
+            SearchResponse(results: [
+                Self.result(id: "old", date: Date(timeIntervalSince1970: 1)),
+                Self.result(id: "video", date: Date(timeIntervalSince1970: 4), isVideo: true),
+                Self.result(id: "screen", date: Date(timeIntervalSince1970: 3)),
+                Self.result(id: "recent", date: Date(timeIntervalSince1970: 2)),
+            ], fallbackResults: [], filtersApplied: nil)
+        }, detectScreenshots: { _ in ["screen"] })
+        model.setQueryText("trip")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        await model.waitForScreenshotDetection()
+        model.selectSortMode(.recent)
+        model.setMediaFilter(.photos)
+        XCTAssertEqual(model.photoViewerResults.map(\.id), ["recent", "old"])
+        model.setMediaFilter(.screenshots)
+        XCTAssertEqual(model.photoViewerResults.map(\.id), ["screen"])
+        model.setMediaFilter(.all)
+        XCTAssertEqual(model.photoViewerResults.map(\.id), ["screen", "recent", "old"])
+    }
+
+    @MainActor
+    func testFilteringSortingAndProgressiveRevealAreModelState() async throws {
+        let recent = Date(timeIntervalSince1970: 2)
+        let older = Date(timeIntervalSince1970: 1)
+        let model = makeModel(search: { _ in
+            SearchResponse(
+                results: [
+                    Self.result(id: "older", date: older),
+                    Self.result(id: "video", date: recent, isVideo: true),
+                    Self.result(id: "screenshot", date: recent),
+                ],
+                fallbackResults: [],
+                filtersApplied: nil
+            )
+        }, detectScreenshots: { _ in ["screenshot"] })
+
+        model.setQueryText("trip")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        await model.waitForScreenshotDetection()
+
+        model.selectSortMode(.recent)
+        model.setMediaFilter(.photos)
+
+        let filtered = model.filteredResults(model.results)
+        XCTAssertEqual(filtered.map(\.id), ["older"])
+        XCTAssertEqual(Array(filtered.prefix(model.visibleCount)).map(\.id), ["older"])
+    }
+
+    @MainActor
+    func testSortModeStorageKeyRemainsStable() {
+        XCTAssertEqual(SearchViewModel.sortModeStorageKey, "searchSortMode")
+    }
+
+    @MainActor
+    func testDiscoverySuggestionsRequireLoadedEmptyHistory() async {
+        let model = makeModel(search: { _ in Self.response(ids: []) })
+
+        XCTAssertFalse(model.shouldShowDiscoverySuggestions)
+
+        model.setSearchHistory([])
+        XCTAssertTrue(model.shouldShowDiscoverySuggestions)
+
+        model.setSearchHistory(["cats"])
+        XCTAssertFalse(model.shouldShowDiscoverySuggestions)
+
+        model.clearSearchHistory()
+        await model.waitForHistoryUpdates()
+        XCTAssertTrue(model.shouldShowDiscoverySuggestions)
+
+        model.setSearchHistory(["dogs"])
+        model.removeSearchHistory(at: 0)
+        await model.waitForHistoryUpdates()
+        XCTAssertTrue(model.shouldShowDiscoverySuggestions)
+    }
+
+    @MainActor
+    func testSubmittedSearchPrioritizesUserWorkBeforeSearching() async {
+        var events: [String] = []
+        let model = makeModel(
+            prioritizeUserSearch: { events.append("prioritize") },
+            search: { _ in
+                events.append("search")
+                return Self.response(ids: [])
+            }
+        )
+
+        model.setQueryText("cats")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(events, ["prioritize", "search"])
+    }
+
+    @MainActor
+    func testSearchActivityCoversSlowSearchAndClearReleasesIt() async {
+        let searcher = ControlledSearcher()
+        var activity: [Bool] = []
+        let model = makeModel(
+            searchActivityChanged: { activity.append($0) },
+            search: searcher.search
+        )
+        model.setQueryText("cats")
+        model.submitSearch()
+        await searcher.waitUntilCalled(with: "cats")
+        XCTAssertEqual(activity, [true])
+        model.setQueryText("")
+        XCTAssertEqual(activity, [true, false])
+        await searcher.complete(query: "cats", with: response(id: "old"))
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(activity, [true, false])
+    }
+
+    @MainActor
+    func testSearchFailureAndSimilarityReleaseMaintenancePause() async {
+        var activity: [Bool] = []
+        let model = makeModel(
+            searchActivityChanged: { activity.append($0) },
+            search: { _ in throw ExpectedError.failure }
+        )
+        model.setQueryText("cats")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(activity, [true, false])
+        model.submitSimilaritySearch { [] }
+        await model.waitForCurrentSearch()
+        XCTAssertEqual(activity, [true, false, true, false])
+    }
+
+    func testForegroundValidationPartitionsPhotoKitAndFolderResults() {
+        let candidates = [
+            Self.result(id: "photo-valid"),
+            Self.result(id: "photo-missing"),
+            Self.folderResult(id: "folder-valid", sourceId: "folder-a"),
+            Self.folderResult(id: "folder-missing", sourceId: "folder-b"),
+        ]
+        var checkedFolderIDs: [String] = []
+
+        let validIDs = SearchResultForegroundValidator.validResultIDs(
+            candidates: candidates,
+            validPhotoKitIdentifiers: ["photo-valid"],
+            isFolderResultAccessible: { result in
+                checkedFolderIDs.append(result.id)
+                return result.id == "folder-valid"
+            }
+        )
+
+        XCTAssertEqual(validIDs, ["photo-valid", "folder-valid"])
+        XCTAssertEqual(checkedFolderIDs, ["folder-valid", "folder-missing"])
+    }
+
+    @MainActor
+    func testPreparationFailureResetsSearchLifecycle() async {
+        let model = SearchViewModel(dependencies: .init(
+            prioritizeUserSearch: {},
+            isSemanticSearchReady: { false },
+            isIndexReady: { false },
+            isIndexLoaded: { false },
+            isMaintenanceWorkIdle: { true },
+            prepareForSearch: { throw ExpectedError.failure },
+            search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
+            searchForHistoryPreview: { _ in XCTFail("Preview search should not run"); return Self.response(ids: []) },
+            detectScreenshotIDs: { _ in [] },
+            validResultIDs: { _ in [] },
+            addHistory: { _, _, _ in },
+            backfillHistoryPreviews: { _ in true },
+            loadHistory: { [] },
+            loadHistoryPreviews: { [] },
+            clearHistory: {},
+            removeHistory: { _ in },
+            now: { 1 }
+        ))
+
+        model.setQueryText("cats")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.searchError, "expected failure")
+        XCTAssertFalse(model.isSearching)
+        XCTAssertNil(model.activeSearchID)
+        XCTAssertTrue(model.results.isEmpty)
+    }
+
+    @MainActor
+    func testUnknownPreparationFailureUsesSafeGenericCopy() async {
+        let model = SearchViewModel(dependencies: .init(
+            prioritizeUserSearch: {},
+            isSemanticSearchReady: { false },
+            isIndexReady: { false },
+            isIndexLoaded: { false },
+            isMaintenanceWorkIdle: { true },
+            prepareForSearch: { throw UnknownError.failure },
+            search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
+            searchForHistoryPreview: { _ in XCTFail("Preview search should not run"); return Self.response(ids: []) },
+            detectScreenshotIDs: { _ in [] },
+            validResultIDs: { _ in [] },
+            addHistory: { _, _, _ in },
+            backfillHistoryPreviews: { _ in true },
+            loadHistory: { [] },
+            loadHistoryPreviews: { [] },
+            clearHistory: {},
+            removeHistory: { _ in },
+            now: { 1 }
+        ))
+
+        model.setQueryText("cats")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.searchError, "Search couldn't be completed. Try again.")
+    }
+
+    func testUserReachableErrorsProvideExplicitMessages() {
+        let errors: [any Error] = [
+            SearchEngineError.corruptedIndex,
+            SearchEngineError.invalidEmbedding,
+            SearchEngineError.textEncoderUnavailable,
+            CLIPTokenizer.TokenizerError.filesNotFound,
+            DatabaseCapabilityError.unavailable,
+            DatabaseCapabilityError.indexingUnavailableInFallback,
+            PhotoSharePreparationError.unsupportedMedia,
+            PhotoSharePreparationError.sourceUnavailable,
+            PhotoSharePreparationError.fileTooLarge,
+            PhotoSharePreparationError.storageUnavailable,
+            ProManager.PurchaseError.unverified,
+        ]
+
+        for error in errors {
+            let description = (error as? any LocalizedError)?.errorDescription
+            XCTAssertNotNil(description, "Missing explicit user message for \(type(of: error))")
+            XCTAssertFalse(description?.isEmpty ?? true)
+            XCTAssertFalse(description?.contains("The operation couldn") ?? true)
+        }
+    }
+
+    @MainActor
+    func testUnavailableIndexResetsSearchLifecycle() async {
+        let model = SearchViewModel(dependencies: .init(
+            prioritizeUserSearch: {},
+            isSemanticSearchReady: { false },
+            isIndexReady: { false },
+            isIndexLoaded: { false },
+            isMaintenanceWorkIdle: { true },
+            prepareForSearch: {},
+            search: { _ in XCTFail("Search should not run"); return Self.response(ids: []) },
+            searchForHistoryPreview: { _ in XCTFail("Preview search should not run"); return Self.response(ids: []) },
+            detectScreenshotIDs: { _ in [] },
+            validResultIDs: { _ in [] },
+            addHistory: { _, _, _ in },
+            backfillHistoryPreviews: { _ in true },
+            loadHistory: { [] },
+            loadHistoryPreviews: { [] },
+            clearHistory: {},
+            removeHistory: { _ in },
+            now: { 1 }
+        ))
+
+        model.setQueryText("cats")
+        model.submitSearch()
+        await model.waitForCurrentSearch()
+
+        XCTAssertEqual(model.searchError, "Index your photos before searching.")
+        XCTAssertFalse(model.isSearching)
+        XCTAssertNil(model.activeSearchID)
+        XCTAssertTrue(model.results.isEmpty)
+    }
+
+    @MainActor
+    private func makeModel(
+        prioritizeUserSearch: @escaping () -> Void = {},
+        searchActivityChanged: @escaping (Bool) -> Void = { _ in },
+        search: @escaping (String) async throws -> SearchResponse,
+        searchForHistoryPreview: ((String) async throws -> SearchResponse)? = nil,
+        validate: @escaping ([SearchResult]) async -> Set<String> = { results in Set(results.map(\.id)) },
+        detectScreenshots: @escaping ([SearchResult]) async -> Set<String> = { _ in [] },
+        addHistory: @escaping (String, SearchResult, Int) async -> Void = { _, _, _ in },
+        loadHistory: @escaping () async -> [String] = { [] },
+        loadHistoryPreviews: @escaping () async -> [RecentSearchPreview] = { [] },
+        backfillHistoryPreviews: @escaping ([RecentSearchPreview]) async -> Bool = { _ in true }
+    ) -> SearchViewModel {
+        SearchViewModel(dependencies: .init(
+            prioritizeUserSearch: prioritizeUserSearch,
+            isSemanticSearchReady: { true },
+            isIndexReady: { true },
+            isIndexLoaded: { true },
+            isMaintenanceWorkIdle: { true },
+            prepareForSearch: {},
+            search: search,
+            searchForHistoryPreview: searchForHistoryPreview ?? search,
+            detectScreenshotIDs: detectScreenshots,
+            validResultIDs: validate,
+            addHistory: addHistory,
+            backfillHistoryPreviews: backfillHistoryPreviews,
+            loadHistory: loadHistory,
+            loadHistoryPreviews: loadHistoryPreviews,
+            clearHistory: {},
+            removeHistory: { _ in },
+            now: { 1 },
+            searchActivityChanged: searchActivityChanged
+        ))
+    }
+
+    private static func response(ids: [String]) -> SearchResponse {
+        SearchResponse(results: ids.map { result(id: $0) }, fallbackResults: [], filtersApplied: nil)
+    }
+
+    private func response(id: String) -> SearchResponse {
+        Self.response(ids: [id])
+    }
+
+    private static func result(
+        id: String,
+        date: Date? = nil,
+        isVideo: Bool = false,
+        bestFramePosition: Double? = nil
+    ) -> SearchResult {
+        SearchResult(
+            id: id,
+            score: 0.9,
+            localIdentifier: id,
+            creationDate: date,
+            isVideo: isVideo,
+            bestFramePosition: bestFramePosition
+        )
+    }
+
+    private static func folderResult(id: String, sourceId: String) -> SearchResult {
+        SearchResult(
+            id: id,
+            score: 0.9,
+            localIdentifier: "folder:\(sourceId):\(id).jpg",
+            creationDate: nil,
+            isVideo: false,
+            bestFramePosition: nil,
+            sourceId: sourceId,
+            filePath: "/selected/\(id).jpg"
+        )
+    }
+}
+
+private actor ControlledSearcher {
+    private var calls: [String] = []
+    private var continuations: [String: CheckedContinuation<SearchResponse, Error>] = [:]
+    private var callWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    func search(query: String) async throws -> SearchResponse {
+        calls.append(query)
+        callWaiters.removeValue(forKey: query)?.forEach { $0.resume() }
+        return try await withCheckedThrowingContinuation { continuation in
+            continuations[query] = continuation
+        }
+    }
+
+    func complete(query: String, with response: SearchResponse) {
+        continuations.removeValue(forKey: query)?.resume(returning: response)
+    }
+
+    func waitUntilCalled(with query: String) async {
+        guard !calls.contains(query) else { return }
+        await withCheckedContinuation { continuation in
+            callWaiters[query, default: []].append(continuation)
+        }
+    }
+}
+
+private actor ControlledValidator {
+    private var wasCalled = false
+    private var continuation: CheckedContinuation<Set<String>, Never>?
+    private var callWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func validate(_ results: [SearchResult]) async -> Set<String> {
+        wasCalled = true
+        callWaiters.forEach { $0.resume() }
+        callWaiters = []
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func complete(validIDs: Set<String>) {
+        continuation?.resume(returning: validIDs)
+        continuation = nil
+    }
+
+    func waitUntilCalled() async {
+        guard !wasCalled else { return }
+        await withCheckedContinuation { continuation in
+            callWaiters.append(continuation)
+        }
+    }
+}

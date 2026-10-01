@@ -1,96 +1,146 @@
 import SwiftUI
-import Photos
 
 struct IndexingSlideshowView: View {
-    let captionService: PhotoCaptionService
+    var onImageChange: (UIImage?) -> Void = { _ in }
     @Environment(\.database) private var database
 
     @State private var currentImage: UIImage?
     @State private var currentDate: Date?
-    @State private var currentCaption: String?
     @State private var isVisible = false
-    @State private var captionVisible = false
+    @State private var dateVisible = false
     @State private var timerTask: Task<Void, Never>?
+    @State private var initialLoadTask: Task<Void, Never>?
     @State private var shownIds: Set<String> = []
+    @State private var duplicateFilter = MemoryDuplicateFilter()
+    @State private var imageLoadGeneration: UInt = 0
 
-    var body: some View {
-        ZStack {
-            if let image = currentImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .overlay(alignment: .bottom) {
-                        VStack(spacing: 6) {
-                            if let caption = currentCaption {
-                                Text(caption)
-                                    .font(.system(.subheadline, design: .rounded, weight: .medium))
-                                    .italic()
-                                    .foregroundStyle(.white)
-                                    .multilineTextAlignment(.center)
-                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                            }
+    static func imageContent(currentImage: UIImage?, currentDate: Date?, isVisible: Bool, dateVisible: Bool) -> some View {
+        Color.clear
+            .aspectRatio(4.0 / 3.0, contentMode: .fit)
+            .frame(maxWidth: .infinity, maxHeight: 430)
+            .overlay {
+                if let image = currentImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .overlay(alignment: .bottom) {
                             if let date = currentDate {
                                 Text(date.formatted(date: .abbreviated, time: .omitted))
-                                    .font(.caption.weight(.medium))
+                                    .font(Celestial.Typography.eyebrow)
                                     .foregroundStyle(.white.opacity(0.8))
                                     .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .modifier(
+                                        GlassPanelModifier(
+                                            cornerRadius: 16,
+                                            tint: Color.black.opacity(0.14)
+                                        )
+                                    )
+                                    .padding(.horizontal, 12)
+                                    .padding(.bottom, 10)
+                                    .frame(maxWidth: .infinity)
+                                    .background(
+                                        LinearGradient(
+                                            colors: [.clear, .black.opacity(0.6)],
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
+                                    )
+                                    .opacity(dateVisible ? 1 : 0)
+                                    .animation(.easeInOut(duration: 0.6), value: dateVisible)
                             }
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 16)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            LinearGradient(
-                                colors: [.clear, .black.opacity(0.6)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .opacity(captionVisible ? 1 : 0)
-                        .animation(.easeInOut(duration: 0.6), value: captionVisible)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .frame(maxWidth: .infinity, maxHeight: 400)
-            } else {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Celestial.Colors.surfaceContainer)
-                    .aspectRatio(4.0/3.0, contentMode: .fit)
-                    .overlay {
-                        VStack(spacing: 8) {
-                            ProgressView()
-                                .tint(Celestial.Colors.outlineVariant)
-                            Text("Relive your memories...")
-                                .font(.caption)
-                                .foregroundStyle(Celestial.Colors.outline)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .opacity(isVisible ? 1 : 0)
+                } else {
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Celestial.Colors.surfaceContainer)
+                        .overlay {
+                            VStack(spacing: 8) {
+                                ProgressView()
+                                    .tint(Celestial.Colors.outlineVariant)
+                                Text("Finding memories...")
+                                    .font(Celestial.Typography.caption)
+                                    .foregroundStyle(Celestial.Colors.outline)
+                            }
                         }
-                    }
+                }
             }
-        }
-        .padding(.horizontal, 32)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    var body: some View {
+        Self.imageContent(currentImage: currentImage, currentDate: currentDate, isVisible: isVisible, dateVisible: dateVisible)
         .task {
-            // Wait for some photos to be indexed before starting
-            await waitForIndexedPhotos()
-            await showNextPhoto()
-            startCycling()
+            let task = Task { @MainActor in
+                await waitForIndexedPhotos()
+                guard !Task.isCancelled else { return }
+                await showNextPhoto()
+                guard !Task.isCancelled else { return }
+                startCycling()
+            }
+            initialLoadTask = task
+            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         }
         .onDisappear {
+            initialLoadTask?.cancel()
+            initialLoadTask = nil
             timerTask?.cancel()
             timerTask = nil
+            onImageChange(nil)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            initialLoadTask?.cancel()
+            initialLoadTask = nil
+            timerTask?.cancel()
+            timerTask = nil
+            imageLoadGeneration &+= 1
+            MemoryPressureReleasePolicy.release(&currentImage)
+            onImageChange(nil)
+            shownIds.removeAll(keepingCapacity: false)
+            duplicateFilter.reset()
         }
     }
 
     private func waitForIndexedPhotos() async {
         // Poll until we have at least 5 indexed photos
-        while (try? database.indexedCount()) ?? 0 < 5 {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if Task.isCancelled { return }
+        while !Task.isCancelled {
+            let count: Int
+            do {
+                let db = database
+                count = try await CancellableDetachedOperation.run(priority: .utility) {
+                    try db.indexedCount()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                logger.error("[IndexingSlideshow] Failed to read indexed count: \(error.safeDiagnosticCode)")
+                return
+            }
+            guard count < 5 else { return }
+            do {
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+            } catch is CancellationError {
+                return
+            } catch {
+                logger.error("[IndexingSlideshow] Poll delay failed: \(error.safeDiagnosticCode)")
+                return
+            }
         }
     }
 
     private func startCycling() {
         timerTask = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: 4_000_000_000)
+                } catch is CancellationError {
+                    break
+                } catch {
+                    logger.error("[IndexingSlideshow] Cycle delay failed: \(error.safeDiagnosticCode)")
+                    break
+                }
                 if Task.isCancelled { break }
                 await showNextPhoto()
             }
@@ -98,51 +148,94 @@ struct IndexingSlideshowView: View {
     }
 
     private func showNextPhoto() async {
-        // Get a random indexed photo from the database
-        guard let photo = getRandomIndexedPhoto() else { return }
+        imageLoadGeneration &+= 1
+        let generation = imageLoadGeneration
+        guard let (photo, loaded) = await loadNextEligiblePhoto(generation: generation) else {
+            return
+        }
 
         // Fade out current
-        withAnimation { captionVisible = false }
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        withAnimation { dateVisible = false }
+        do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }
         withAnimation { isVisible = false }
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        do { try await Task.sleep(nanoseconds: 400_000_000) } catch { return }
+        guard ImageLoadGenerationPolicy.acceptsCompletion(
+            startedGeneration: generation,
+            currentGeneration: imageLoadGeneration,
+            isCancelled: Task.isCancelled
+        ) else { return }
 
-        // Load thumbnail
-        guard let asset = PhotoLibrary.getAsset(by: photo.localIdentifier) else { return }
-        guard let image = await PhotoLibrary.loadThumbnail(for: asset) else { return }
-
-        currentImage = image
+        currentImage = loaded
+        onImageChange(loaded)
         currentDate = photo.creationDate
-
-        // Generate caption from the stored embedding (zero extra encoding!)
-        let embeddingFloat16 = photo.embedding.withUnsafeBytes { buf -> [Float16] in
-            let ptr = buf.bindMemory(to: Float16.self)
-            return Array(UnsafeBufferPointer(start: ptr.baseAddress, count: ptr.count))
-        }
-        currentCaption = captionService.caption(for: embeddingFloat16)
 
         // Fade in photo
         withAnimation { isVisible = true }
 
-        // Caption fades in after delay
-        try? await Task.sleep(nanoseconds: 800_000_000)
-        withAnimation { captionVisible = true }
+        // Date fades in after delay
+        do { try await Task.sleep(nanoseconds: 800_000_000) } catch { return }
+        withAnimation { dateVisible = true }
     }
 
-    private func getRandomIndexedPhoto() -> IndexedPhoto? {
-        // Try up to 5 times to find an unshown photo
+    private func loadNextEligiblePhoto(
+        generation: UInt
+    ) async -> (photo: SlideshowPhoto, image: UIImage)? {
         for _ in 0..<5 {
-            guard let photo = try? database.fetchRandomPhoto(sharp: true) else {
-                return nil
-            }
-            if !shownIds.contains(photo.id) {
-                shownIds.insert(photo.id)
-                if shownIds.count > 50 { shownIds.removeAll() }
-                return photo
-            }
+            guard let photo = await getRandomIndexedPhoto() else { return nil }
+            guard let image = await PhotoLibrary.loadImage(
+                for: photo.searchResult,
+                targetSize: CGSize(width: 800, height: 800)
+            ) else { continue }
+            guard ImageLoadGenerationPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: imageLoadGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return nil }
+            guard await MemoryPresentationValidator.isEligible(
+                image: image,
+                requiresValidation: photo.requiresContentValidation
+            ) else { continue }
+            guard ImageLoadGenerationPolicy.acceptsCompletion(
+                startedGeneration: generation,
+                currentGeneration: imageLoadGeneration,
+                isCancelled: Task.isCancelled
+            ) else { return nil }
+            return (photo, image)
         }
-        // All attempts returned already-shown photos. Reset and return whatever we get.
-        shownIds.removeAll()
-        return try? database.fetchRandomPhoto(sharp: true)
+        return nil
+    }
+
+    private func getRandomIndexedPhoto() async -> SlideshowPhoto? {
+        let historyLimit = 50
+        if shownIds.count >= historyLimit {
+            shownIds.removeAll(keepingCapacity: true)
+        }
+        let database = database
+        var candidateFilter = duplicateFilter
+        let selection = await SlideshowSelectionPolicy.next(
+            recentIDs: shownIds,
+            historyLimit: historyLimit,
+            maxAttempts: 20,
+            fetch: {
+                do {
+                    return try await CancellableDetachedOperation.run {
+                        try database.fetchRandomPhoto(sharp: true)
+                    }
+                } catch is CancellationError {
+                    return nil
+                } catch {
+                    logger.error(
+                        "[IndexingSlideshow] Failed to fetch a photo: \(error.safeDiagnosticCode)"
+                    )
+                    return nil
+                }
+            },
+            identifier: \.id,
+            accepts: { candidateFilter.accepts($0.embedding) }
+        )
+        guard let selection else { return nil }
+        duplicateFilter = candidateFilter
+        shownIds = selection.recentIDs
+        return selection.item
     }
 }

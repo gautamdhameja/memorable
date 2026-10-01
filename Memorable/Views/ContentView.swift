@@ -2,128 +2,152 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppKeys.onboardingComplete) private var onboardingComplete: Bool = false
+    @AppStorage(AppKeys.startIndexAfterOnboarding) private var startIndexAfterOnboarding = false
 
     var body: some View {
         ZStack {
-            Celestial.Colors.background.ignoresSafeArea()
+            CelestialBackdrop()
 
             if !onboardingComplete {
-                OnboardingView(isComplete: $onboardingComplete)
+                OnboardingView(
+                    isComplete: $onboardingComplete,
+                    startIndexAfterCompletion: onboardingIndexRequestBinding
+                )
             } else if appState.authorizationStatus == .denied || appState.authorizationStatus == .restricted {
                 photoAccessDeniedView
-            } else if appState.isModelLoaded, let indexingService = appState.indexingService,
-                      let searchEngine = appState.searchEngine {
-                MainTabView(indexingService: indexingService, searchEngine: searchEngine, captionService: appState.captionService)
+            } else if appState.readiness.isShellReady {
+                MainTabView(
+                    indexingService: appState.indexingService,
+                    searchEngine: appState.searchEngine,
+                    semanticRuntime: appState.semanticRuntime,
+                    retrySemanticWarmup: appState.retrySemanticWarmup
+                )
             } else if let error = appState.errorMessage {
                 errorView(message: error)
             } else {
-                loadingView
+                launchShell
             }
         }
         .preferredColorScheme(.dark)
         .task(id: onboardingComplete) {
-            if onboardingComplete && !appState.isModelLoaded && appState.errorMessage == nil {
-                await appState.initialize()
+            if onboardingComplete {
+                appState.setApplicationActive(scenePhase == .active)
+                await initializeIfNeeded()
+            } else {
+                // Let the first onboarding frame paint before Core ML begins
+                // loading the bundled models in the background.
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                updateOnboardingModelPrewarm(for: scenePhase)
             }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if !onboardingComplete {
+                if newPhase != .active {
+                    appState.recordOnboardingIndexRequest(false, isForeground: false)
+                }
+                updateOnboardingModelPrewarm(for: newPhase)
+                return
+            }
+            appState.setApplicationActive(newPhase == .active)
+            guard newPhase == .active else { return }
+            Task { await appState.refreshPhotoAuthorization() }
         }
     }
 
     // MARK: - Subviews
 
     private var photoAccessDeniedView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "photo.badge.exclamationmark")
-                .font(.system(size: 48, weight: .thin))
-                .foregroundStyle(Celestial.Colors.primaryDim)
-                .accessibilityHidden(true)
-            Text("Photo Access Required")
-                .font(.system(.title3, design: .rounded, weight: .semibold))
+        VStack(alignment: .leading, spacing: Celestial.Spacing.contentGap) {
+            Spacer()
+            CelestialGlassIcon(
+                systemName: "photo.badge.exclamationmark",
+                size: 64
+            )
+            Text("Photo access is required")
+                .font(Celestial.Typography.interfaceTitle)
                 .foregroundStyle(Celestial.Colors.onSurface)
-            Text("Memorable needs access to your photos to build a searchable index. All processing happens on your device.")
-                .multilineTextAlignment(.center)
-                .font(.subheadline)
+            Text("Memorable processes photo and search content on your device. If a photo includes GPS coordinates, Apple may receive those coordinates to return a place name.")
+                .font(Celestial.Typography.body)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .padding(.horizontal, 32)
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
             }
-            .buttonStyle(CelestialButtonStyle())
+            .celestialPrimaryButtonStyle()
+            Spacer()
         }
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
     }
 
     private func errorView(message: String) -> some View {
-        VStack(spacing: 20) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 48, weight: .thin))
-                .foregroundStyle(Celestial.Colors.error)
-                .accessibilityHidden(true)
-            Text("Something Went Wrong")
-                .font(.system(.title3, design: .rounded, weight: .semibold))
+        VStack(alignment: .leading, spacing: Celestial.Spacing.contentGap) {
+            Spacer()
+            CelestialGlassIcon(
+                systemName: "exclamationmark.triangle",
+                tint: Celestial.Colors.error,
+                size: 64
+            )
+            Text("Something went wrong")
+                .font(Celestial.Typography.interfaceTitle)
                 .foregroundStyle(Celestial.Colors.onSurface)
             Text(message)
-                .multilineTextAlignment(.center)
-                .font(.subheadline)
+                .font(Celestial.Typography.body)
                 .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .padding(.horizontal, 32)
             Button("Try Again") {
                 appState.errorMessage = nil
-                Task { await appState.initialize() }
+                Task { await initializeIfNeeded() }
             }
-            .buttonStyle(CelestialButtonStyle())
+            .celestialPrimaryButtonStyle()
+            Spacer()
+        }
+        .padding(.horizontal, Celestial.Spacing.pageHorizontalInset)
+    }
+
+    /// A static first frame aligned with the home header. Startup authorization
+    /// and dependency checks must not resemble photo indexing.
+    private var launchShell: some View {
+        NavigationStack {
+            CelestialBackdrop()
+                .celestialSearchNavigation()
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func initializeIfNeeded() async {
+        guard onboardingComplete else { return }
+        if !appState.readiness.isShellReady && appState.errorMessage == nil {
+            await appState.initialize()
         }
     }
 
-    private var loadingView: some View {
-        VStack(spacing: 20) {
-            Spacer()
-
-            VStack(spacing: 10) {
-                Image("AppIconTransparent")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 150, height: 150)
-
-                Text("Memorable")
-                    .font(.system(size: 38, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Celestial.Colors.onSurface)
-
-                Text("Every memory, one search away!")
-                    .font(.system(.body, design: .rounded, weight: .medium))
-                    .foregroundStyle(Celestial.Colors.amber)
+    private var onboardingIndexRequestBinding: Binding<Bool> {
+        Binding(
+            get: { startIndexAfterOnboarding },
+            set: { requested in
+                startIndexAfterOnboarding = requested
+                appState.recordOnboardingIndexRequest(
+                    requested,
+                    isForeground: scenePhase == .active
+                )
             }
-
-            Spacer()
-
-            ProgressView()
-                .tint(Celestial.Colors.primaryDim)
-                .controlSize(.regular)
-
-            Text(appState.loadingStatus)
-                .font(.footnote)
-                .foregroundStyle(Celestial.Colors.onSurfaceVariant)
-                .animation(.easeInOut(duration: 0.2), value: appState.loadingStatus)
-
-            Spacer()
-                .frame(height: 60)
-        }
+        )
     }
-}
 
-// MARK: - Celestial Button Style
-
-struct CelestialButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(.subheadline, design: .rounded, weight: .semibold))
-            .foregroundStyle(Celestial.Colors.onPrimaryContainer)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 12)
-            .background(Celestial.Colors.primaryContainer)
-            .clipShape(Capsule())
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
+    private func updateOnboardingModelPrewarm(for phase: ScenePhase) {
+        switch OnboardingModelPrewarmPolicy.action(
+            onboardingComplete: onboardingComplete,
+            sceneIsActive: phase == .active
+        ) {
+        case .start:
+            appState.startOnboardingModelPrewarm()
+        case .cancel:
+            appState.cancelOnboardingModelPrewarm()
+        case .none:
+            break
+        }
     }
 }

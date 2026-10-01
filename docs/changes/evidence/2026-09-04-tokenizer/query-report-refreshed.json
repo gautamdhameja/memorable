@@ -1,0 +1,4468 @@
+{
+  "assignmentCounts" : {
+    "atlanta" : 125,
+    "berlin" : 163,
+    "istanbul" : 126,
+    "los-angeles" : 134,
+    "munich" : 147,
+    "new-york" : 136,
+    "no-location" : 384,
+    "paris" : 142,
+    "san-diego" : 129,
+    "san-francisco" : 139,
+    "sydney" : 127,
+    "tbilisi" : 127,
+    "toronto" : 127
+  },
+  "generatedAt" : "2026-09-04T22:00:59Z",
+  "indexedPhotoCount" : 2006,
+  "records" : [
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1768,
+      "policy" : "pro",
+      "query" : "dog",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 153,
+      "surfacedCount" : 153,
+      "topFiveIdentifiers" : [
+        "1B96DC9F-DD4D-408A-A6B0-E287386DF9B7\/L0\/001",
+        "D8760040-5B1B-4BD9-A295-C9E6D20FA8F8\/L0\/001",
+        "5DCAAC5E-C7F0-4663-B537-45FEDC77AE3D\/L0\/001",
+        "9A6976E0-3D8B-4599-8DCD-81B83B30247F\/L0\/001",
+        "9B617D71-36B8-4393-AAD8-D0417BC21382\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10187028,
+        0.09901332,
+        0.09763004,
+        0.097268656,
+        0.09689928
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 50,
+      "latencyMilliseconds" : 963,
+      "policy" : "pro",
+      "query" : "cat",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 50,
+      "topFiveIdentifiers" : [
+        "12E8AC68-5482-4D3D-BF27-9A1D82DB4354\/L0\/001",
+        "FBB05FEF-2AAB-4F64-A632-585F5F136701\/L0\/001",
+        "558E6238-099C-4A99-A68D-89EF2E06A6E7\/L0\/001",
+        "E7C29507-CFE9-4ABE-970B-F2FF9ED600C0\/L0\/001",
+        "8CB9E4B0-6CA7-45DC-8A83-6932FF53BBDC\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.078253046,
+        0.064077675,
+        0.055084918,
+        0.05047673,
+        0.049957074
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "cat"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1125,
+      "policy" : "pro",
+      "query" : "car",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 144,
+      "surfacedCount" : 144,
+      "topFiveIdentifiers" : [
+        "4F342A53-75C8-4A58-993F-A6795B1E686F\/L0\/001",
+        "AAEC9668-B52D-4FAA-830A-8A3F76AEF5DA\/L0\/001",
+        "30EC6C82-6723-4788-83BF-4C1E2B9C59FE\/L0\/001",
+        "D09AD4DD-2514-4CC2-97F4-28B0C5769B5B\/L0\/001",
+        "C888B21B-0AA0-461A-98FA-FCD0C334C22E\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10192154,
+        0.097128294,
+        0.096900895,
+        0.09675098,
+        0.09659624
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1000,
+      "policy" : "pro",
+      "query" : "bicycle",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 66,
+      "surfacedCount" : 66,
+      "topFiveIdentifiers" : [
+        "44FB7419-2248-4B2B-81AA-06A514A3FC7C\/L0\/001",
+        "39E0044F-14E2-4B17-B413-0DFE654A8D74\/L0\/001",
+        "1BD45D37-7E18-485F-A49E-4F7FDF640BF5\/L0\/001",
+        "879EFBD6-EA7D-461E-AD8A-B48371F140CA\/L0\/001",
+        "945DC3EB-25E9-410A-B63B-662CEF4EEDDD\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.08320353,
+        0.078351155,
+        0.077431336,
+        0.0773904,
+        0.07728873
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 977,
+      "policy" : "pro",
+      "query" : "flowers",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 10,
+      "surfacedCount" : 10,
+      "topFiveIdentifiers" : [
+        "CC95F08C-88C3-4012-9D6D-64A413D254B3\/L0\/001",
+        "3D1E166D-8984-4F08-A4F3-86D645EB1124\/L0\/001",
+        "D4B9D9D0-A937-4391-A215-18FE7F8DB9E3\/L0\/001",
+        "106E99A1-4F6A-45A2-B320-B0AD4A8E8473\/L0\/001",
+        "FB94FCD1-2AC5-4BCA-B8E2-30F8782D24B8\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10481467,
+        0.10481467,
+        0.09312152,
+        0.09312152,
+        0.08587613
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1145,
+      "policy" : "pro",
+      "query" : "mountains",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 83,
+      "surfacedCount" : 83,
+      "topFiveIdentifiers" : [
+        "203C3E26-ED4C-443E-AA9E-A1E6910FB110\/L0\/001",
+        "7364D94D-8BAD-4EDF-8CD4-4D784F5ADB3C\/L0\/001",
+        "DD8B098B-E7D9-4726-97C3-94A428D6141C\/L0\/001",
+        "6C5EF910-9A5A-4163-98A4-63622B1C6A51\/L0\/001",
+        "DAD222F3-1BB1-4EB6-BD02-55406B6192D8\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.1093268,
+        0.10425618,
+        0.10362157,
+        0.100237936,
+        0.100165315
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1015,
+      "policy" : "pro",
+      "query" : "beach",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 114,
+      "surfacedCount" : 114,
+      "topFiveIdentifiers" : [
+        "655590A3-1ED6-401C-ABAE-7183A1BE5BF6\/L0\/001",
+        "30B2EDF6-CA32-42F5-92CC-A96BF1D62537\/L0\/001",
+        "E4EAECA1-7B9D-4E65-9319-7B568B199994\/L0\/001",
+        "4900853C-BE5F-4D15-935C-874E99439E4F\/L0\/001",
+        "FF61223A-3D10-4225-9E8A-D54261982FA0\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11032243,
+        0.10905244,
+        0.10813078,
+        0.10572135,
+        0.105515584
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1120,
+      "policy" : "pro",
+      "query" : "snow",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "202E214A-5920-4654-9B23-8070582D7422\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12184653
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1172,
+      "policy" : "pro",
+      "query" : "book",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 35,
+      "surfacedCount" : 35,
+      "topFiveIdentifiers" : [
+        "E1A1BB8D-8CBF-41A1-A190-1FF86996982E\/L0\/001",
+        "7D920E28-6499-4F00-8315-258C1225B09D\/L0\/001",
+        "1AEC2826-85B5-42D4-AF5C-B31226E53CA5\/L0\/001",
+        "850D8D53-A39F-4B9B-B802-DECDDFCF9F5B\/L0\/001",
+        "D859E949-7F23-4E2C-80D2-E2479A823709\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10818845,
+        0.101810925,
+        0.096239895,
+        0.09448149,
+        0.08915301
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1045,
+      "policy" : "pro",
+      "query" : "coffee cup",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 13,
+      "surfacedCount" : 13,
+      "topFiveIdentifiers" : [
+        "0694BBFB-812E-48D3-B42D-DC64B4A8272D\/L0\/001",
+        "3FB2484E-CF4B-4D1D-9E87-18460172C4E2\/L0\/001",
+        "BAD3B7A0-BABA-41A8-8DC4-7E4A2A6B3826\/L0\/001",
+        "74CBF318-8DAF-4287-9855-085E7201F9C1\/L0\/001",
+        "11425D78-853B-49DF-9B98-A448D85DCEF4\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.06886508,
+        0.0626545,
+        0.057667285,
+        0.051925108,
+        0.05068122
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1011,
+      "policy" : "pro",
+      "query" : "hiking",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 7,
+      "surfacedCount" : 7,
+      "topFiveIdentifiers" : [
+        "08CBD1F4-EA4F-4A8E-B370-AA564197310A\/L0\/001",
+        "B7D4F588-4EA7-447D-A79A-A9D953D3E1B7\/L0\/001",
+        "A6ED69CD-BFB3-4ACA-BFD0-CEBE12204086\/L0\/001",
+        "D20DD2C9-CAF4-4C05-A769-38E2AD7A5FC3\/L0\/001",
+        "06530128-63F0-4F3F-B3E8-D2D423764287\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.13181742,
+        0.12621985,
+        0.12614684,
+        0.12486411,
+        0.12384217
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1263,
+      "policy" : "pro",
+      "query" : "wedding",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 15,
+      "surfacedCount" : 15,
+      "topFiveIdentifiers" : [
+        "EC6DB0D3-1E3D-400B-836A-A2FD2DE309AC\/L0\/001",
+        "A1965F44-1587-468A-A5A7-7B3238FC3D1C\/L0\/001",
+        "1B261D4A-553B-47BB-BDAA-F0644E49505D\/L0\/001",
+        "76F521CC-E6C8-49E2-A1B8-640D348A409E\/L0\/001",
+        "C0E193BD-CFF8-47EA-BE49-06C92119800C\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.070270546,
+        0.06991655,
+        0.06894733,
+        0.06837063,
+        0.06799814
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1428,
+      "policy" : "pro",
+      "query" : "party",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 246,
+      "surfacedCount" : 246,
+      "topFiveIdentifiers" : [
+        "FBD935AE-A0B8-4E1F-B8D2-2DE88420DD2A\/L0\/001",
+        "382AB65A-AB2C-45F4-ACC0-6AB62B746D7C\/L0\/001",
+        "4549EBFB-2369-43AF-B6F1-6474B95A01B8\/L0\/001",
+        "265D40FA-7484-468F-8BBD-E225C213F8C0\/L0\/001",
+        "231F815E-2DD2-4A12-9CAF-7E4A0C2B347C\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10496746,
+        0.1018651,
+        0.10128963,
+        0.10121684,
+        0.10064705
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1626,
+      "policy" : "pro",
+      "query" : "sunset",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 19,
+      "surfacedCount" : 19,
+      "topFiveIdentifiers" : [
+        "718640B5-D527-4B38-8365-C5DD53AE9DC4\/L0\/001",
+        "A509D67B-9190-40B8-906F-85E3D15F6B3C\/L0\/001",
+        "A6ED69CD-BFB3-4ACA-BFD0-CEBE12204086\/L0\/001",
+        "5F4674CE-1DED-4B1E-9B41-398FF511919E\/L0\/001",
+        "3459579D-7FA0-4B8F-A4DF-0CBDF46E8782\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10780215,
+        0.10614245,
+        0.10531975,
+        0.09830256,
+        0.09430884
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1522,
+      "policy" : "pro",
+      "query" : "street at night",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 24,
+      "surfacedCount" : 24,
+      "topFiveIdentifiers" : [
+        "CF614470-DD7F-4EC7-9554-4469A4F3EF98\/L0\/001",
+        "2CB7DEE1-ED1C-483E-94F0-62285497BEAF\/L0\/001",
+        "A182243F-CB75-418F-9FA2-0C41253B333B\/L0\/001",
+        "871F21C6-1961-4456-A233-42D98418BAED\/L0\/001",
+        "C7C5BA2D-3E36-44D2-8044-E57E2E70A55B\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.06944134,
+        0.06632658,
+        0.0634128,
+        0.062230162,
+        0.060840428
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1003,
+      "policy" : "pro",
+      "query" : "inside a museum",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 55,
+      "surfacedCount" : 55,
+      "topFiveIdentifiers" : [
+        "5E308178-153F-4387-BB9E-A45706E60764\/L0\/001",
+        "51B0D57A-F83C-4CF9-A5B3-79A6A863BF3A\/L0\/001",
+        "23A7BE04-BFC8-46D5-A7E9-3309D20AEADD\/L0\/001",
+        "27D88E2F-9580-4CBA-9B7C-8F87E3A2EBF6\/L0\/001",
+        "78B58D97-6FED-44A6-80AE-CC4A5F783A07\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.08017114,
+        0.07864438,
+        0.073832564,
+        0.07335827,
+        0.07242772
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1442,
+      "policy" : "pro",
+      "query" : "concert crowd",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "9B91968F-2700-49B2-A8B9-1774DF434721\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.122134455
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1160,
+      "policy" : "pro",
+      "query" : "swimming pool",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 41,
+      "surfacedCount" : 41,
+      "topFiveIdentifiers" : [
+        "3AA0D745-5EB1-4112-83A0-6E87E78A9671\/L0\/001",
+        "D5B19576-A57E-4450-B020-658FCAF70A6B\/L0\/001",
+        "1D17A43D-B5D6-4A00-9E41-CF49C9A1AB98\/L0\/001",
+        "D9CA53FF-E14E-40E8-9921-4624F3EE060E\/L0\/001",
+        "6A8AAA26-E16F-4431-B879-7E6E22F390DE\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11340709,
+        0.10732706,
+        0.107305765,
+        0.106719494,
+        0.10492059
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1510,
+      "policy" : "pro",
+      "query" : "forest trail",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 39,
+      "surfacedCount" : 39,
+      "topFiveIdentifiers" : [
+        "92C8CC63-945A-463F-ABCC-8FD07197F45B\/L0\/001",
+        "B40A3781-71C9-4AED-9DA2-9C85890E5BA3\/L0\/001",
+        "6CEBB400-AAB6-4CAE-9D85-895515C1A677\/L0\/001",
+        "55E9E264-4A2F-4ACB-9B65-1B3E066BC9FE\/L0\/001",
+        "35C565B2-4377-48BF-9DBA-81A93CE39737\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11730014,
+        0.11118317,
+        0.10428028,
+        0.1029264,
+        0.100812465
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1175,
+      "policy" : "pro",
+      "query" : "city skyline",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 20,
+      "surfacedCount" : 20,
+      "topFiveIdentifiers" : [
+        "B0175C3C-4177-4B71-981C-0502817FB8EA\/L0\/001",
+        "B55F7C62-216F-4E18-BE44-F2CF59723FAA\/L0\/001",
+        "7B142709-1D57-41C4-996A-1A233631C11D\/L0\/001",
+        "963A913D-448E-4744-A624-FDFCDD6BB85E\/L0\/001",
+        "C7C5BA2D-3E36-44D2-8044-E57E2E70A55B\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10205041,
+        0.09302171,
+        0.09028754,
+        0.08810811,
+        0.08073378
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1158,
+      "policy" : "pro",
+      "query" : "selfie",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "8AB3CB22-9991-49B5-9D70-1548C3634E71\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.13768375
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1213,
+      "policy" : "pro",
+      "query" : "group photo",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 2,
+      "surfacedCount" : 2,
+      "topFiveIdentifiers" : [
+        "ABD94EE6-E4E8-49B1-8B0F-72A5824E9EB4\/L0\/001",
+        "875913D2-A711-463B-84A4-329EBC1C116B\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12593989,
+        0.121597305
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1376,
+      "policy" : "pro",
+      "query" : "kids playing",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 27,
+      "surfacedCount" : 27,
+      "topFiveIdentifiers" : [
+        "0264A430-DD9A-48BD-969F-9E9B52858D28\/L0\/001",
+        "3094E9BC-6D28-46CD-8C2D-ED09DE608364\/L0\/001",
+        "7CC961EF-17D7-4FD8-B1B7-0B7D10D5ECC2\/L0\/001",
+        "B6890AC9-9659-4D66-9D15-6C2E3C0ACE31\/L0\/001",
+        "76C696C2-196A-4BB3-B2C7-BCF93C8CF6F3\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.13311589,
+        0.13185996,
+        0.12947711,
+        0.12945393,
+        0.1276762
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 18,
+      "latencyMilliseconds" : 1796,
+      "policy" : "pro",
+      "query" : "portrait of a woman",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 18,
+      "topFiveIdentifiers" : [
+        "4817D00F-7BD1-493D-8ED6-F9269883739F\/L0\/001",
+        "88A66E8D-9B23-43BC-87DB-1E9035F6CB5D\/L0\/001",
+        "E22E1585-8586-4521-BF94-72A7CFD518D9\/L0\/001",
+        "7E504234-6BB7-49D3-B98D-2340C092BF97\/L0\/001",
+        "2934F8CA-5B94-4C3A-B51D-7B5FD2D874C2\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.022259362,
+        0.013508489,
+        0.011874918,
+        0.008240525,
+        0.008191122
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "portrait of a woman"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1222,
+      "policy" : "pro",
+      "query" : "my dog on the sofa",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 10,
+      "surfacedCount" : 10,
+      "topFiveIdentifiers" : [
+        "3A83DE83-FCD9-4723-ADD2-DDDEC01D8877\/L0\/001",
+        "F1AC3043-AA17-4464-A20C-AC99059B84EA\/L0\/001",
+        "65E1C057-5CDA-4C97-ADF5-0EC04D4F70F1\/L0\/001",
+        "64D971FB-56D3-46BB-A5B3-D29A783DA78A\/L0\/001",
+        "5D836E9E-D3A6-4D8B-8309-A4AA73DA3553\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.06745353,
+        0.061391175,
+        0.058376916,
+        0.05665621,
+        0.05600518
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 50,
+      "latencyMilliseconds" : 1136,
+      "policy" : "pro",
+      "query" : "two cats together",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 50,
+      "topFiveIdentifiers" : [
+        "FBB05FEF-2AAB-4F64-A632-585F5F136701\/L0\/001",
+        "12E8AC68-5482-4D3D-BF27-9A1D82DB4354\/L0\/001",
+        "558E6238-099C-4A99-A68D-89EF2E06A6E7\/L0\/001",
+        "58E09C50-F2B9-426C-B683-33EA18D8EF49\/L0\/001",
+        "9B92CEB0-856E-4A98-8EE8-2ED4CA4E23F9\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.065799184,
+        0.057375364,
+        0.05163266,
+        0.049495567,
+        0.047283705
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "two cats together"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1035,
+      "policy" : "pro",
+      "query" : "people laughing",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 7,
+      "surfacedCount" : 7,
+      "topFiveIdentifiers" : [
+        "1C0DA781-48C8-4BBB-8322-33C69A3001D4\/L0\/001",
+        "72697352-DCA6-4CE4-BACD-172A2E9756A2\/L0\/001",
+        "F1BEB211-47FD-4B17-B1BA-2BBC7E604CB0\/L0\/001",
+        "9389AC4C-3F7A-487A-9687-2603A7A1A205\/L0\/001",
+        "CBE36000-810C-4AF1-986E-F79EB8EB2149\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.13942783,
+        0.13867347,
+        0.13624856,
+        0.13038048,
+        0.12551615
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1015,
+      "policy" : "pro",
+      "query" : "baby sleeping",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "10959B9C-E40F-4A41-9D61-FD34CA5183FA\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12336587
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1081,
+      "policy" : "pro",
+      "query" : "lunch",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 136,
+      "surfacedCount" : 136,
+      "topFiveIdentifiers" : [
+        "047628D4-5097-42DF-9363-7D40623F1D87\/L0\/001",
+        "CBE334A2-B201-4DC3-92C5-3EBB77822625\/L0\/001",
+        "2497E2BF-C2A3-432B-8CDA-C503238583BE\/L0\/001",
+        "19E27C06-0B48-49C2-AFF8-66FF5020A561\/L0\/001",
+        "CE69D53A-7D2A-4756-8A5E-C621CE88525B\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.094734,
+        0.0927137,
+        0.09043358,
+        0.08797961,
+        0.08748211
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1330,
+      "policy" : "pro",
+      "query" : "dinner table",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 26,
+      "surfacedCount" : 26,
+      "topFiveIdentifiers" : [
+        "77EA6A55-40D3-4F1E-A456-17152AAC9296\/L0\/001",
+        "91FBB7A9-4663-444B-93EC-3477AC72F5E0\/L0\/001",
+        "B8D06C60-1F70-4ED8-AD52-027213BF50E2\/L0\/001",
+        "D04F4799-F421-423A-86E0-F09C8633C93D\/L0\/001",
+        "D87042E0-E7E6-4F1C-B656-C595EC97946A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11070523,
+        0.11029505,
+        0.09968331,
+        0.091076545,
+        0.086352825
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1100,
+      "policy" : "pro",
+      "query" : "breakfast",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "E2FCFF27-83D7-4518-AE9C-0DB36A8EE026\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12480323
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1213,
+      "policy" : "pro",
+      "query" : "brunch",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 44,
+      "surfacedCount" : 44,
+      "topFiveIdentifiers" : [
+        "91F58D0E-A401-4274-AB59-5362ECE95A57\/L0\/001",
+        "2C9621C6-9001-4195-8464-FA060A69AD55\/L0\/001",
+        "C34C8A7B-D6B7-4482-9127-03ED902AF78B\/L0\/001",
+        "A4EF47B8-7C6A-4422-B439-E984018811D9\/L0\/001",
+        "BE914BD0-A135-4460-B63F-70286B1713B6\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10382079,
+        0.093343765,
+        0.09256278,
+        0.09233481,
+        0.091018386
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1497,
+      "policy" : "pro",
+      "query" : "pizza",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "10DA18F7-AC11-4195-B7F8-8A814C30931D\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12204435
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1260,
+      "policy" : "pro",
+      "query" : "cocktail",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 25,
+      "surfacedCount" : 25,
+      "topFiveIdentifiers" : [
+        "B0F13E61-8854-493A-8C50-DF4EE31CB720\/L0\/001",
+        "F853C50D-B25B-4C9F-99C4-D87AF9BC460E\/L0\/001",
+        "E9A2AA1A-B394-4578-A346-59DC5FF0DAFB\/L0\/001",
+        "615C2E46-F996-45D8-8A9D-E1C86E2A5C7A\/L0\/001",
+        "7D7AFAFF-7B4A-4113-B88E-5E80A611A0FD\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.06712449,
+        0.059238844,
+        0.055542503,
+        0.055194438,
+        0.054971136
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1172,
+      "policy" : "pro",
+      "query" : "coffee shop",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "EDB468BF-9BE9-4480-A2B8-8EF807BD79C5\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.123536155
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 950,
+      "locationFilter" : "Berlin",
+      "policy" : "pro",
+      "query" : "Berlin",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 163,
+      "surfacedCount" : 163,
+      "topFiveIdentifiers" : [
+        "999A0DB0-CB26-4429-80F1-D578917E75BF\/L0\/001",
+        "8E155C43-9489-4174-9448-16867EFD3AB4\/L0\/001",
+        "22D743EA-F3D7-4E29-9A7D-C4371E1A71A6\/L0\/001",
+        "D2EC7C3D-1828-4A43-9509-06203EFDE4C7\/L0\/001",
+        "6B4C228E-F55E-45D8-8D7F-635A7C764871\/L0\/001"
+      ],
+      "topFiveScores" : [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 893,
+      "locationFilter" : "California",
+      "policy" : "pro",
+      "query" : "California",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 402,
+      "surfacedCount" : 402,
+      "topFiveIdentifiers" : [
+        "C7D52465-6835-4D5B-8C04-367C4093DD40\/L0\/001",
+        "824C65E7-3CA9-426F-94C4-166BE0DCEF8C\/L0\/001",
+        "8B54B4D5-3132-4D90-8221-CA654F2326AC\/L0\/001",
+        "5FFAB842-0999-4657-A6AB-29C2E8D5A5B5\/L0\/001",
+        "EC6B809F-A529-41DF-9D6E-A0634F129203\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11614921,
+        0.10419779,
+        0.10318879,
+        0.08778955,
+        0.08642458
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1304,
+      "locationFilter" : "Paris",
+      "policy" : "pro",
+      "query" : "Paris",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 142,
+      "surfacedCount" : 142,
+      "topFiveIdentifiers" : [
+        "1CA86D98-2F76-4634-B32E-31ADE9413818\/L0\/001",
+        "7AEEA5FC-8120-4F03-AC0B-F5DFF40BF9C9\/L0\/001",
+        "3DD5B074-FC25-4787-B1E1-2A75D32FF9C7\/L0\/001",
+        "786ED966-44C5-4448-AD10-93A0CAA95F6B\/L0\/001",
+        "D87042E0-E7E6-4F1C-B656-C595EC97946A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09357942,
+        0.089757234,
+        0.08579038,
+        0.082285084,
+        0.08196597
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 685,
+      "locationFilter" : "Germany",
+      "policy" : "pro",
+      "query" : "Germany",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 310,
+      "surfacedCount" : 310,
+      "topFiveIdentifiers" : [
+        "999A0DB0-CB26-4429-80F1-D578917E75BF\/L0\/001",
+        "D3490524-FFA4-4EF8-A6A8-DBB492F5F3FB\/L0\/001",
+        "0BA18E6C-9D12-4965-873F-F232687CDF4D\/L0\/001",
+        "8E155C43-9489-4174-9448-16867EFD3AB4\/L0\/001",
+        "9919161A-3583-47BC-A68A-4E9533474F2A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 908,
+      "locationFilter" : "New York",
+      "policy" : "pro",
+      "query" : "New York",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 136,
+      "surfacedCount" : 136,
+      "topFiveIdentifiers" : [
+        "D880AD87-7402-4D75-971D-AA7901485797\/L0\/001",
+        "AA590477-95C1-462D-B20A-0390F83D758A\/L0\/001",
+        "35713ABB-F199-49C9-939F-E68DDD3C3001\/L0\/001",
+        "BE755E76-EC87-4D64-80D4-A26C3AD1D6B4\/L0\/001",
+        "5681B9D6-7FC1-4BA8-9295-8F7973E7BCB0\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.08598141,
+        0.08053087,
+        0.080221705,
+        0.07979593,
+        0.07939235
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 920,
+      "locationFilter" : "San Diego",
+      "policy" : "pro",
+      "query" : "San Diego",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 129,
+      "surfacedCount" : 129,
+      "topFiveIdentifiers" : [
+        "B5FD2A43-08CD-4081-88DB-937AF1150039\/L0\/001",
+        "F72CC69D-7336-4A7E-B42F-CEB9CD22600E\/L0\/001",
+        "D859E949-7F23-4E2C-80D2-E2479A823709\/L0\/001",
+        "C96E2823-4826-453B-B3E0-C4C9C3240F5A\/L0\/001",
+        "40C6E6C0-48A8-451D-A5A9-79490EA2A317\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.08622382,
+        0.083521545,
+        0.08301069,
+        0.08167825,
+        0.081084006
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "fallbackCount" : 147,
+      "latencyMilliseconds" : 1334,
+      "locationFilter" : "Bavaria",
+      "policy" : "pro",
+      "query" : "Bavaria",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 147,
+      "topFiveIdentifiers" : [
+        "2BF83F78-1AD6-4DCA-9E4D-F05E716DCDE4\/L0\/001",
+        "C3B6261B-5350-4206-8FA3-E57DD02095DA\/L0\/001",
+        "6A7B5904-A808-46AB-B868-14CCB18E7A70\/L0\/001",
+        "91C06E89-F6F5-44A7-9BAE-C5FF62581D8D\/L0\/001",
+        "1F7473DF-0E61-4B86-BF4B-1F532EA2693C\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.064197205,
+        0.06342812,
+        0.060931914,
+        0.059033614,
+        0.05863666
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1008,
+      "locationFilter" : "CA",
+      "policy" : "pro",
+      "query" : "CA",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 402,
+      "surfacedCount" : 402,
+      "topFiveIdentifiers" : [
+        "C7D52465-6835-4D5B-8C04-367C4093DD40\/L0\/001",
+        "824C65E7-3CA9-426F-94C4-166BE0DCEF8C\/L0\/001",
+        "8B54B4D5-3132-4D90-8221-CA654F2326AC\/L0\/001",
+        "D48F4C6B-3D18-48B6-ADFC-F2087315144A\/L0\/001",
+        "EC6B809F-A529-41DF-9D6E-A0634F129203\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10663088,
+        0.10538748,
+        0.097536296,
+        0.076320544,
+        0.07627238
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 994,
+      "locationFilter" : "Los Angeles",
+      "policy" : "pro",
+      "query" : "Los Angeles",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 134,
+      "surfacedCount" : 134,
+      "topFiveIdentifiers" : [
+        "1B70F0EF-5236-4AB7-9F75-51275902F815\/L0\/001",
+        "AEE6DEBF-3DCB-4719-8C9C-4AE0EE8D4AB8\/L0\/001",
+        "FAF95113-FA21-4292-A347-607CEE921161\/L0\/001",
+        "91AAD7A7-CC7A-4CDF-BC0F-6667CA1ADE9D\/L0\/001",
+        "21417956-A9DD-4415-BD2A-0AD43740EA23\/L0\/001"
+      ],
+      "topFiveScores" : [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 906,
+      "locationFilter" : "berlin",
+      "policy" : "pro",
+      "query" : "dog in Berlin",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 163,
+      "surfacedCount" : 163,
+      "topFiveIdentifiers" : [
+        "1B96DC9F-DD4D-408A-A6B0-E287386DF9B7\/L0\/001",
+        "D8760040-5B1B-4BD9-A295-C9E6D20FA8F8\/L0\/001",
+        "5DCAAC5E-C7F0-4663-B537-45FEDC77AE3D\/L0\/001",
+        "9A6976E0-3D8B-4599-8DCD-81B83B30247F\/L0\/001",
+        "9B617D71-36B8-4393-AAD8-D0417BC21382\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10187028,
+        0.09901332,
+        0.09763004,
+        0.097268656,
+        0.09689928
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "dog"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1012,
+      "locationFilter" : "california",
+      "policy" : "pro",
+      "query" : "beach in California",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 402,
+      "surfacedCount" : 402,
+      "topFiveIdentifiers" : [
+        "655590A3-1ED6-401C-ABAE-7183A1BE5BF6\/L0\/001",
+        "30B2EDF6-CA32-42F5-92CC-A96BF1D62537\/L0\/001",
+        "E4EAECA1-7B9D-4E65-9319-7B568B199994\/L0\/001",
+        "4900853C-BE5F-4D15-935C-874E99439E4F\/L0\/001",
+        "FF61223A-3D10-4225-9E8A-D54261982FA0\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11032243,
+        0.10905244,
+        0.10813078,
+        0.10572135,
+        0.105515584
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "beach"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 993,
+      "locationFilter" : "paris",
+      "policy" : "pro",
+      "query" : "food in Paris",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 142,
+      "surfacedCount" : 142,
+      "topFiveIdentifiers" : [
+        "288D325F-2827-49E3-B9E9-792D0C90BFAA\/L0\/001",
+        "91FBB7A9-4663-444B-93EC-3477AC72F5E0\/L0\/001",
+        "77EA6A55-40D3-4F1E-A456-17152AAC9296\/L0\/001",
+        "D04F4799-F421-423A-86E0-F09C8633C93D\/L0\/001",
+        "B8D06C60-1F70-4ED8-AD52-027213BF50E2\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09656865,
+        0.09423642,
+        0.092216566,
+        0.09008844,
+        0.08877561
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "food"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1002,
+      "locationFilter" : "germany",
+      "policy" : "pro",
+      "query" : "sunset in Germany",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 310,
+      "surfacedCount" : 310,
+      "topFiveIdentifiers" : [
+        "A509D67B-9190-40B8-906F-85E3D15F6B3C\/L0\/001",
+        "718640B5-D527-4B38-8365-C5DD53AE9DC4\/L0\/001",
+        "A6ED69CD-BFB3-4ACA-BFD0-CEBE12204086\/L0\/001",
+        "5F4674CE-1DED-4B1E-9B41-398FF511919E\/L0\/001",
+        "3459579D-7FA0-4B8F-A4DF-0CBDF46E8782\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09573305,
+        0.091873005,
+        0.08316818,
+        0.08173345,
+        0.08171927
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "sunset"
+    },
+    {
+      "fallbackCount" : 147,
+      "latencyMilliseconds" : 1449,
+      "locationFilter" : "bavaria",
+      "policy" : "pro",
+      "query" : "mountains in Bavaria",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 147,
+      "topFiveIdentifiers" : [
+        "DD8B098B-E7D9-4726-97C3-94A428D6141C\/L0\/001",
+        "7364D94D-8BAD-4EDF-8CD4-4D784F5ADB3C\/L0\/001",
+        "06530128-63F0-4F3F-B3E8-D2D423764287\/L0\/001",
+        "8DB4C335-D79F-42D0-944D-28799D5886D4\/L0\/001",
+        "203C3E26-ED4C-443E-AA9E-A1E6910FB110\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.0689752,
+        0.05910235,
+        0.05575433,
+        0.055285383,
+        0.053133998
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "mountains"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 991,
+      "locationFilter" : "berlin",
+      "policy" : "pro",
+      "query" : "street art in Berlin",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 163,
+      "surfacedCount" : 163,
+      "topFiveIdentifiers" : [
+        "FF5AE398-6F9F-4B25-970F-E58587E21C79\/L0\/001",
+        "55F664C8-A28B-479E-BFE1-E5694A8D155A\/L0\/001",
+        "4D5AB7C4-C433-42BE-A272-BBDD756C858B\/L0\/001",
+        "CEB11596-0510-4F4A-9A68-652F7C33206C\/L0\/001",
+        "8B2B3A08-E005-4072-8485-DED7B27C42DD\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.13442342,
+        0.11856176,
+        0.10098489,
+        0.080886036,
+        0.07285244
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "street art"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1172,
+      "locationFilter" : "new york",
+      "policy" : "pro",
+      "query" : "coffee in New York",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 136,
+      "surfacedCount" : 136,
+      "topFiveIdentifiers" : [
+        "0694BBFB-812E-48D3-B42D-DC64B4A8272D\/L0\/001",
+        "7759D72C-F75A-436E-BAE4-C659B1D3D22A\/L0\/001",
+        "BAD3B7A0-BABA-41A8-8DC4-7E4A2A6B3826\/L0\/001",
+        "3FB2484E-CF4B-4D1D-9E87-18460172C4E2\/L0\/001",
+        "EDB468BF-9BE9-4480-A2B8-8EF807BD79C5\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10633886,
+        0.090027764,
+        0.08935844,
+        0.08714547,
+        0.08611213
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "coffee"
+    },
+    {
+      "dateFilter" : "2022",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 974,
+      "policy" : "pro",
+      "query" : "2022",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 387,
+      "surfacedCount" : 387,
+      "topFiveIdentifiers" : [
+        "F5E75E2A-1FC1-4DC9-B640-68514D06FED7\/L0\/001",
+        "450C44C0-22A4-4FBE-82ED-E0366EABD550\/L0\/001",
+        "8EFBBC58-CCE7-4634-821F-6A01F16A567A\/L0\/001",
+        "1FA4A856-0871-4364-A7CA-E083C014913D\/L0\/001",
+        "CF8F6E04-3607-4A7B-8415-9BA57730E6B0\/L0\/001"
+      ],
+      "topFiveScores" : [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "dateFilter" : "2023",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 952,
+      "policy" : "pro",
+      "query" : "2023",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 393,
+      "surfacedCount" : 393,
+      "topFiveIdentifiers" : [
+        "8B54B4D5-3132-4D90-8221-CA654F2326AC\/L0\/001",
+        "0CB055A8-36D7-41FD-840C-724BA53FFABB\/L0\/001",
+        "558E6238-099C-4A99-A68D-89EF2E06A6E7\/L0\/001",
+        "04FB59AF-F938-48B0-A572-A714B9453581\/L0\/001",
+        "8FE1E977-0691-48BC-82D5-81CF0F8F1202\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10441674,
+        0.08353925,
+        0.08133224,
+        0.08114055,
+        0.07783097
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "dateFilter" : "2025",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1621,
+      "policy" : "pro",
+      "query" : "last year",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 413,
+      "surfacedCount" : 413,
+      "topFiveIdentifiers" : [
+        "824C65E7-3CA9-426F-94C4-166BE0DCEF8C\/L0\/001",
+        "2E50F6C8-7444-426B-AA2E-2B418D1F7D69\/L0\/001",
+        "C4BEE6EF-53C9-41B3-AAEC-9E3DFE72FE8F\/L0\/001",
+        "1CA86D98-2F76-4634-B32E-31ADE9413818\/L0\/001",
+        "EC6B809F-A529-41DF-9D6E-A0634F129203\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10957409,
+        0.10591631,
+        0.10280207,
+        0.082690336,
+        0.08223975
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "dateFilter" : "1 Jun 2025 to 31 Aug 2025",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 898,
+      "policy" : "pro",
+      "query" : "last summer",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 129,
+      "surfacedCount" : 129,
+      "topFiveIdentifiers" : [
+        "C4BEE6EF-53C9-41B3-AAEC-9E3DFE72FE8F\/L0\/001",
+        "1CA86D98-2F76-4634-B32E-31ADE9413818\/L0\/001",
+        "EC6B809F-A529-41DF-9D6E-A0634F129203\/L0\/001",
+        "8CBFA437-8009-4FF1-B632-7CDBB5945C54\/L0\/001",
+        "ECE477E0-3082-43E1-ABAD-0A136318F5BC\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10035257,
+        0.09358348,
+        0.0847749,
+        0.08442119,
+        0.08314244
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "dateFilter" : "December 2025",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1263,
+      "policy" : "pro",
+      "query" : "December",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 38,
+      "surfacedCount" : 38,
+      "topFiveIdentifiers" : [
+        "F63C3DB8-1D7F-4D90-B9D0-CA5BFAFFDDB0\/L0\/001",
+        "45CFCF4E-267C-4DBF-BA96-442C4CC62B37\/L0\/001",
+        "8F3B6C9C-F851-47D9-B2FF-11F8C763DE80\/L0\/001",
+        "CFB40BF9-7DC4-49DF-9E4E-2124F160B4E8\/L0\/001",
+        "1FCCF1F4-9AE1-4A37-BE06-14D547F2414F\/L0\/001"
+      ],
+      "topFiveScores" : [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "dateFilter" : "January 2023",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1052,
+      "policy" : "pro",
+      "query" : "January 2023",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 31,
+      "surfacedCount" : 31,
+      "topFiveIdentifiers" : [
+        "465C63FB-0D6F-4612-A96F-675DD81C4B7E\/L0\/001",
+        "F6E3F92F-8F54-4412-B612-5840A51E6F2C\/L0\/001",
+        "8FE1E977-0691-48BC-82D5-81CF0F8F1202\/L0\/001",
+        "CFFB5E29-FD17-4F20-B7C6-64B038B3E7FB\/L0\/001",
+        "2000DABB-E93A-4C8E-A6A7-72E4417F3B14\/L0\/001"
+      ],
+      "topFiveScores" : [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "dateFilter" : "3 Sep 2026",
+      "fallbackCount" : 1,
+      "latencyMilliseconds" : 1277,
+      "policy" : "pro",
+      "query" : "yesterday",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "D5B65DCD-EF06-4F4E-8C56-6985B579A885\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.068503626
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "dateFilter" : "23 Aug 2026 to 29 Aug 2026",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 980,
+      "policy" : "pro",
+      "query" : "last week",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 35,
+      "surfacedCount" : 35,
+      "topFiveIdentifiers" : [
+        "E9689342-77C4-41CE-ACCB-BFBF6A94B7FC\/L0\/001",
+        "419D5626-4263-47E9-A407-CAED75623732\/L0\/001",
+        "B8D06C60-1F70-4ED8-AD52-027213BF50E2\/L0\/001",
+        "7ACA6196-66EA-483D-9B94-7A40592D597A\/L0\/001",
+        "03834F82-B481-440D-B262-287875B84D0A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "dateFilter" : "2022",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 914,
+      "policy" : "pro",
+      "query" : "dog 2022",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 387,
+      "surfacedCount" : 387,
+      "topFiveIdentifiers" : [
+        "5934CBB1-12B2-45C3-9F78-B15AF71821EE\/L0\/001",
+        "2EFDEFF0-0F53-43EC-AF9D-4CF3D9C931DB\/L0\/001",
+        "6C240D06-3630-47D7-BDBC-04BFF98CD222\/L0\/001",
+        "3A83DE83-FCD9-4723-ADD2-DDDEC01D8877\/L0\/001",
+        "A1840BB3-2625-4E3D-8DFC-E91C9CF801CF\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.0962629,
+        0.092984445,
+        0.092552796,
+        0.09253623,
+        0.092161864
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "dog"
+    },
+    {
+      "dateFilter" : "1 Jun 2025 to 31 Aug 2025",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1490,
+      "policy" : "pro",
+      "query" : "beach last summer",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 129,
+      "surfacedCount" : 129,
+      "topFiveIdentifiers" : [
+        "ED00A870-E96A-47F8-BA5A-A73AC8B641E5\/L0\/001",
+        "E4EAECA1-7B9D-4E65-9319-7B568B199994\/L0\/001",
+        "B5B8636F-5A17-4F3A-9174-E1BD84BE2133\/L0\/001",
+        "FF61223A-3D10-4225-9E8A-D54261982FA0\/L0\/001",
+        "A1D3B0CE-80DA-4E7C-BA8B-60610A68C0D5\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10901651,
+        0.108808264,
+        0.10877193,
+        0.10868419,
+        0.10783832
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "beach"
+    },
+    {
+      "dateFilter" : "December 2025",
+      "fallbackCount" : 38,
+      "latencyMilliseconds" : 1017,
+      "policy" : "pro",
+      "query" : "snow in December",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 38,
+      "topFiveIdentifiers" : [
+        "202E214A-5920-4654-9B23-8070582D7422\/L0\/001",
+        "02966112-FC1C-442F-9B03-9425C2046948\/L0\/001",
+        "CFB40BF9-7DC4-49DF-9E4E-2124F160B4E8\/L0\/001",
+        "1FCCF1F4-9AE1-4A37-BE06-14D547F2414F\/L0\/001",
+        "2752A10D-AFD6-46F0-A3EE-035F7984347F\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.062677726,
+        0.05318345,
+        0.050071314,
+        0.033599697,
+        0.032271087
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "snow"
+    },
+    {
+      "dateFilter" : "2025",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1501,
+      "policy" : "pro",
+      "query" : "birthday last year",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 413,
+      "surfacedCount" : 413,
+      "topFiveIdentifiers" : [
+        "4549EBFB-2369-43AF-B6F1-6474B95A01B8\/L0\/001",
+        "1F7473DF-0E61-4B86-BF4B-1F532EA2693C\/L0\/001",
+        "A0F866CA-3549-4C0A-9822-7A6D65E4E46A\/L0\/001",
+        "4C76E2AE-9E6B-47E5-B857-473F924D8CFA\/L0\/001",
+        "9389AC4C-3F7A-487A-9687-2603A7A1A205\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12202853,
+        0.111492425,
+        0.09074607,
+        0.08086804,
+        0.07875109
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "birthday"
+    },
+    {
+      "dateFilter" : "2023",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1322,
+      "policy" : "pro",
+      "query" : "hiking 2023",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 393,
+      "surfacedCount" : 393,
+      "topFiveIdentifiers" : [
+        "08CBD1F4-EA4F-4A8E-B370-AA564197310A\/L0\/001",
+        "B7D4F588-4EA7-447D-A79A-A9D953D3E1B7\/L0\/001",
+        "D3D70C65-224E-43F7-AE23-5F0B8A28D391\/L0\/001",
+        "6CEBB400-AAB6-4CAE-9D85-895515C1A677\/L0\/001",
+        "06530128-63F0-4F3F-B3E8-D2D423764287\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11810023,
+        0.11720183,
+        0.11549217,
+        0.11521694,
+        0.114351675
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "hiking"
+    },
+    {
+      "dateFilter" : "23 Aug 2026 to 29 Aug 2026",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1148,
+      "policy" : "pro",
+      "query" : "food last week",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 35,
+      "surfacedCount" : 35,
+      "topFiveIdentifiers" : [
+        "288D325F-2827-49E3-B9E9-792D0C90BFAA\/L0\/001",
+        "91FBB7A9-4663-444B-93EC-3477AC72F5E0\/L0\/001",
+        "77EA6A55-40D3-4F1E-A456-17152AAC9296\/L0\/001",
+        "03834F82-B481-440D-B262-287875B84D0A\/L0\/001",
+        "7ACA6196-66EA-483D-9B94-7A40592D597A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.101795584,
+        0.10008207,
+        0.099572174,
+        0.09510468,
+        0.09429605
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "food"
+    },
+    {
+      "dateFilter" : "2022",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1209,
+      "locationFilter" : "California",
+      "policy" : "pro",
+      "query" : "California 2022",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 8,
+      "surfacedCount" : 8,
+      "topFiveIdentifiers" : [
+        "98C39868-AF77-405F-BD24-867EF25602BA\/L0\/001",
+        "DCE35784-CC58-4B4C-837F-59C1BD2D6995\/L0\/001",
+        "EB4A97EF-2EBB-43F0-AF6C-0542151F1E5A\/L0\/001",
+        "A6944E94-38A8-4B14-B467-F16095E1DA5A\/L0\/001",
+        "52CD55DF-33DA-44D1-8566-A8585C585250\/L0\/001"
+      ],
+      "topFiveScores" : [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "dateFilter" : "1 Jun 2025 to 31 Aug 2025",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1263,
+      "locationFilter" : "Berlin",
+      "policy" : "pro",
+      "query" : "Berlin last summer",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 10,
+      "surfacedCount" : 10,
+      "topFiveIdentifiers" : [
+        "0203111B-DDF0-4CFB-9E38-45220C199905\/L0\/001",
+        "01FFB10A-BBAC-492B-A964-D1D695E93A64\/L0\/001",
+        "01C6AD3E-62F7-4CDD-A366-0A48B78F087D\/L0\/001",
+        "01A8F968-B23A-4591-BAFB-D2D0232B7843\/L0\/001",
+        "0190DCFC-22BD-4100-91C0-55E4C00BB07A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "dateFilter" : "2023",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1504,
+      "locationFilter" : "berlin",
+      "policy" : "pro",
+      "query" : "dog in Berlin 2023",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 40,
+      "surfacedCount" : 40,
+      "topFiveIdentifiers" : [
+        "1B96DC9F-DD4D-408A-A6B0-E287386DF9B7\/L0\/001",
+        "D8760040-5B1B-4BD9-A295-C9E6D20FA8F8\/L0\/001",
+        "5DCAAC5E-C7F0-4663-B537-45FEDC77AE3D\/L0\/001",
+        "9A6976E0-3D8B-4599-8DCD-81B83B30247F\/L0\/001",
+        "9B617D71-36B8-4393-AAD8-D0417BC21382\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10187028,
+        0.09901332,
+        0.09763004,
+        0.097268656,
+        0.09689928
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "dog"
+    },
+    {
+      "dateFilter" : "December 2025",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 860,
+      "locationFilter" : "Paris",
+      "policy" : "pro",
+      "query" : "Paris December",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 8,
+      "surfacedCount" : 8,
+      "topFiveIdentifiers" : [
+        "0294E515-83AA-43B3-B8A6-B7CABB781F8D\/L0\/001",
+        "02E6C6E0-28AC-4402-9374-2C8B160E1F10\/L0\/001",
+        "0264A430-DD9A-48BD-969F-9E9B52858D28\/L0\/001",
+        "02D72EEE-A1C1-47DD-A5F7-1719DC7CEEA9\/L0\/001",
+        "0302173B-C1A3-4317-9BB8-C674A847151E\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.08024479,
+        0.07163677,
+        0.0682057,
+        0.06227664,
+        0.06034867
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "dateFilter" : "2025",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1118,
+      "locationFilter" : "california",
+      "policy" : "pro",
+      "query" : "beach in California last year",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 104,
+      "surfacedCount" : 104,
+      "topFiveIdentifiers" : [
+        "FF61223A-3D10-4225-9E8A-D54261982FA0\/L0\/001",
+        "E4EAECA1-7B9D-4E65-9319-7B568B199994\/L0\/001",
+        "B5B8636F-5A17-4F3A-9174-E1BD84BE2133\/L0\/001",
+        "97E55BAC-68FF-42E2-8924-4321B547A114\/L0\/001",
+        "ED00A870-E96A-47F8-BA5A-A73AC8B641E5\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.084254205,
+        0.08195895,
+        0.07896258,
+        0.07719336,
+        0.07644716
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "beach"
+    },
+    {
+      "dateFilter" : "2022",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1333,
+      "locationFilter" : "Germany",
+      "policy" : "pro",
+      "query" : "Germany 2022",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 8,
+      "surfacedCount" : 8,
+      "topFiveIdentifiers" : [
+        "0070A1E2-B66B-4107-A654-F105BDEB0C88\/L0\/001",
+        "013EAED2-4BE4-483A-B262-EB1F05B7E4D1\/L0\/001",
+        "00B96AE7-3C14-47B9-BF7E-0A11C2737056\/L0\/001",
+        "01333DDF-7EF1-4A3C-8E5E-3ECC6BB82432\/L0\/001",
+        "00950275-CDD3-4941-A8E9-1929498D19A7\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.0774297,
+        0.0746,
+        0.06907158,
+        0.06674047,
+        0.06436516
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1157,
+      "policy" : "pro",
+      "query" : "morning coffee",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "0694BBFB-812E-48D3-B42D-DC64B4A8272D\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.14408515
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1963,
+      "policy" : "pro",
+      "query" : "sunrise",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 278,
+      "surfacedCount" : 278,
+      "topFiveIdentifiers" : [
+        "F3241E79-0C9B-4704-8BE3-33BB7AE5BD10\/L0\/001",
+        "1047539F-622E-45D6-A99A-0D08FD2F75FE\/L0\/001",
+        "1C66E292-7A6A-4688-9DCA-BD7239625AEA\/L0\/001",
+        "631620B1-9688-438B-A693-A48144A5BC56\/L0\/001",
+        "50572A0F-4366-4D20-942B-4F2F6870208A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.06718607,
+        0.06435593,
+        0.062432446,
+        0.06223248,
+        0.059682965
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1110,
+      "policy" : "pro",
+      "query" : "afternoon walk",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 167,
+      "surfacedCount" : 167,
+      "topFiveIdentifiers" : [
+        "374AEDF1-597A-43A7-94F9-9E4D70AD2DA5\/L0\/001",
+        "4A5C6D9B-4C50-4000-8779-F54E413EF930\/L0\/001",
+        "058E5443-F0FC-4251-B5E7-14D57775C356\/L0\/001",
+        "A1AD0A29-2D6B-487F-A77A-9ABF0ED6A488\/L0\/001",
+        "9B617D71-36B8-4393-AAD8-D0417BC21382\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10555068,
+        0.102925435,
+        0.09665402,
+        0.0963466,
+        0.095455155
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1162,
+      "policy" : "pro",
+      "query" : "evening dinner",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 7,
+      "surfacedCount" : 7,
+      "topFiveIdentifiers" : [
+        "77EA6A55-40D3-4F1E-A456-17152AAC9296\/L0\/001",
+        "91FBB7A9-4663-444B-93EC-3477AC72F5E0\/L0\/001",
+        "B8D06C60-1F70-4ED8-AD52-027213BF50E2\/L0\/001",
+        "9BE52BA3-028A-40C7-98B3-6524C33F78F9\/L0\/001",
+        "D87042E0-E7E6-4F1C-B656-C595EC97946A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.16302446,
+        0.14204334,
+        0.14044264,
+        0.12907511,
+        0.12823692
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1472,
+      "policy" : "pro",
+      "query" : "night sky",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 44,
+      "surfacedCount" : 44,
+      "topFiveIdentifiers" : [
+        "BB76271D-A737-4B56-A418-5714C3B0A5E6\/L0\/001",
+        "718640B5-D527-4B38-8365-C5DD53AE9DC4\/L0\/001",
+        "D7DC228F-8EA9-4492-8110-B59EABD321F1\/L0\/001",
+        "E4B757D3-00A3-47BA-8166-A8734DC5BA49\/L0\/001",
+        "B7C82083-CD91-46AA-B9CD-1DCC300F7827\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.105436675,
+        0.10305727,
+        0.09916675,
+        0.09619074,
+        0.0945635
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1128,
+      "policy" : "pro",
+      "query" : "late night",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 7,
+      "surfacedCount" : 7,
+      "topFiveIdentifiers" : [
+        "A182243F-CB75-418F-9FA2-0C41253B333B\/L0\/001",
+        "223986C6-217B-4D12-841B-73C222E8F136\/L0\/001",
+        "7D7AFAFF-7B4A-4113-B88E-5E80A611A0FD\/L0\/001",
+        "1B70F0EF-5236-4AB7-9F75-51275902F815\/L0\/001",
+        "BCCC4D61-E6FF-48DF-A1FF-E1DDEECBE9B2\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.14262767,
+        0.12911724,
+        0.12745193,
+        0.12665002,
+        0.122536376
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1146,
+      "policy" : "pro",
+      "query" : "midday",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 6,
+      "surfacedCount" : 6,
+      "topFiveIdentifiers" : [
+        "C1D1790B-9F57-49DD-8437-5AC00943BCEE\/L0\/001",
+        "8903BAA0-8ED3-4C9A-AAB2-733939C86F03\/L0\/001",
+        "4AF58EF1-2385-4540-B72E-222E5224FC49\/L0\/001",
+        "26058CD6-6375-4C29-862E-3C996DEDA1E7\/L0\/001",
+        "A6BFDE69-324D-4BA0-9053-4497790B422D\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.1322689,
+        0.1306684,
+        0.12812087,
+        0.12636231,
+        0.12515423
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1474,
+      "policy" : "pro",
+      "query" : "-dog",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 162,
+      "surfacedCount" : 162,
+      "topFiveIdentifiers" : [
+        "48DC54B1-C65F-4438-BFFA-33264010FC10\/L0\/001",
+        "243F445A-E895-402F-B02D-C6172AB582B7\/L0\/001",
+        "E0D24417-8246-4EDE-84F5-435231E47FE7\/L0\/001",
+        "2EFDEFF0-0F53-43EC-AF9D-4CF3D9C931DB\/L0\/001",
+        "9B92CEB0-856E-4A98-8EE8-2ED4CA4E23F9\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09331544,
+        0.091102675,
+        0.08917673,
+        0.08675514,
+        0.08360025
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1008,
+      "policy" : "pro",
+      "query" : "dog not cat",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 153,
+      "surfacedCount" : 153,
+      "topFiveIdentifiers" : [
+        "1B96DC9F-DD4D-408A-A6B0-E287386DF9B7\/L0\/001",
+        "D8760040-5B1B-4BD9-A295-C9E6D20FA8F8\/L0\/001",
+        "5DCAAC5E-C7F0-4663-B537-45FEDC77AE3D\/L0\/001",
+        "9A6976E0-3D8B-4599-8DCD-81B83B30247F\/L0\/001",
+        "9B617D71-36B8-4393-AAD8-D0417BC21382\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10187028,
+        0.09901332,
+        0.09763004,
+        0.097268656,
+        0.09689928
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1461,
+      "policy" : "pro",
+      "query" : "beach without people",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 51,
+      "surfacedCount" : 51,
+      "topFiveIdentifiers" : [
+        "6344DD18-5115-4F6E-AF3F-F40BE0F22C2C\/L0\/001",
+        "EB4A97EF-2EBB-43F0-AF6C-0542151F1E5A\/L0\/001",
+        "A6944E94-38A8-4B14-B467-F16095E1DA5A\/L0\/001",
+        "30B2EDF6-CA32-42F5-92CC-A96BF1D62537\/L0\/001",
+        "655590A3-1ED6-401C-ABAE-7183A1BE5BF6\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09161703,
+        0.0898975,
+        0.08974062,
+        0.08946552,
+        0.08828767
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1017,
+      "policy" : "pro",
+      "query" : "food not dessert",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 171,
+      "surfacedCount" : 171,
+      "topFiveIdentifiers" : [
+        "288D325F-2827-49E3-B9E9-792D0C90BFAA\/L0\/001",
+        "7ACA6196-66EA-483D-9B94-7A40592D597A\/L0\/001",
+        "77EA6A55-40D3-4F1E-A456-17152AAC9296\/L0\/001",
+        "8CAF39A4-CCC2-461C-B716-2F9A1B7F465A\/L0\/001",
+        "419D5626-4263-47E9-A407-CAED75623732\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.08276494,
+        0.08081016,
+        0.080001816,
+        0.07843191,
+        0.0775682
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1132,
+      "policy" : "pro",
+      "query" : "car without snow",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 49,
+      "surfacedCount" : 49,
+      "topFiveIdentifiers" : [
+        "4F342A53-75C8-4A58-993F-A6795B1E686F\/L0\/001",
+        "EDD40417-AE1A-4041-B3A9-D7E69B2AF6FC\/L0\/001",
+        "3A83EE92-1977-43FA-BDED-A092E77D8DFC\/L0\/001",
+        "F780DB0B-ABC9-4F93-B5B1-DC082FFCC9BE\/L0\/001",
+        "3ECFC00D-D300-4428-91A6-AE35799594A5\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09454045,
+        0.09001778,
+        0.08258075,
+        0.081155226,
+        0.08025732
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1155,
+      "policy" : "pro",
+      "query" : "portrait not selfie",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 500,
+      "surfacedCount" : 500,
+      "topFiveIdentifiers" : [
+        "DE387A82-BC9F-4019-87E8-A7ABBCC6F09D\/L0\/001",
+        "A4F819FB-A981-4A7D-AA2E-E42C1D753AC9\/L0\/001",
+        "56AA96F6-9B15-4FD4-B096-244AD3198AAF\/L0\/001",
+        "A666A3DF-DBA3-4FCF-B9E1-A942896E9640\/L0\/001",
+        "43A26C18-7981-4F7A-9F56-D2A0412758DA\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09112174,
+        0.08996327,
+        0.085850395,
+        0.08429626,
+        0.084191956
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1682,
+      "policy" : "pro",
+      "query" : "mountains not winter",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 60,
+      "surfacedCount" : 60,
+      "topFiveIdentifiers" : [
+        "203C3E26-ED4C-443E-AA9E-A1E6910FB110\/L0\/001",
+        "7364D94D-8BAD-4EDF-8CD4-4D784F5ADB3C\/L0\/001",
+        "DAD222F3-1BB1-4EB6-BD02-55406B6192D8\/L0\/001",
+        "0BEEB862-71F8-4B91-A793-2544AE4300E0\/L0\/001",
+        "2FA3728B-F3FA-4AF3-983B-E5157234D92D\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.096156254,
+        0.09244155,
+        0.08565563,
+        0.08503698,
+        0.082784645
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 959,
+      "policy" : "pro",
+      "query" : "screenshot",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 500,
+      "surfacedCount" : 500,
+      "topFiveIdentifiers" : [
+        "825AC587-DDA2-4804-92D1-9C423D0E6B1B\/L0\/001",
+        "49327F96-1467-4755-9290-340F110B6766\/L0\/001",
+        "D90B182E-86DA-414D-8DCF-212C7A127F53\/L0\/001",
+        "77B66F2C-03DA-4336-9C86-C02B9F68D9A6\/L0\/001",
+        "1CB1B971-E360-40A4-B58C-9A6F7E5977A1\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.06299149,
+        0.056200773,
+        0.055514287,
+        0.055330236,
+        0.05357647
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 50,
+      "latencyMilliseconds" : 1633,
+      "policy" : "pro",
+      "query" : "receipt",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 50,
+      "topFiveIdentifiers" : [
+        "733B0B2F-59E5-4EBC-A532-9CCD77C94DAE\/L0\/001",
+        "25825B31-DFC9-495B-91FA-FC2DDA3427D9\/L0\/001",
+        "550963F1-75DB-43F7-9FEE-1AA5AECA883B\/L0\/001",
+        "E0182BB9-7B15-47B0-A454-C5E44800F080\/L0\/001",
+        "26058CD6-6375-4C29-862E-3C996DEDA1E7\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.05418938,
+        0.05375866,
+        0.05215951,
+        0.050787225,
+        0.047682557
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "receipt"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 950,
+      "policy" : "pro",
+      "query" : "menu",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 32,
+      "surfacedCount" : 32,
+      "topFiveIdentifiers" : [
+        "91FBB7A9-4663-444B-93EC-3477AC72F5E0\/L0\/001",
+        "486ACDAD-8410-4B8C-B9E0-1ABDD4961FD0\/L0\/001",
+        "77EA6A55-40D3-4F1E-A456-17152AAC9296\/L0\/001",
+        "26E412E2-FFF6-4B9E-8AD4-9A31AA70824D\/L0\/001",
+        "AF75FA75-B900-4942-A42E-53CA41E197F4\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.062017184,
+        0.057000607,
+        0.051350813,
+        0.048725776,
+        0.04761298
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1042,
+      "policy" : "pro",
+      "query" : "boarding pass",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 37,
+      "surfacedCount" : 37,
+      "topFiveIdentifiers" : [
+        "C8479726-628B-4D83-BA58-AADEDE471EC5\/L0\/001",
+        "DAEB403E-B8D9-4D80-A6D1-8A3C93042427\/L0\/001",
+        "33336338-9468-41ED-9790-BF519A8ED0E2\/L0\/001",
+        "89443E84-9528-4ECA-9FAA-DF8E2E0C1A0C\/L0\/001",
+        "A47BBB7A-25F0-4F76-8EFD-2EDE6EF7583E\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.06207958,
+        0.058269203,
+        0.05791155,
+        0.054773085,
+        0.053915452
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1051,
+      "policy" : "pro",
+      "query" : "whiteboard",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 8,
+      "surfacedCount" : 8,
+      "topFiveIdentifiers" : [
+        "8E9C7180-4AC5-4087-B9A9-E4E332C33B4E\/L0\/001",
+        "A4F819FB-A981-4A7D-AA2E-E42C1D753AC9\/L0\/001",
+        "529C2616-597E-465A-A0EC-DFD96FF3877B\/L0\/001",
+        "D859E949-7F23-4E2C-80D2-E2479A823709\/L0\/001",
+        "F72CC69D-7336-4A7E-B42F-CEB9CD22600E\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.0793436,
+        0.068510085,
+        0.06806361,
+        0.061887965,
+        0.058979087
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1091,
+      "policy" : "pro",
+      "query" : "street sign",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 42,
+      "surfacedCount" : 42,
+      "topFiveIdentifiers" : [
+        "F943B4ED-455A-4610-98F4-0951F3D865AB\/L0\/001",
+        "AB39217D-8A7C-44EA-9833-F5737CBD7E24\/L0\/001",
+        "685A51E6-DAD3-4250-A58B-2145B89FBDDE\/L0\/001",
+        "7AEEA5FC-8120-4F03-AC0B-F5DFF40BF9C9\/L0\/001",
+        "AB4E0785-9E20-49D3-9C6F-96ED43E5AB55\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.073859945,
+        0.07143806,
+        0.069939524,
+        0.06337866,
+        0.06334404
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 954,
+      "policy" : "pro",
+      "query" : "text message",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 48,
+      "surfacedCount" : 48,
+      "topFiveIdentifiers" : [
+        "B1FF4401-9E70-4483-AA37-31008D4D9ECD\/L0\/001",
+        "5681B9D6-7FC1-4BA8-9295-8F7973E7BCB0\/L0\/001",
+        "420793E5-DBA6-4232-964D-2DD565B238F9\/L0\/001",
+        "89C3336D-1834-40C8-8103-C50230594299\/L0\/001",
+        "E87EC3EB-D667-4F59-96DC-030E8FCB20A5\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.068419546,
+        0.06620337,
+        0.054760106,
+        0.054055057,
+        0.053415783
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 50,
+      "latencyMilliseconds" : 1984,
+      "policy" : "pro",
+      "query" : "california",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 50,
+      "topFiveIdentifiers" : [
+        "018D900C-E91E-4CA0-938F-BEDEE66F8898\/L0\/001",
+        "D4B9D9D0-A937-4391-A215-18FE7F8DB9E3\/L0\/001",
+        "106E99A1-4F6A-45A2-B320-B0AD4A8E8473\/L0\/001",
+        "A6944E94-38A8-4B14-B467-F16095E1DA5A\/L0\/001",
+        "DC751F4E-295C-4959-B77F-F3BF9E41AA2D\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.033496037,
+        0.028701434,
+        0.028701434,
+        0.028329335,
+        0.027099025
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "california"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 849,
+      "policy" : "pro",
+      "query" : "berlin",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 102,
+      "surfacedCount" : 102,
+      "topFiveIdentifiers" : [
+        "70C69548-8423-47B3-B6C3-7C7EE2662283\/L0\/001",
+        "D7622C98-2220-4EAD-BCDD-3A7D15488DD8\/L0\/001",
+        "E2B33F36-D436-484F-BCAB-AFF3E39901A0\/L0\/001",
+        "9B91968F-2700-49B2-A8B9-1774DF434721\/L0\/001",
+        "1B70F0EF-5236-4AB7-9F75-51275902F815\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10219474,
+        0.10105183,
+        0.09906709,
+        0.09745633,
+        0.09383402
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1154,
+      "policy" : "pro",
+      "query" : "Hoover Dam",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 38,
+      "surfacedCount" : 38,
+      "topFiveIdentifiers" : [
+        "35E86CD7-59F6-4A16-9ACF-8B95A04377F4\/L0\/001",
+        "F74BDA39-483F-4060-978A-CC4F714464F9\/L0\/001",
+        "E0FA45AF-D039-4275-BDF7-8967B4C943A2\/L0\/001",
+        "3B27A9E7-86FB-492D-86D5-8D8B78440B2C\/L0\/001",
+        "37106D0B-762C-4B2E-BE88-5BDCB98EC684\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.0726789,
+        0.06608785,
+        0.06586625,
+        0.06554817,
+        0.0650849
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1011,
+      "policy" : "pro",
+      "query" : "Golden Gate Bridge",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 37,
+      "surfacedCount" : 37,
+      "topFiveIdentifiers" : [
+        "8FE1E977-0691-48BC-82D5-81CF0F8F1202\/L0\/001",
+        "3BE72670-1E75-4E4B-9714-A4CE593513F2\/L0\/001",
+        "E0FA45AF-D039-4275-BDF7-8967B4C943A2\/L0\/001",
+        "36ACF70A-EB3F-485C-BDFB-CB6942A8CEA5\/L0\/001",
+        "7B142709-1D57-41C4-996A-1A233631C11D\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.07539539,
+        0.07211129,
+        0.06984713,
+        0.06927828,
+        0.065859795
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 963,
+      "policy" : "pro",
+      "query" : "Sunrise",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 128,
+      "surfacedCount" : 128,
+      "topFiveIdentifiers" : [
+        "A1ED6954-62E9-4EC0-823B-313FC385F564\/L0\/001",
+        "4E7C1D6B-B1A4-495F-9DE1-5C7F3071A66E\/L0\/001",
+        "9F983DBA-EC35-42B8-8773-B597CF782EDD\/L0\/001",
+        "A1905EAD-4A49-4B10-9675-7E271602DBE6\/L0\/001",
+        "718640B5-D527-4B38-8365-C5DD53AE9DC4\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.08277176,
+        0.07830148,
+        0.077738866,
+        0.077738866,
+        0.07491264
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 888,
+      "locationFilter" : "Sydney",
+      "policy" : "pro",
+      "query" : "Sydney",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 127,
+      "surfacedCount" : 127,
+      "topFiveIdentifiers" : [
+        "2E50F6C8-7444-426B-AA2E-2B418D1F7D69\/L0\/001",
+        "DE387A82-BC9F-4019-87E8-A7ABBCC6F09D\/L0\/001",
+        "2AD9C950-1FBC-4340-98EB-7953D91EB906\/L0\/001",
+        "588E9772-65A3-4C8C-889F-E3524F5B11CD\/L0\/001",
+        "C43ED3D6-678C-473B-914F-945780F92678\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11076101,
+        0.09842972,
+        0.08359498,
+        0.08324901,
+        0.083119415
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 959,
+      "locationFilter" : "Georgia",
+      "policy" : "pro",
+      "query" : "Georgia",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 252,
+      "surfacedCount" : 252,
+      "topFiveIdentifiers" : [
+        "73C8665B-A32B-4BF9-996B-364874C6A3EC\/L0\/001",
+        "197ECE9C-B3FC-45CD-ABF4-F67988D89EAC\/L0\/001",
+        "6AE8F6F6-7586-4B33-9536-DFA4A4DC56A6\/L0\/001",
+        "A38559AC-DB22-4BDC-840B-47FEB1A08196\/L0\/001",
+        "F11CD6E0-FCFD-43F0-BFC7-DED2475E2BEB\/L0\/001"
+      ],
+      "topFiveScores" : [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1016,
+      "policy" : "pro",
+      "query" : "Paris Hilton",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 28,
+      "surfacedCount" : 28,
+      "topFiveIdentifiers" : [
+        "0941BE23-E935-4516-968C-FEE2B8CC2730\/L0\/001",
+        "05142CF2-4DC7-4A8A-96AB-CBCD346B3ACF\/L0\/001",
+        "634AF9B8-8BB4-4C7E-8238-9C1962D8C2C4\/L0\/001",
+        "85E1C693-12A5-4A75-A5E5-9E851A92E961\/L0\/001",
+        "DB671C7B-31E8-4BF8-9097-F61FE555DFF8\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.07346797,
+        0.0714724,
+        0.069537975,
+        0.0673068,
+        0.066830836
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "dateFilter" : "May 2026",
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 874,
+      "policy" : "pro",
+      "query" : "May",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 33,
+      "surfacedCount" : 33,
+      "topFiveIdentifiers" : [
+        "D2EC7C3D-1828-4A43-9509-06203EFDE4C7\/L0\/001",
+        "F2B6D96F-AE6F-4B8F-BD8F-879BFADC7446\/L0\/001",
+        "151AE0A4-1F5B-4ADF-B02D-BD59E6F9365D\/L0\/001",
+        "922D72B1-0771-4DD1-B5C5-1311B9726F7D\/L0\/001",
+        "72FCBEF7-FFFD-4DF5-8899-4EA0D3E2F784\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.07115022,
+        0.069782235,
+        0.06822981,
+        0.06793886,
+        0.06700921
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1495,
+      "locationFilter" : "Turkey",
+      "policy" : "pro",
+      "query" : "Turkey",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 126,
+      "surfacedCount" : 126,
+      "topFiveIdentifiers" : [
+        "871F21C6-1961-4456-A233-42D98418BAED\/L0\/001",
+        "7AB9AC90-EA45-4D05-BA78-746FFAB495FF\/L0\/001",
+        "AB339549-E21B-4082-891A-7B7CAF5482D0\/L0\/001",
+        "20FEF96D-77A3-44C5-AB45-AFD2240723D2\/L0\/001",
+        "A8DAB72E-7B2E-4FB6-B531-FBDAB4BCBA1F\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11580469,
+        0.0842743,
+        0.08398329,
+        0.08312989,
+        0.08296645
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "a photo"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1429,
+      "policy" : "pro",
+      "query" : "?????",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 500,
+      "surfacedCount" : 500,
+      "topFiveIdentifiers" : [
+        "377BD697-BD38-4B97-AD2F-422FCC86DB6D\/L0\/001",
+        "2A2CBBA0-98E2-4528-9E56-654D0C1B79CF\/L0\/001",
+        "BDA808A7-C810-4F78-B4B3-65800A7A1081\/L0\/001",
+        "89C3336D-1834-40C8-8103-C50230594299\/L0\/001",
+        "1B70F0EF-5236-4AB7-9F75-51275902F815\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.08677939,
+        0.08375142,
+        0.083541095,
+        0.08208762,
+        0.08057326
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1326,
+      "policy" : "pro",
+      "query" : "🐕 beach",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 110,
+      "surfacedCount" : 110,
+      "topFiveIdentifiers" : [
+        "655590A3-1ED6-401C-ABAE-7183A1BE5BF6\/L0\/001",
+        "30B2EDF6-CA32-42F5-92CC-A96BF1D62537\/L0\/001",
+        "E4EAECA1-7B9D-4E65-9319-7B568B199994\/L0\/001",
+        "4900853C-BE5F-4D15-935C-874E99439E4F\/L0\/001",
+        "52CD55DF-33DA-44D1-8566-A8585C585250\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10893131,
+        0.107531846,
+        0.10649842,
+        0.10558826,
+        0.10486689
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1037,
+      "policy" : "pro",
+      "query" : "München",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 71,
+      "surfacedCount" : 71,
+      "topFiveIdentifiers" : [
+        "90375071-AAA4-4617-AC7A-FD318DCE852F\/L0\/001",
+        "70C69548-8423-47B3-B6C3-7C7EE2662283\/L0\/001",
+        "9B91968F-2700-49B2-A8B9-1774DF434721\/L0\/001",
+        "934E9D69-39E3-4F00-AD58-F9BDC7EC1660\/L0\/001",
+        "3B27A9E7-86FB-492D-86D5-8D8B78440B2C\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.0794939,
+        0.07468949,
+        0.07257433,
+        0.071671866,
+        0.068919964
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 939,
+      "policy" : "pro",
+      "query" : "東京",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 2,
+      "surfacedCount" : 2,
+      "topFiveIdentifiers" : [
+        "69929F5B-CE11-4A16-889B-5C1839BDDE1A\/L0\/001",
+        "2CB7DEE1-ED1C-483E-94F0-62285497BEAF\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.1412323,
+        0.12180768
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1721,
+      "policy" : "pro",
+      "query" : "very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query very long dog beach query ",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 10,
+      "surfacedCount" : 10,
+      "topFiveIdentifiers" : [
+        "D8EBAF5C-5168-40A5-A7B4-541EC2C73B6D\/L0\/001",
+        "354E5F41-8846-43F2-B907-A41EFE3A1FBB\/L0\/001",
+        "DC751F4E-295C-4959-B77F-F3BF9E41AA2D\/L0\/001",
+        "05DE985C-1D18-4B8B-BE3F-4AB04FC199FA\/L0\/001",
+        "6D8F813F-96A9-46F0-A544-A80E2F222E2B\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.14252591,
+        0.13838357,
+        0.13704075,
+        0.13556466,
+        0.13488226
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 385,
+      "policy" : "pro",
+      "query" : "dog; DROP TABLE indexed_photos; --",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 230,
+      "surfacedCount" : 230,
+      "topFiveIdentifiers" : [
+        "9A4C979D-54CA-49D6-B627-CD9725C2EB74\/L0\/001",
+        "F1AC3043-AA17-4464-A20C-AC99059B84EA\/L0\/001",
+        "899FB6FD-C505-46AB-97EA-51A241032614\/L0\/001",
+        "51F76E2F-C3B5-4243-9B2F-04F405704756\/L0\/001",
+        "F9A2814A-FD10-44A0-A0E6-36B82851E802\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.116488114,
+        0.10949559,
+        0.10813692,
+        0.10802677,
+        0.10444656
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 199,
+      "policy" : "pro",
+      "query" : "dog     with     many     spaces",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 155,
+      "surfacedCount" : 155,
+      "topFiveIdentifiers" : [
+        "F1AC3043-AA17-4464-A20C-AC99059B84EA\/L0\/001",
+        "1D7D1304-A338-4FB7-BB87-BF94DAD8FD43\/L0\/001",
+        "61F41039-E820-4255-9E90-18A1548BB1F3\/L0\/001",
+        "3A83DE83-FCD9-4723-ADD2-DDDEC01D8877\/L0\/001",
+        "CAC24003-ACBF-4A11-9246-CB9C7EBA9FF8\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11286344,
+        0.110011324,
+        0.10891302,
+        0.108431846,
+        0.10829387
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 1,
+      "policy" : "pro",
+      "query" : "a",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 0,
+      "topFiveIdentifiers" : [
+
+      ],
+      "topFiveScores" : [
+
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 53,
+      "locationFilter" : "Antarctica",
+      "policy" : "pro",
+      "query" : "Antarctica",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 0,
+      "topFiveIdentifiers" : [
+
+      ],
+      "topFiveScores" : [
+
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : ""
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 78,
+      "locationFilter" : "antarctica",
+      "policy" : "pro",
+      "query" : "dog in Antarctica",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 0,
+      "topFiveIdentifiers" : [
+
+      ],
+      "topFiveScores" : [
+
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "dog"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 199,
+      "policy" : "free",
+      "query" : "Berlin",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 102,
+      "surfacedCount" : 102,
+      "topFiveIdentifiers" : [
+        "70C69548-8423-47B3-B6C3-7C7EE2662283\/L0\/001",
+        "D7622C98-2220-4EAD-BCDD-3A7D15488DD8\/L0\/001",
+        "E2B33F36-D436-484F-BCAB-AFF3E39901A0\/L0\/001",
+        "9B91968F-2700-49B2-A8B9-1774DF434721\/L0\/001",
+        "1B70F0EF-5236-4AB7-9F75-51275902F815\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10219474,
+        0.10105183,
+        0.09906709,
+        0.09745633,
+        0.09383402
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 198,
+      "policy" : "free",
+      "query" : "California",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 185,
+      "surfacedCount" : 185,
+      "topFiveIdentifiers" : [
+        "9E49A7B4-1CD5-4D0E-8150-F812418DDE27\/L0\/001",
+        "3BE72670-1E75-4E4B-9714-A4CE593513F2\/L0\/001",
+        "A6944E94-38A8-4B14-B467-F16095E1DA5A\/L0\/001",
+        "7AEEA5FC-8120-4F03-AC0B-F5DFF40BF9C9\/L0\/001",
+        "58001426-1242-4A82-8C10-7F0B4A2BCF07\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09904815,
+        0.09731072,
+        0.097245105,
+        0.09409863,
+        0.091687925
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 199,
+      "policy" : "free",
+      "query" : "Paris",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 112,
+      "surfacedCount" : 112,
+      "topFiveIdentifiers" : [
+        "0576154D-446F-4F67-9D14-CB07FE6280D6\/L0\/001",
+        "54EE5818-31A1-41E1-A422-104AC8C39AAD\/L0\/001",
+        "934E9D69-39E3-4F00-AD58-F9BDC7EC1660\/L0\/001",
+        "B75FDFFA-4BED-4E1C-959B-C6BAA287C356\/L0\/001",
+        "AF2D6D05-5AEB-4EE5-8A82-955B773FCCAA\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.092068486,
+        0.091980316,
+        0.08762367,
+        0.08512841,
+        0.0825789
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 198,
+      "policy" : "free",
+      "query" : "Germany",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "E2B33F36-D436-484F-BCAB-AFF3E39901A0\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.120503485
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 187,
+      "policy" : "free",
+      "query" : "New York",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "7B57CE5F-3D80-4B70-B07B-A4751E02354E\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.15656562
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 188,
+      "policy" : "free",
+      "query" : "San Diego",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 155,
+      "surfacedCount" : 155,
+      "topFiveIdentifiers" : [
+        "BF7EF60A-F5A0-4DCF-90A3-1AEAEA149E8B\/L0\/001",
+        "87BCE0A5-8601-4D4A-8CF6-6A94D3EDE462\/L0\/001",
+        "9E49A7B4-1CD5-4D0E-8150-F812418DDE27\/L0\/001",
+        "A963B240-93B2-4E72-BD71-CE5BD98D6196\/L0\/001",
+        "51D46B9F-9D3E-46BD-8F2D-41ADB73ABF35\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11131352,
+        0.10938784,
+        0.108497515,
+        0.10051038,
+        0.0982957
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 185,
+      "policy" : "free",
+      "query" : "Bavaria",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 61,
+      "surfacedCount" : 61,
+      "topFiveIdentifiers" : [
+        "85DD75DD-7035-4F11-AD83-22E3FF97810F\/L0\/001",
+        "90375071-AAA4-4617-AC7A-FD318DCE852F\/L0\/001",
+        "9B91968F-2700-49B2-A8B9-1774DF434721\/L0\/001",
+        "994A9963-6EFE-472A-B5D6-B92B0A0B1C48\/L0\/001",
+        "E2B33F36-D436-484F-BCAB-AFF3E39901A0\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10942897,
+        0.09992285,
+        0.09319337,
+        0.09272885,
+        0.09147272
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 185,
+      "policy" : "free",
+      "query" : "Antarctica",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 29,
+      "surfacedCount" : 29,
+      "topFiveIdentifiers" : [
+        "2AA2C3F1-BCBD-4240-8CFF-663D79D7E0DF\/L0\/001",
+        "CE980595-4114-48D3-9DCF-B88D060A62D9\/L0\/001",
+        "9FF4966B-11D6-45E6-AEE5-7F04D5FFF11F\/L0\/001",
+        "995AE56A-6415-445C-AFFB-EB69C62EA14F\/L0\/001",
+        "8DB4C335-D79F-42D0-944D-28799D5886D4\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.099504516,
+        0.097141564,
+        0.09040645,
+        0.08997142,
+        0.08853427
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 190,
+      "policy" : "free",
+      "query" : "CA",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 500,
+      "surfacedCount" : 500,
+      "topFiveIdentifiers" : [
+        "641B5644-AF36-4469-87B6-16BE13A69A55\/L0\/001",
+        "82DA7659-7B69-46CF-8C93-920DC2A74098\/L0\/001",
+        "52F7734C-6A9A-48B2-9B14-4587406A4310\/L0\/001",
+        "F0CADAD4-C237-43AB-B868-67556590BEF8\/L0\/001",
+        "B27F6F86-C1E3-4D4E-8504-80C76C2BDAFE\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09018571,
+        0.08182936,
+        0.08051032,
+        0.078377515,
+        0.07754685
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 186,
+      "policy" : "free",
+      "query" : "Los Angeles",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 133,
+      "surfacedCount" : 133,
+      "topFiveIdentifiers" : [
+        "963A913D-448E-4744-A624-FDFCDD6BB85E\/L0\/001",
+        "9E49A7B4-1CD5-4D0E-8150-F812418DDE27\/L0\/001",
+        "51D46B9F-9D3E-46BD-8F2D-41ADB73ABF35\/L0\/001",
+        "B55F7C62-216F-4E18-BE44-F2CF59723FAA\/L0\/001",
+        "685A51E6-DAD3-4250-A58B-2145B89FBDDE\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.113876626,
+        0.10459197,
+        0.101882696,
+        0.099952765,
+        0.09467968
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 187,
+      "policy" : "free",
+      "query" : "dog in Berlin",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 2,
+      "surfacedCount" : 2,
+      "topFiveIdentifiers" : [
+        "F11CD6E0-FCFD-43F0-BFC7-DED2475E2BEB\/L0\/001",
+        "AF12A757-3913-456F-9D66-683F7D7EB121\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.121058345,
+        0.12085854
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 186,
+      "policy" : "free",
+      "query" : "beach in California",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "A6944E94-38A8-4B14-B467-F16095E1DA5A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.13282312
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 185,
+      "policy" : "free",
+      "query" : "food in Paris",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "BEFE25AA-8D30-4798-9B80-1C6217EF8169\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12775016
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 185,
+      "policy" : "free",
+      "query" : "sunset in Germany",
+      "restrictions" : [
+        "location",
+        "timeOfDay"
+      ],
+      "resultCount" : 17,
+      "surfacedCount" : 17,
+      "topFiveIdentifiers" : [
+        "9B91968F-2700-49B2-A8B9-1774DF434721\/L0\/001",
+        "A6ED69CD-BFB3-4ACA-BFD0-CEBE12204086\/L0\/001",
+        "718640B5-D527-4B38-8365-C5DD53AE9DC4\/L0\/001",
+        "5F4674CE-1DED-4B1E-9B41-398FF511919E\/L0\/001",
+        "41913C8A-5E42-4509-A40E-39B98711FC07\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10760116,
+        0.10620244,
+        0.09355445,
+        0.08975158,
+        0.08434548
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 185,
+      "policy" : "free",
+      "query" : "dog in Antarctica",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 4,
+      "surfacedCount" : 4,
+      "topFiveIdentifiers" : [
+        "9B617D71-36B8-4393-AAD8-D0417BC21382\/L0\/001",
+        "5DCAAC5E-C7F0-4663-B537-45FEDC77AE3D\/L0\/001",
+        "211D53DB-4F60-4EFD-8851-2F0F4037BE47\/L0\/001",
+        "F1635E11-2BD0-4CA5-B58D-97AF26D51635\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12994255,
+        0.12432125,
+        0.12381415,
+        0.12259538
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 186,
+      "policy" : "free",
+      "query" : "mountains in Bavaria",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 10,
+      "surfacedCount" : 10,
+      "topFiveIdentifiers" : [
+        "994A9963-6EFE-472A-B5D6-B92B0A0B1C48\/L0\/001",
+        "8AE37DC6-D423-4E97-BA66-6F360727FDC2\/L0\/001",
+        "203C3E26-ED4C-443E-AA9E-A1E6910FB110\/L0\/001",
+        "4D50DD4C-37CA-421C-8929-2B9A45E6448A\/L0\/001",
+        "02966112-FC1C-442F-9B03-9425C2046948\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10389783,
+        0.09275924,
+        0.09224597,
+        0.085479274,
+        0.081230626
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 184,
+      "policy" : "free",
+      "query" : "street art in Berlin",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "55F664C8-A28B-479E-BFE1-E5694A8D155A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12026669
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 187,
+      "policy" : "free",
+      "query" : "coffee in New York",
+      "restrictions" : [
+        "location"
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "7B57CE5F-3D80-4B70-B07B-A4751E02354E\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12404373
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 188,
+      "policy" : "free",
+      "query" : "2022",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 401,
+      "surfacedCount" : 401,
+      "topFiveIdentifiers" : [
+        "70146429-0004-442D-9F4F-F5EB55352721\/L0\/001",
+        "BCF4241A-1FB6-49AA-826F-9F9694E8A614\/L0\/001",
+        "A69FE617-557B-4D0E-B20E-D1518D238677\/L0\/001",
+        "8BABACDD-E44D-4936-8941-52D51BA150C1\/L0\/001",
+        "0C8907F8-D99B-4884-88F8-C93FAC60CE25\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.068602145,
+        0.06815914,
+        0.067448236,
+        0.065271035,
+        0.06496425
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 189,
+      "policy" : "free",
+      "query" : "2023",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 500,
+      "surfacedCount" : 500,
+      "topFiveIdentifiers" : [
+        "9B91968F-2700-49B2-A8B9-1774DF434721\/L0\/001",
+        "BCF4241A-1FB6-49AA-826F-9F9694E8A614\/L0\/001",
+        "70146429-0004-442D-9F4F-F5EB55352721\/L0\/001",
+        "229FD9A0-E655-49EF-BF0A-404D19ED0811\/L0\/001",
+        "0C8907F8-D99B-4884-88F8-C93FAC60CE25\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.07894916,
+        0.07888569,
+        0.07853674,
+        0.07830617,
+        0.075788416
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 189,
+      "policy" : "free",
+      "query" : "last year",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 500,
+      "surfacedCount" : 500,
+      "topFiveIdentifiers" : [
+        "875913D2-A711-463B-84A4-329EBC1C116B\/L0\/001",
+        "229FD9A0-E655-49EF-BF0A-404D19ED0811\/L0\/001",
+        "9B91968F-2700-49B2-A8B9-1774DF434721\/L0\/001",
+        "990BF8A2-AB7C-48E8-A8F6-4BA776AAF8BE\/L0\/001",
+        "9A589D87-A861-43A1-BAAC-EF8A72501746\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.095319785,
+        0.092124976,
+        0.09057531,
+        0.087659866,
+        0.08741674
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 187,
+      "policy" : "free",
+      "query" : "last summer",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 283,
+      "surfacedCount" : 283,
+      "topFiveIdentifiers" : [
+        "30F8BF42-6146-4E0E-AE51-23C009B41727\/L0\/001",
+        "C1D1790B-9F57-49DD-8437-5AC00943BCEE\/L0\/001",
+        "3094E9BC-6D28-46CD-8C2D-ED09DE608364\/L0\/001",
+        "698A1CE2-B25A-4F8A-8461-A85E5C9E7D21\/L0\/001",
+        "71465E9C-DF13-43CB-B005-E6C437D6B3F3\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.109007694,
+        0.0964433,
+        0.09534489,
+        0.09482596,
+        0.094041236
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 186,
+      "policy" : "free",
+      "query" : "December",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 135,
+      "surfacedCount" : 135,
+      "topFiveIdentifiers" : [
+        "875913D2-A711-463B-84A4-329EBC1C116B\/L0\/001",
+        "BB3BF916-B782-4817-AC20-29788927E5A5\/L0\/001",
+        "A0F866CA-3549-4C0A-9822-7A6D65E4E46A\/L0\/001",
+        "03785B11-4C85-40F7-BFB9-A5971F5C9458\/L0\/001",
+        "1B628E92-405B-4E99-A619-7A4650DB8A4E\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.087249555,
+        0.086753264,
+        0.08291453,
+        0.08057747,
+        0.07755273
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 188,
+      "policy" : "free",
+      "query" : "January 2023",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 414,
+      "surfacedCount" : 414,
+      "topFiveIdentifiers" : [
+        "BB3BF916-B782-4817-AC20-29788927E5A5\/L0\/001",
+        "38611B72-79BA-47BF-BFC4-66C8D5E78F28\/L0\/001",
+        "9F983DBA-EC35-42B8-8773-B597CF782EDD\/L0\/001",
+        "A1905EAD-4A49-4B10-9675-7E271602DBE6\/L0\/001",
+        "BCF4241A-1FB6-49AA-826F-9F9694E8A614\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.075872466,
+        0.072894,
+        0.072053134,
+        0.072053134,
+        0.07198503
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 186,
+      "policy" : "free",
+      "query" : "yesterday",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 95,
+      "surfacedCount" : 95,
+      "topFiveIdentifiers" : [
+        "14F0AE78-27F9-4CA7-A61C-3665204C0529\/L0\/001",
+        "A6B3AFAE-4206-4027-8380-5EC664E36E9B\/L0\/001",
+        "3B1D156C-A54C-4517-BBC9-29DE8294A1F4\/L0\/001",
+        "78F5B98C-040C-40A5-A051-1B5C9C0B6079\/L0\/001",
+        "44C205F7-9202-450A-9B30-B7B4CD5890B6\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09567708,
+        0.088135645,
+        0.08315289,
+        0.08272918,
+        0.08058721
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 190,
+      "policy" : "free",
+      "query" : "last week",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 500,
+      "surfacedCount" : 500,
+      "topFiveIdentifiers" : [
+        "03785B11-4C85-40F7-BFB9-A5971F5C9458\/L0\/001",
+        "FF4E4CC1-9BE3-45A3-9A05-01A577C3BB22\/L0\/001",
+        "B5B8636F-5A17-4F3A-9174-E1BD84BE2133\/L0\/001",
+        "1B70F0EF-5236-4AB7-9F75-51275902F815\/L0\/001",
+        "990BF8A2-AB7C-48E8-A8F6-4BA776AAF8BE\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09096374,
+        0.082575366,
+        0.082559764,
+        0.081725344,
+        0.07988383
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 186,
+      "policy" : "free",
+      "query" : "dog 2022",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 137,
+      "surfacedCount" : 137,
+      "topFiveIdentifiers" : [
+        "9B617D71-36B8-4393-AAD8-D0417BC21382\/L0\/001",
+        "1B96DC9F-DD4D-408A-A6B0-E287386DF9B7\/L0\/001",
+        "5DCAAC5E-C7F0-4663-B537-45FEDC77AE3D\/L0\/001",
+        "74B4FA55-2FD0-4ED6-BE82-6D8D37C47312\/L0\/001",
+        "7DB2B2B8-3F4E-4BD6-B04B-13597D85C4D4\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11469093,
+        0.10984201,
+        0.108129576,
+        0.10635988,
+        0.10593885
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 186,
+      "policy" : "free",
+      "query" : "beach last summer",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 2,
+      "surfacedCount" : 2,
+      "topFiveIdentifiers" : [
+        "FF61223A-3D10-4225-9E8A-D54261982FA0\/L0\/001",
+        "B5B8636F-5A17-4F3A-9174-E1BD84BE2133\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12553997,
+        0.12030627
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 186,
+      "policy" : "free",
+      "query" : "snow in December",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "202E214A-5920-4654-9B23-8070582D7422\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12389715
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 188,
+      "policy" : "free",
+      "query" : "birthday last year",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 56,
+      "surfacedCount" : 56,
+      "topFiveIdentifiers" : [
+        "4549EBFB-2369-43AF-B6F1-6474B95A01B8\/L0\/001",
+        "1F7473DF-0E61-4B86-BF4B-1F532EA2693C\/L0\/001",
+        "990BF8A2-AB7C-48E8-A8F6-4BA776AAF8BE\/L0\/001",
+        "0932314F-8294-4767-BE25-DC0767F52F39\/L0\/001",
+        "C3B6261B-5350-4206-8FA3-E57DD02095DA\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11909823,
+        0.11779542,
+        0.11184691,
+        0.10439361,
+        0.10085343
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 184,
+      "policy" : "free",
+      "query" : "hiking 2023",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 5,
+      "surfacedCount" : 5,
+      "topFiveIdentifiers" : [
+        "06530128-63F0-4F3F-B3E8-D2D423764287\/L0\/001",
+        "B7D4F588-4EA7-447D-A79A-A9D953D3E1B7\/L0\/001",
+        "08CBD1F4-EA4F-4A8E-B370-AA564197310A\/L0\/001",
+        "D3D70C65-224E-43F7-AE23-5F0B8A28D391\/L0\/001",
+        "DAD222F3-1BB1-4EB6-BD02-55406B6192D8\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12383794,
+        0.12348093,
+        0.12066692,
+        0.12035931,
+        0.12019249
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 190,
+      "policy" : "free",
+      "query" : "food last week",
+      "restrictions" : [
+        "date"
+      ],
+      "resultCount" : 208,
+      "surfacedCount" : 208,
+      "topFiveIdentifiers" : [
+        "C96E2823-4826-453B-B3E0-C4C9C3240F5A\/L0\/001",
+        "03834F82-B481-440D-B262-287875B84D0A\/L0\/001",
+        "8CAF39A4-CCC2-461C-B716-2F9A1B7F465A\/L0\/001",
+        "B32C350B-AEED-476B-BEFB-2CD087D39547\/L0\/001",
+        "2AD9C950-1FBC-4340-98EB-7953D91EB906\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10366476,
+        0.100582406,
+        0.09879437,
+        0.09729748,
+        0.09722749
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 199,
+      "policy" : "free",
+      "query" : "California 2022",
+      "restrictions" : [
+        "date",
+        "location"
+      ],
+      "resultCount" : 101,
+      "surfacedCount" : 101,
+      "topFiveIdentifiers" : [
+        "9E49A7B4-1CD5-4D0E-8150-F812418DDE27\/L0\/001",
+        "641B5644-AF36-4469-87B6-16BE13A69A55\/L0\/001",
+        "7AEEA5FC-8120-4F03-AC0B-F5DFF40BF9C9\/L0\/001",
+        "78DC5E1D-91D5-452D-8942-A2A1D3FBFD2D\/L0\/001",
+        "B27F6F86-C1E3-4D4E-8504-80C76C2BDAFE\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09352018,
+        0.08781117,
+        0.084544025,
+        0.08218267,
+        0.08139898
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 199,
+      "policy" : "free",
+      "query" : "Berlin last summer",
+      "restrictions" : [
+        "date",
+        "location"
+      ],
+      "resultCount" : 7,
+      "surfacedCount" : 7,
+      "topFiveIdentifiers" : [
+        "9B91968F-2700-49B2-A8B9-1774DF434721\/L0\/001",
+        "C2E263DC-159F-4515-9BC2-FF697E81CF0A\/L0\/001",
+        "70C69548-8423-47B3-B6C3-7C7EE2662283\/L0\/001",
+        "DF6B029C-3786-458D-8C24-B193154421B6\/L0\/001",
+        "229FD9A0-E655-49EF-BF0A-404D19ED0811\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.13402984,
+        0.13268712,
+        0.12894943,
+        0.12861408,
+        0.12573317
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 196,
+      "policy" : "free",
+      "query" : "dog in Berlin 2023",
+      "restrictions" : [
+        "date",
+        "location"
+      ],
+      "resultCount" : 108,
+      "surfacedCount" : 108,
+      "topFiveIdentifiers" : [
+        "AF12A757-3913-456F-9D66-683F7D7EB121\/L0\/001",
+        "5508A8FF-46AC-4B26-97C3-AF54B5E933F6\/L0\/001",
+        "E0D24417-8246-4EDE-84F5-435231E47FE7\/L0\/001",
+        "9B617D71-36B8-4393-AAD8-D0417BC21382\/L0\/001",
+        "E2E74E6F-3861-42F9-857F-B950F3166D80\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11273761,
+        0.10985767,
+        0.10959024,
+        0.10627153,
+        0.10387008
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 196,
+      "policy" : "free",
+      "query" : "Paris December",
+      "restrictions" : [
+        "date",
+        "location"
+      ],
+      "resultCount" : 50,
+      "surfacedCount" : 50,
+      "topFiveIdentifiers" : [
+        "885EA081-0F81-4876-8292-1173971E4DE5\/L0\/001",
+        "54EE5818-31A1-41E1-A422-104AC8C39AAD\/L0\/001",
+        "C9CD145F-F7EB-4461-A70A-089FBD4C99A9\/L0\/001",
+        "934E9D69-39E3-4F00-AD58-F9BDC7EC1660\/L0\/001",
+        "0576154D-446F-4F67-9D14-CB07FE6280D6\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09933415,
+        0.0944511,
+        0.09298783,
+        0.09080626,
+        0.09001203
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 203,
+      "policy" : "free",
+      "query" : "beach in California last year",
+      "restrictions" : [
+        "date",
+        "location"
+      ],
+      "resultCount" : 3,
+      "surfacedCount" : 3,
+      "topFiveIdentifiers" : [
+        "BF7EF60A-F5A0-4DCF-90A3-1AEAEA149E8B\/L0\/001",
+        "87BCE0A5-8601-4D4A-8CF6-6A94D3EDE462\/L0\/001",
+        "A6944E94-38A8-4B14-B467-F16095E1DA5A\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.13019481,
+        0.12976031,
+        0.12974647
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 50,
+      "latencyMilliseconds" : 201,
+      "policy" : "free",
+      "query" : "Germany 2022",
+      "restrictions" : [
+        "date",
+        "location"
+      ],
+      "resultCount" : 0,
+      "surfacedCount" : 50,
+      "topFiveIdentifiers" : [
+        "E2B33F36-D436-484F-BCAB-AFF3E39901A0\/L0\/001",
+        "9B91968F-2700-49B2-A8B9-1774DF434721\/L0\/001",
+        "229FD9A0-E655-49EF-BF0A-404D19ED0811\/L0\/001",
+        "956C4179-0D0C-42FC-B0A2-B37ADF516A09\/L0\/001",
+        "90375071-AAA4-4617-AC7A-FD318DCE852F\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10819452,
+        0.09193604,
+        0.08654178,
+        0.079537466,
+        0.07627837
+      ],
+      "validationFailures" : [
+
+      ],
+      "visualQuery" : "germany 2022"
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 200,
+      "policy" : "free",
+      "query" : "morning coffee",
+      "restrictions" : [
+        "timeOfDay"
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "0694BBFB-812E-48D3-B42D-DC64B4A8272D\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.122622445
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 200,
+      "policy" : "free",
+      "query" : "sunrise",
+      "restrictions" : [
+        "timeOfDay"
+      ],
+      "resultCount" : 27,
+      "surfacedCount" : 27,
+      "topFiveIdentifiers" : [
+        "718640B5-D527-4B38-8365-C5DD53AE9DC4\/L0\/001",
+        "A509D67B-9190-40B8-906F-85E3D15F6B3C\/L0\/001",
+        "A6ED69CD-BFB3-4ACA-BFD0-CEBE12204086\/L0\/001",
+        "6C5EF910-9A5A-4163-98A4-63622B1C6A51\/L0\/001",
+        "4DD1FB69-577C-4258-9E0B-691EC3FB6633\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10701806,
+        0.105745085,
+        0.09901308,
+        0.09338058,
+        0.08745827
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 196,
+      "policy" : "free",
+      "query" : "afternoon walk",
+      "restrictions" : [
+        "timeOfDay"
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "18C9717B-B9F2-4A48-84E0-3D85D9754671\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12279269
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 200,
+      "policy" : "free",
+      "query" : "evening dinner",
+      "restrictions" : [
+        "timeOfDay"
+      ],
+      "resultCount" : 2,
+      "surfacedCount" : 2,
+      "topFiveIdentifiers" : [
+        "77EA6A55-40D3-4F1E-A456-17152AAC9296\/L0\/001",
+        "B7C82083-CD91-46AA-B9CD-1DCC300F7827\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.13302445,
+        0.12048693
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 196,
+      "policy" : "free",
+      "query" : "night sky",
+      "restrictions" : [
+        "timeOfDay"
+      ],
+      "resultCount" : 53,
+      "surfacedCount" : 53,
+      "topFiveIdentifiers" : [
+        "9DB0282D-1A7E-4D64-983D-1F2E230DB341\/L0\/001",
+        "C356406B-FE0E-4DB3-9E4B-96C9DBA041FD\/L0\/001",
+        "BB76271D-A737-4B56-A418-5714C3B0A5E6\/L0\/001",
+        "4FE321D9-B97F-45F4-A043-0D53052405D8\/L0\/001",
+        "718640B5-D527-4B38-8365-C5DD53AE9DC4\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.082050525,
+        0.081183806,
+        0.075436674,
+        0.07370667,
+        0.07305727
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 198,
+      "policy" : "free",
+      "query" : "late night",
+      "restrictions" : [
+        "timeOfDay"
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "1B70F0EF-5236-4AB7-9F75-51275902F815\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.12665002
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 198,
+      "policy" : "free",
+      "query" : "midday",
+      "restrictions" : [
+        "timeOfDay"
+      ],
+      "resultCount" : 500,
+      "surfacedCount" : 500,
+      "topFiveIdentifiers" : [
+        "E84640FD-1D49-41C3-A762-4C44F05E7A78\/L0\/001",
+        "C1D1790B-9F57-49DD-8437-5AC00943BCEE\/L0\/001",
+        "FF4E4CC1-9BE3-45A3-9A05-01A577C3BB22\/L0\/001",
+        "8903BAA0-8ED3-4C9A-AAB2-733939C86F03\/L0\/001",
+        "4E7C1D6B-B1A4-495F-9DE1-5C7F3071A66E\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10592989,
+        0.102268904,
+        0.101125605,
+        0.1006684,
+        0.098408304
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 197,
+      "policy" : "free",
+      "query" : "dog not cat",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 1,
+      "surfacedCount" : 1,
+      "topFiveIdentifiers" : [
+        "FBB05FEF-2AAB-4F64-A632-585F5F136701\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.13349037
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 198,
+      "policy" : "free",
+      "query" : "beach without people",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 51,
+      "surfacedCount" : 51,
+      "topFiveIdentifiers" : [
+        "6344DD18-5115-4F6E-AF3F-F40BE0F22C2C\/L0\/001",
+        "EB4A97EF-2EBB-43F0-AF6C-0542151F1E5A\/L0\/001",
+        "A6944E94-38A8-4B14-B467-F16095E1DA5A\/L0\/001",
+        "30B2EDF6-CA32-42F5-92CC-A96BF1D62537\/L0\/001",
+        "655590A3-1ED6-401C-ABAE-7183A1BE5BF6\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.09161703,
+        0.0898975,
+        0.08974062,
+        0.08946552,
+        0.08828767
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 198,
+      "policy" : "free",
+      "query" : "food not dessert",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 192,
+      "surfacedCount" : 192,
+      "topFiveIdentifiers" : [
+        "B46930DC-7A65-42A8-AA10-B1D6D67B944B\/L0\/001",
+        "E9689342-77C4-41CE-ACCB-BFBF6A94B7FC\/L0\/001",
+        "03834F82-B481-440D-B262-287875B84D0A\/L0\/001",
+        "E2FCFF27-83D7-4518-AE9C-0DB36A8EE026\/L0\/001",
+        "26E412E2-FFF6-4B9E-8AD4-9A31AA70824D\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.111620426,
+        0.107056916,
+        0.102743104,
+        0.1017753,
+        0.101691745
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 199,
+      "policy" : "free",
+      "query" : "car without snow",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 63,
+      "surfacedCount" : 63,
+      "topFiveIdentifiers" : [
+        "4F342A53-75C8-4A58-993F-A6795B1E686F\/L0\/001",
+        "EDD40417-AE1A-4041-B3A9-D7E69B2AF6FC\/L0\/001",
+        "832E1B7C-835C-4842-86EF-73202D1FC805\/L0\/001",
+        "BBBAF4CF-4A35-4DDA-BD8A-324AA8308070\/L0\/001",
+        "24C6AB43-A008-4901-B167-BD412A2442D5\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11402131,
+        0.106429376,
+        0.103734076,
+        0.09936124,
+        0.09702455
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 201,
+      "policy" : "free",
+      "query" : "portrait not selfie",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 320,
+      "surfacedCount" : 320,
+      "topFiveIdentifiers" : [
+        "6FF0C4E2-7997-4B54-93E0-C5495097F03B\/L0\/001",
+        "375F465D-9F45-458C-B8F0-6F0C4F289132\/L0\/001",
+        "3E713D4E-CC05-428C-B5C3-7D2105AC043F\/L0\/001",
+        "ED77C3C6-4B9C-4877-B052-C496C09ABB2F\/L0\/001",
+        "503C1C9B-C900-47AD-98B0-240F1AEBBF90\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.11888155,
+        0.11825415,
+        0.11695746,
+        0.11229731,
+        0.10880278
+      ],
+      "validationFailures" : [
+
+      ]
+    },
+    {
+      "fallbackCount" : 0,
+      "latencyMilliseconds" : 203,
+      "policy" : "free",
+      "query" : "mountains not winter",
+      "restrictions" : [
+
+      ],
+      "resultCount" : 152,
+      "surfacedCount" : 152,
+      "topFiveIdentifiers" : [
+        "8DB4C335-D79F-42D0-944D-28799D5886D4\/L0\/001",
+        "8AE37DC6-D423-4E97-BA66-6F360727FDC2\/L0\/001",
+        "4D50DD4C-37CA-421C-8929-2B9A45E6448A\/L0\/001",
+        "203C3E26-ED4C-443E-AA9E-A1E6910FB110\/L0\/001",
+        "6C5EF910-9A5A-4163-98A4-63622B1C6A51\/L0\/001"
+      ],
+      "topFiveScores" : [
+        0.10967584,
+        0.10857759,
+        0.108551145,
+        0.10817936,
+        0.1072252
+      ],
+      "validationFailures" : [
+
+      ]
+    }
+  ]
+}

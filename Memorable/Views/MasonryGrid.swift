@@ -1,14 +1,95 @@
 import SwiftUI
 
+/// Lays out one row of tiles at a single shared height. Each subview is offered
+/// a width proportional to its aspect ratio, so tiles keep their true
+/// proportions and the row fills its proposed width without leaving a gap under
+/// the shorter tile.
+struct JustifiedRow: Layout {
+    let aspectRatios: [CGFloat]
+    let spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let width = proposal.width ?? 0
+        let ratios = resolvedRatios(count: subviews.count)
+        let height = JustifiedRowLayout.rowHeight(
+            availableWidth: width,
+            aspectRatios: ratios,
+            spacing: spacing
+        )
+        guard height > 0 else {
+            // Without a usable width the row cannot be justified; report the
+            // tallest subview so the grid still reserves sensible space.
+            let fallback = subviews
+                .map { $0.sizeThatFits(proposal).height }
+                .max() ?? 0
+            return CGSize(width: width, height: fallback)
+        }
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let ratios = resolvedRatios(count: subviews.count)
+        let widths = JustifiedRowLayout.widths(
+            availableWidth: bounds.width,
+            aspectRatios: ratios,
+            spacing: spacing
+        )
+        guard widths.count == subviews.count else { return }
+        let height = JustifiedRowLayout.rowHeight(
+            availableWidth: bounds.width,
+            aspectRatios: ratios,
+            spacing: spacing
+        )
+        var x = bounds.minX
+        for (index, subview) in subviews.enumerated() {
+            let width = widths[index]
+            subview.place(
+                at: CGPoint(x: x, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(
+                    width: width,
+                    height: height > 0 ? height : nil
+                )
+            )
+            x += width + spacing
+        }
+    }
+
+    /// The grid supplies one ratio per tile. Guard anyway so a mismatch falls
+    /// back to equal shares instead of dropping tiles.
+    private func resolvedRatios(count: Int) -> [CGFloat] {
+        guard aspectRatios.count == count else {
+            return [CGFloat](repeating: MediaTileAspectRatio.fallback, count: count)
+        }
+        return aspectRatios
+    }
+}
+
 /// Reusable masonry layout with varied row patterns for a more organic feel.
 struct MasonryGrid<Item: Identifiable, Content: View>: View {
     let items: [Item]
     let spacing: CGFloat
+    let aspectRatio: (Item) -> CGFloat
     let content: (Item) -> Content
 
-    init(_ items: [Item], spacing: CGFloat = 10, @ViewBuilder content: @escaping (Item) -> Content) {
+    init(
+        _ items: [Item],
+        spacing: CGFloat = 10,
+        aspectRatio: @escaping (Item) -> CGFloat = { _ in MediaTileAspectRatio.fallback },
+        @ViewBuilder content: @escaping (Item) -> Content
+    ) {
         self.items = items
         self.spacing = spacing
+        self.aspectRatio = aspectRatio
         self.content = content
     }
 
@@ -28,19 +109,28 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
         }
     }
 
-    // Pattern types with rough probabilities:
-    // After a feature: always pairs/triples (2-4 rows) before next feature
-    // Varies the count of pairs between features so it doesn't feel repetitive
+    /// Only landscape tiles span the full width. A full-width square or
+    /// portrait tile is taller than most of the screen, so it joins a row
+    /// instead and keeps its real proportions there.
+    static var featureMinimumAspectRatio: CGFloat { 1.25 }
+
+    private func canFeature(_ item: Item) -> Bool {
+        aspectRatio(item) >= Self.featureMinimumAspectRatio
+    }
+
+    // After a feature: always pairs/triples (2-5 rows) before the next one.
+    // Varies the count of rows between features so it doesn't feel repetitive.
     private var rows: [MasonryRow] {
         guard !items.isEmpty else { return [] }
         var result: [MasonryRow] = []
         var i = 0
 
-        // First item is always a feature
-        result.append(.feature(items[i]))
-        i += 1
+        // Lead with the first item when it suits a full-width row.
+        if canFeature(items[i]) {
+            result.append(.feature(items[i]))
+            i += 1
+        }
 
-        // Use item count as seed for deterministic but varied patterns
         let patterns: [Int] = [2, 3, 4, 2, 3, 5, 2, 4, 3, 2]
         var patternIndex = 0
         var rowsSinceFeature = 0
@@ -55,7 +145,7 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
             let remaining = items.count - i
 
             // Time for a feature row?
-            if rowsSinceFeature >= currentInterval && remaining >= 3 {
+            if rowsSinceFeature >= currentInterval && remaining >= 3 && canFeature(items[i]) {
                 result.append(.feature(items[i]))
                 i += 1
                 rowsSinceFeature = 0
@@ -71,6 +161,10 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
             } else if remaining >= 2 {
                 result.append(.pair(items[i], items[i + 1]))
                 i += 2
+            } else if case .pair(let a, let b)? = result.last {
+                // A lone last tile would stretch across the whole row.
+                result[result.count - 1] = .triple(a, b, items[i])
+                i += 1
             } else {
                 result.append(.single(items[i]))
                 i += 1
@@ -88,30 +182,24 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
                 case .feature(let item):
                     content(item)
                 case .pair(let a, let b):
-                    HStack(alignment: .top, spacing: spacing) {
-                        content(a)
-                            .frame(maxWidth: .infinity)
-                        content(b)
-                            .frame(maxWidth: .infinity)
-                    }
+                    justifiedRow([a, b])
                 case .triple(let a, let b, let c):
-                    HStack(alignment: .top, spacing: spacing) {
-                        content(a)
-                            .frame(maxWidth: .infinity)
-                        content(b)
-                            .frame(maxWidth: .infinity)
-                        content(c)
-                            .frame(maxWidth: .infinity)
-                    }
+                    justifiedRow([a, b, c])
                 case .single(let item):
                     content(item)
                 }
             }
         }
     }
-}
 
-/// Lightweight Identifiable wrapper for raw strings (e.g. PHAsset local identifiers).
-struct IdentifiedString: Identifiable {
-    let id: String
+    private func justifiedRow(_ rowItems: [Item]) -> some View {
+        JustifiedRow(
+            aspectRatios: rowItems.map(aspectRatio),
+            spacing: spacing
+        ) {
+            ForEach(rowItems) { item in
+                content(item)
+            }
+        }
+    }
 }

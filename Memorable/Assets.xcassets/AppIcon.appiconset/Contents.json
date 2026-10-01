@@ -1,84 +1,84 @@
 {
   "images": [
     {
-      "filename": "icon_40.png",
+      "filename": "icon_v2_40.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "2x",
       "size": "20x20"
     },
     {
-      "filename": "icon_60.png",
+      "filename": "icon_v2_60.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "3x",
       "size": "20x20"
     },
     {
-      "filename": "icon_58.png",
+      "filename": "icon_v2_58.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "2x",
       "size": "29x29"
     },
     {
-      "filename": "icon_87.png",
+      "filename": "icon_v2_87.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "3x",
       "size": "29x29"
     },
     {
-      "filename": "icon_76.png",
+      "filename": "icon_v2_76.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "2x",
       "size": "38x38"
     },
     {
-      "filename": "icon_80.png",
+      "filename": "icon_v2_80.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "2x",
       "size": "40x40"
     },
     {
-      "filename": "icon_120.png",
+      "filename": "icon_v2_120.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "3x",
       "size": "40x40"
     },
     {
-      "filename": "icon_120.png",
+      "filename": "icon_v2_120.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "2x",
       "size": "60x60"
     },
     {
-      "filename": "icon_180.png",
+      "filename": "icon_v2_180.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "3x",
       "size": "60x60"
     },
     {
-      "filename": "icon_152.png",
+      "filename": "icon_v2_152.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "2x",
       "size": "76x76"
     },
     {
-      "filename": "icon_167.png",
+      "filename": "icon_v2_167.png",
       "idiom": "universal",
       "platform": "ios",
       "scale": "2x",
       "size": "83.5x83.5"
     },
     {
-      "filename": "icon_1024.png",
+      "filename": "icon_v2_1024.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "1024x1024"

@@ -1,46 +1,40 @@
-Privacy Policy for Memorable - AI Photo Search
-Last updated: April 2026
+**Privacy policy for Memorable: AI Photo Search**
+Last updated: September 6, 2026
 
-SUMMARY
-Your photos never leave your device. Memorable does not collect, store, or transmit any photos, search queries, or personal data.
+Memorable analyzes photos, videos, and search queries on your iPhone. The developer does not receive them or collect usage data. The app has no accounts, ads, tracking, or analytics. Technical logs stay on your device; the app does not upload them.
 
-DATA COLLECTION
-Memorable collects NO data whatsoever. Specifically:
-- No personal information is collected
-- No photos are uploaded or transmitted anywhere
-- No search queries are recorded or sent to any server
-- Location coordinates are sent to Apple's CLGeocoder service to resolve place names (e.g. city, country) for location-based search
-- No usage analytics or tracking of any kind
-- No crash reports are sent externally
-- No advertising identifiers are used
-- No third-party SDKs that collect data are included
+**Photo and folder access**
 
-ON-DEVICE PROCESSING
-All photo analysis and search functionality happens entirely on your device using Apple's Core ML framework. Your photos are processed locally to generate search embeddings (mathematical representations), which are stored only in a local database on your device.
+Memorable reads the photos and videos you allow it to access so you can search and view them. It does not download iCloud-only media. You can limit or revoke Photo Library access in iOS Settings.
 
-NETWORK ACCESS
-All photo analysis and search runs entirely on your device. The only network usage is Apple's CLGeocoder service, which resolves GPS coordinates and place names to improve location-based search. Only coordinates or place name text are sent -- no photos, no search queries, no personal data. Location search still works offline using previously resolved data.
+If you add a folder, Memorable reads images in that folder and saves permission to reopen it until you remove the folder source.
 
-PHOTO LIBRARY ACCESS
-Memorable requests access to your Photo Library solely to read photos for local indexing and display. Photos are never copied, uploaded, or shared. You can revoke this access at any time in Settings > Privacy > Photos.
+**Data stored on your iPhone**
 
-FOLDER ACCESS
-If you choose to add a folder source, Memorable reads images only from the folder you explicitly select. No other files or folders are accessed.
+Memorable stores a search index, including image features, text found in images, dates, and locations. It also saves recent searches, smart albums, folder access permissions, and settings. AI processing runs on your device with bundled models.
 
-LOCAL STORAGE
-Memorable stores the following data locally on your device:
-- Photo embeddings (mathematical vectors for search) in a local SQLite database
-- Photo metadata (dates, dimensions) for search filtering
-- No original photos are copied or stored by the app
+The search database and folder access files use iOS file protection and are excluded from device backups.
 
-DATA DELETION
-Uninstalling Memorable removes all locally stored data. You can also delete the search index from within the app at any time.
+**Apple services**
 
-CHILDREN'S PRIVACY
-Memorable does not collect data from anyone, including children.
+To find place names, Memorable may send GPS coordinates from your photos and videos to Apple's location services. These requests do not include media contents or search queries.
 
-CHANGES TO THIS POLICY
-If this policy changes, the updated version will be included in the app update. Given that Memorable collects no data, significant changes are unlikely.
+Apple processes Pro purchases and restores, and verifies purchase status. Its services handle the account, transaction, and device information needed for those functions.
 
-CONTACT
-For questions about this privacy policy, visit the app's support page on the App Store.
+**Sharing and playback**
+
+A photo is shared only after you tap Share and choose a destination. The copy can include GPS, camera, date, and other embedded metadata. The destination's privacy policy applies to its use of the photo.
+
+Copy text puts recognized text on this iPhone's clipboard. You choose where to paste it. Memorable does not send copied text to other devices through Universal Clipboard.
+
+If you choose an AirPlay destination, Apple and that destination handle playback.
+
+**Retention and deletion**
+
+Local data stays until you remove it or delete Memorable. You can clear recent searches and remove folder sources in the app. Removing a folder source deletes its search index and saved access permission. Re-indexing rebuilds search data; it keeps saved folders.
+
+Delete Memorable to remove its local data. This does not delete your original photos or videos.
+
+**Changes and contact**
+
+Policy changes are included in app updates. For privacy questions, use the support page listed on Memorable's App Store page.
