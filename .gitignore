@@ -23,6 +23,9 @@ Memorable/Models/*.mlmodelc/**
 ## Claude Code
 .claude/
 
+## XcodeBuildMCP local session config and verification artifacts
+.xcodebuildmcp/
+
 ## Compound Engineering local preferences
 .compound-engineering/*.local.yaml
 

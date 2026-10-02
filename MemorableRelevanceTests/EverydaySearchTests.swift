@@ -29,7 +29,7 @@ final class EverydaySearchTests: XCTestCase {
         }
         for id in ["clinic-sign", "appointment-card", "landscape-worksheet", "alpine-river"] {
             let url = RelevanceFixtureLoader.repositoryRoot
-                .appendingPathComponent(".xcodebuildmcp/text-search/fixtures/\(id).png")
+                .appendingPathComponent("MemorableRelevanceTests/Fixtures/text-search/\(id).png")
             let image = try XCTUnwrap(UIImage(contentsOfFile: url.path))
             try await insert(image, id: id, encoder: imageEncoder, database: database)
         }
